@@ -72,6 +72,8 @@ describe('Cloudflare TURN credentials', () => {
     expect(cloudflareTurnFromEnv({ CLOUDFLARE_TURN_KEY_ID: ' k ', CLOUDFLARE_TURN_KEY_API_TOKEN: 't' })).toEqual({ keyId: 'k', apiToken: 't', ttl: 86400 });
     expect(cloudflareTurnFromEnv({ CLOUDFLARE_TURN_KEY_ID: 'k', CLOUDFLARE_TURN_KEY_API_TOKEN: 't', CLOUDFLARE_TURN_TTL: '999999' })?.ttl).toBe(48 * 3600);
     expect(cloudflareTurnFromEnv({ CLOUDFLARE_TURN_KEY_ID: 'k', CLOUDFLARE_TURN_KEY_API_TOKEN: 't', CLOUDFLARE_TURN_TTL: 'soon' })?.ttl).toBe(86400);
+    expect(cloudflareTurnFromEnv({ CLOUDFLARE_TURN_KEY_ID: 'k', CLOUDFLARE_TURN_KEY_API_TOKEN: 't', CLOUDFLARE_TURN_TTL: '' })?.ttl).toBe(86400);
+    expect(cloudflareTurnFromEnv({ CLOUDFLARE_TURN_KEY_ID: 'k', CLOUDFLARE_TURN_KEY_API_TOKEN: 't', CLOUDFLARE_TURN_TTL: '300' })?.ttl).toBe(600);
   });
 });
 
@@ -97,25 +99,37 @@ describe('server behind a proxy', () => {
     const config = async (ip = '1.1.1.1') => {
       const res = await fetch(`${base}/api/config`, { headers: { 'x-test-ip': ip } });
       expect(res.headers.get('cache-control')).toBe('no-store');
-      return (await res.json()) as { iceServers: { urls: string[] }[]; iceTtl?: number };
+      return (await res.json()) as { iceServers: { urls: string[] }[]; iceTtl?: number; turn?: boolean };
     };
     const first = await config();
     expect(first.iceTtl).toBe(3600);
+    expect(first.turn).toBe(true);
     expect(first.iceServers[1]).toMatchObject({ username: 'user-1', credential: 'secret-1' });
     expect(calls).toHaveLength(1);
 
-    // Cloudflare unreachable: calls fall back to the static servers.
+    // Each address can mint a limited number per hour, then gets the static servers.
+    for (let i = 0; i < 119; i++) await config('2.2.2.2');
+    expect((await config('2.2.2.2')).iceTtl).toBe(3600);
+    const limited = await config('2.2.2.2');
+    expect(limited.iceTtl).toBeUndefined();
+    expect(limited.turn).toBe(true); // so the client tries again later
+    expect((await config('3.3.3.3')).iceTtl).toBe(3600);
+
+    // Cloudflare down: calls fall back to the static servers, and for a while nobody waits on it.
     answer = () => new Response('down', { status: 500 });
+    const before = calls.length;
     const fallback = await config();
     expect(fallback.iceServers).toEqual([{ urls: 'stun:static.example' }]);
     expect(fallback.iceTtl).toBeUndefined();
+    await config('4.4.4.4');
+    expect(calls.length).toBe(before + 1);
+  });
 
-    // Each address can mint a limited number per hour, then gets the static servers.
-    answer = () => Response.json(CLOUDFLARE_ANSWER, { status: 201 });
-    for (let i = 0; i < 119; i++) await config('2.2.2.2');
-    expect((await config('2.2.2.2')).iceTtl).toBe(3600);
-    expect((await config('2.2.2.2')).iceTtl).toBeUndefined();
-    expect((await config('3.3.3.3')).iceTtl).toBe(3600);
+  it('says nothing about TURN when it is not configured', async () => {
+    const base = await start({ cloudflareTurn: null });
+    const cfg = (await (await fetch(`${base}/api/config`)).json()) as { turn?: boolean; iceTtl?: number };
+    expect(cfg.turn).toBe(false);
+    expect(cfg.iceTtl).toBeUndefined();
   });
 
   it('limits office creation per visitor, using the proxy’s client-IP header when told to', async () => {
@@ -125,6 +139,25 @@ describe('server behind a proxy', () => {
     for (let i = 0; i < 30; i++) expect((await create(behindCloudflare, '10.0.0.1')).status).toBe(201);
     expect((await create(behindCloudflare, '10.0.0.1')).status).toBe(429);
     expect((await create(behindCloudflare, '10.0.0.2')).status).toBe(201);
+
+    // Behind Caddy: X-Forwarded-For, first address (Caddy replaces whatever the visitor sent).
+    const behindCaddy = await start({ clientIpHeader: 'x-forwarded-for' });
+    const viaCaddy = (xff: string) =>
+      fetch(`${behindCaddy}/api/offices`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': xff }, body: '{}' });
+    for (let i = 0; i < 30; i++) expect((await viaCaddy(`10.2.0.1, 172.18.0.${i}`)).status).toBe(201);
+    expect((await viaCaddy('10.2.0.1, 172.18.0.99')).status).toBe(429);
+    expect((await viaCaddy('10.2.0.2')).status).toBe(201);
+
+    // The setting can also come from the environment.
+    process.env.CLIENT_IP_HEADER = 'cf-connecting-ip';
+    try {
+      const fromEnv = await start({});
+      for (let i = 0; i < 30; i++) expect((await create(fromEnv, '10.3.0.1')).status).toBe(201);
+      expect((await create(fromEnv, '10.3.0.1')).status).toBe(429);
+      expect((await create(fromEnv, '10.3.0.2')).status).toBe(201);
+    } finally {
+      delete process.env.CLIENT_IP_HEADER;
+    }
 
     // Without the setting the header is ignored, so nobody can dodge the limit by faking it.
     const direct = await start({ clientIpHeader: null });

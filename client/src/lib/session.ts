@@ -39,6 +39,7 @@ export class OfficeSession {
   private audio = new Map<string, HTMLAudioElement>();
   private audioRoot: HTMLDivElement;
   private timers: ReturnType<typeof setInterval>[] = [];
+  private iceTimer: ReturnType<typeof setTimeout> | undefined;
   private unsubs: (() => void)[] = [];
   private lastSent = { x: NaN, z: NaN, ry: NaN, anim: 'idle' as AnimState, at: 0 };
   private hasJoined = false;
@@ -48,31 +49,23 @@ export class OfficeSession {
   private spotifyClientId: string | null = null;
 
   constructor(readonly officeId: string) {
-    // WebSocket first (the cheapest path through proxies such as Cloudflare), falling back to
-    // long-polling where WebSockets are blocked.
-    this.socket = io({ autoConnect: false, transports: ['websocket', 'polling'], tryAllTransports: true });
+    this.socket = io({ autoConnect: false });
     this.audioRoot = document.createElement('div');
     this.audioRoot.hidden = true;
     document.body.appendChild(this.audioRoot);
   }
 
   async join(): Promise<void> {
-    const { iceServers, iceTtl, spotifyClientId } = await fetchConfig();
+    const { iceServers, iceTtl, turn, spotifyClientId } = await fetchConfig();
     this.spotifyClientId = spotifyClientId;
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
     });
-    // Short-lived TURN credentials (Cloudflare TURN): fetch fresh ones well before they expire, as
-    // offices often stay open all day.
-    if (iceTtl) {
-      this.timers.push(
-        setInterval(async () => {
-          const cfg = await fetchConfig();
-          if (!this.closed && cfg.iceTtl) this.peers?.setIceServers(cfg.iceServers);
-        }, Math.max(60, iceTtl * 0.8) * 1000),
-      );
-    }
+    if (turn) this.scheduleIceRefresh(iceTtl);
+    // On Cloudflare Containers the server stops some minutes after its last ordinary request, and
+    // realtime traffic doesn't count: check in now and then so it keeps running while people are here.
+    this.timers.push(setInterval(() => void fetch('/api/health', { cache: 'no-store' }).catch(() => {}), 4 * 60_000));
     this.wireSocket();
     this.unsubs.push(media.subscribe(() => this.onMediaChange()));
     this.onMediaChange();
@@ -434,9 +427,28 @@ export class OfficeSession {
     this.sendMove(local.x, local.z, local.ry, local.anim, true);
   }
 
+  /**
+   * Short-lived TURN credentials (Cloudflare TURN): fetch fresh ones well before they expire, as
+   * offices often stay open all day. Without any (the TURN service didn't answer), try again soon.
+   */
+  private scheduleIceRefresh(ttl: number | undefined, failures = 0): void {
+    const delay = ttl ? ttl * 800 : Math.min(60_000 * 2 ** failures, 15 * 60_000);
+    this.iceTimer = setTimeout(async () => {
+      const cfg = await fetchConfig();
+      if (this.closed) return;
+      if (cfg.iceTtl) {
+        this.peers?.setIceServers(cfg.iceServers);
+        this.scheduleIceRefresh(cfg.iceTtl);
+      } else {
+        this.scheduleIceRefresh(undefined, failures + 1);
+      }
+    }, Math.max(delay, 30_000));
+  }
+
   leave(): void {
     this.closed = true;
     for (const t of this.timers) clearInterval(t);
+    clearTimeout(this.iceTimer);
     this.radio.stop();
     this.spotify.close();
     for (const u of this.unsubs) u();

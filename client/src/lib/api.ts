@@ -16,6 +16,8 @@ export interface ClientConfig {
   iceServers: RTCIceServer[];
   /** Seconds until TURN credentials in `iceServers` expire, when they do. */
   iceTtl?: number;
+  /** The server hands out short-lived TURN credentials (refresh them; retry if these have none). */
+  turn?: boolean;
   /** Set when the server enables Spotify listen-along. */
   spotifyClientId: string | null;
 }
@@ -24,7 +26,7 @@ export async function fetchConfig(): Promise<ClientConfig> {
   try {
     const cfg = await json<Partial<ClientConfig>>(await fetch('/api/config', { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS), cache: 'no-store' }));
     const iceTtl = typeof cfg.iceTtl === 'number' && cfg.iceTtl > 0 ? cfg.iceTtl : undefined;
-    return { iceServers: cfg.iceServers ?? [], iceTtl, spotifyClientId: cfg.spotifyClientId ?? null };
+    return { iceServers: cfg.iceServers ?? [], iceTtl, turn: cfg.turn === true, spotifyClientId: cfg.spotifyClientId ?? null };
   } catch {
     return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], spotifyClientId: null };
   }

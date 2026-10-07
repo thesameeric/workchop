@@ -41,10 +41,20 @@ const PASSED_TO_SERVER = [
 
 /** The port the server listens on inside the container (the Dockerfile's PORT). */
 const PORT = 3001;
-/** How long the container keeps running after the last visitor disconnects. */
+/**
+ * How long the container keeps running after the last ordinary request. Realtime (WebSocket)
+ * traffic doesn't count, so open Workchop tabs check in every few minutes to keep it running.
+ */
 const IDLE_MS = 15 * 60 * 1000;
 /** The server only starts listening once it reaches the database, which it retries for about 30 s. */
 const STARTUP_MS = 90 * 1000;
+
+/** A short fingerprint of the server's settings, to notice when secrets change. */
+async function fingerprint(env: Record<string, string>): Promise<string> {
+  const data = new TextEncoder().encode(JSON.stringify(Object.entries(env).sort()));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function unavailable(message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -99,14 +109,34 @@ export class WorkchopServer extends DurableObject<Env> {
 
   private async start(): Promise<void> {
     const container = this.ctx.container!;
-    if (!container.running) {
-      // Every request arrives through Cloudflare, which sets CF-Connecting-IP to the visitor's address.
-      const env: Record<string, string> = { CLIENT_IP_HEADER: 'cf-connecting-ip' };
-      for (const key of PASSED_TO_SERVER) {
-        const value = this.env[key];
-        if (value) env[key] = value;
+    // Every request arrives through Cloudflare, which sets CF-Connecting-IP to the visitor's address.
+    const env: Record<string, string> = { CLIENT_IP_HEADER: 'cf-connecting-ip' };
+    for (const key of PASSED_TO_SERVER) {
+      const value = this.env[key];
+      if (value) env[key] = value;
+    }
+    const config = await fingerprint(env);
+
+    // A running server keeps the settings it started with. Changing a secret restarts this object
+    // but not the container, so restart the server when its settings are out of date.
+    if (container.running) {
+      const info = await container.inspect().catch(() => null);
+      if (info && info.labels.config !== config) {
+        console.log('[workchop] settings changed: restarting the server');
+        await this.stopGracefully();
       }
-      container.start({ env, enableInternet: true });
+    }
+    if (!container.running) {
+      // Right after a stop, a new container can take a moment to become available.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          container.start({ env, enableInternet: true, labels: { config } });
+          break;
+        } catch (err) {
+          if (attempt >= 20) throw err;
+          await scheduler.wait(500);
+        }
+      }
     }
     await container.setInactivityTimeout(IDLE_MS);
 
@@ -126,6 +156,14 @@ export class WorkchopServer extends DurableObject<Env> {
       await scheduler.wait(500);
     }
     throw new Error('the server did not answer its health check in time', { cause: lastError });
+  }
+
+  /** SIGTERM, so the server saves pending office edits before it exits. */
+  private async stopGracefully(): Promise<void> {
+    const container = this.ctx.container!;
+    container.signal(15);
+    await Promise.race([container.monitor().catch(() => {}), scheduler.wait(20_000)]);
+    if (container.running) await container.destroy('settings changed');
   }
 }
 

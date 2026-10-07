@@ -17,14 +17,16 @@ export interface CloudflareTurn {
   ttl: number;
 }
 
+const MIN_TTL = 600;
 const MAX_TTL = 48 * 3600;
 
 export function cloudflareTurnFromEnv(env: NodeJS.ProcessEnv = process.env): CloudflareTurn | null {
   const keyId = env.CLOUDFLARE_TURN_KEY_ID?.trim();
   const apiToken = env.CLOUDFLARE_TURN_KEY_API_TOKEN?.trim();
   if (!keyId || !apiToken) return null;
-  const ttl = Number(env.CLOUDFLARE_TURN_TTL ?? 86400);
-  return { keyId, apiToken, ttl: Number.isFinite(ttl) && ttl >= 600 ? Math.min(Math.round(ttl), MAX_TTL) : 86400 };
+  // Credentials should outlast the longest call: a relayed call is cut when they expire.
+  const ttl = Number(env.CLOUDFLARE_TURN_TTL || 86400);
+  return { keyId, apiToken, ttl: Number.isFinite(ttl) ? Math.min(Math.max(Math.round(ttl), MIN_TTL), MAX_TTL) : 86400 };
 }
 
 /** Ask Cloudflare for a fresh set of ICE servers (its STUN server plus TURN with new credentials). */
@@ -33,7 +35,7 @@ export async function mintCloudflareIceServers(turn: CloudflareTurn, fetchImpl: 
     method: 'POST',
     headers: { Authorization: `Bearer ${turn.apiToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ ttl: turn.ttl }),
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(3000),
   });
   if (!res.ok) throw new Error(`Cloudflare TURN answered ${res.status}`);
   const body = (await res.json()) as { iceServers?: unknown };

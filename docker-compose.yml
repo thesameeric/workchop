@@ -17,9 +17,10 @@ services:
       TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
       CLOUDFLARE_TURN_KEY_ID: ${CLOUDFLARE_TURN_KEY_ID:-}
       CLOUDFLARE_TURN_KEY_API_TOKEN: ${CLOUDFLARE_TURN_KEY_API_TOKEN:-}
+      CLOUDFLARE_TURN_TTL: ${CLOUDFLARE_TURN_TTL:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       # Caddy passes each visitor's address on in X-Forwarded-For (use cf-connecting-ip behind Cloudflare).
-      CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-x-forwarded-for}
+      CLIENT_IP_HEADER: ${CLIENT_IP_HEADER-x-forwarded-for}
     depends_on:
       db:
         condition: service_healthy
