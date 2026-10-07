@@ -75,6 +75,7 @@ function startup(id: string, name: string): Office {
     ['armchair', 3, 16, 1, '#e9c46a'], ['armchair', 8, 16, 3, '#e9c46a'], ['floor-lamp', 2.25, 13.25], ['tall-plant', 9, 13],
     ['bookshelf', 0.25, 16, 1], ['beanbag', 2, 21.5, 1, '#9b5de5'], ['beanbag', 3.5, 22, 0, '#ef476f'],
     ['arcade', 7, 23.5, 2], ['arcade', 8, 23.5, 2, '#4cc9f0'],
+    ['jukebox', 9, 19, 3],
   );
 
   // Games and entrance.
@@ -90,10 +91,13 @@ function startup(id: string, name: string): Office {
     specs.push(['stool', 25.5, z, 1], ['stool', 27.5, z, 3], ['stool', 26.5, z - 1, 0], ['stool', 26.5, z + 1, 2]);
   }
 
-  return build(id, settings, specs, [
+  const office = build(id, settings, specs, [
     { name: 'Meeting Room', x: 0, z: 0, w: 10, d: 8, color: '#6c8cff' },
     { name: 'Lounge', x: 1, z: 12, w: 9, d: 8, color: '#ff9f6c' },
   ]);
+  // The lounge jukebox starts on the built-in lo-fi station (heard only inside the Lounge).
+  for (const item of office.items) if (item.type === 'jukebox') item.data = { station: 'lofi', links: [], startedAt: office.createdAt };
+  return office;
 }
 
 function blank(id: string, name: string): Office {

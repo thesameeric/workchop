@@ -35,6 +35,11 @@ function onItemPointerDown(e: ThreeEvent<PointerEvent>, item: OfficeItem) {
 
 function onItemClick(e: ThreeEvent<MouseEvent>, item: OfficeItem) {
   if (getState().mode !== 'play' || e.delta > 5) return;
+  if (getEntry(item.type)?.music) {
+    e.stopPropagation();
+    setState({ panel: 'music', musicItemId: item.id, mode: 'play' });
+    return;
+  }
   const seats = seatsOf(item);
   if (!seats.length) return;
   e.stopPropagation();
@@ -88,7 +93,8 @@ export const ItemView = memo(function ItemView({
   opacity?: number;
 }) {
   const building = useStore((s) => s.mode === 'build');
-  const sittable = !!getEntry(item.type)?.seats;
+  const entry = getEntry(item.type);
+  const sittable = !!entry?.seats || !!entry?.music;
   const hoverable = interactive && (building || sittable);
   return (
     <group
@@ -100,7 +106,7 @@ export const ItemView = memo(function ItemView({
       onPointerOut={hoverable ? () => setCursor('') : undefined}
     >
       <OpacityContext.Provider value={(faded ? 0.18 : 1) * opacity}>
-        <ItemModel type={item.type} color={item.color} />
+        <ItemModel type={item.type} color={item.color} itemId={item.id} data={item.data} />
       </OpacityContext.Provider>
       {interactive && building && <HitBox type={item.type} />}
       {selected && <SelectionBox item={item} />}

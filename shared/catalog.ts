@@ -25,6 +25,8 @@ export interface CatalogEntry {
   tall?: boolean;
   /** Thin items (walls) snap their centre to grid lines instead of their corner. */
   snapCenter?: boolean;
+  /** Plays music for people nearby (see shared/music.ts). */
+  music?: boolean;
 }
 
 const entries: CatalogEntry[] = [
@@ -69,6 +71,7 @@ const entries: CatalogEntry[] = [
 
   // Fun
   { type: 'ping-pong', label: 'Ping pong', icon: '🏓', category: 'Fun', w: 3, d: 2, h: 0.9, solid: true, box: { w: 2.8, d: 1.6 } },
+  { type: 'jukebox', label: 'Jukebox', icon: '🎵', category: 'Fun', w: 1, d: 1, h: 1.6, solid: true, box: { w: 0.9, d: 0.7 }, colorable: true, defaultColor: '#e63946', music: true },
   { type: 'arcade', label: 'Arcade cabinet', icon: '🕹️', category: 'Fun', w: 1, d: 1, h: 1.8, solid: true, box: { w: 0.9, d: 0.8 }, colorable: true, defaultColor: '#9b5de5', tall: true },
 ];
 

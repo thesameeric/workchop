@@ -1,4 +1,5 @@
 import { shouldLink } from '../shared/geometry';
+import type { SpotifySession } from '../shared/music';
 import type { ChatMessage, PlayerState, Zone } from '../shared/types';
 
 export interface LinkChanges {
@@ -16,6 +17,8 @@ export class Room {
   /** Pair key -> session id of that pair's current WebRTC connection. */
   readonly links = new Map<string, number>();
   readonly chat: ChatMessage[] = [];
+  /** Spotify listen-along sessions by jukebox id. */
+  readonly spotify = new Map<string, SpotifySession>();
   private nextSid = 1;
 
   constructor(readonly officeId: string) {}

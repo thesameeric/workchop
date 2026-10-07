@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { EMOTES, sanitizeAvatar, sanitizeName, sanitizeStatus } from '../shared/avatar';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
+import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
 import type {
   AnimState,
@@ -12,6 +13,7 @@ import type {
   PlayerState,
   ServerToClientEvents,
 } from '../shared/types';
+import { applyMusicOp, fetchLinkMeta } from './music';
 import type { OfficeStore } from './officeStore';
 import { randomId } from './officeStore';
 import { type LinkChanges, Room } from './room';
@@ -75,15 +77,26 @@ export function attachRealtime(io: IO, store: OfficeStore) {
     const canEdit = limiter(20, 60);
     const canProfile = limiter(2, 6);
     const canMove = limiter(40, 80);
+    const canMusic = limiter(4, 12);
+    const canSpotify = limiter(6, 20);
 
     const me = (): PlayerState | undefined => room?.players.get(socket.id);
     const office = () => (room ? store.peek(room.officeId)?.office : undefined);
+    const mayEdit = () => {
+      const o = office();
+      return !!o && (o.settings.buildPolicy === 'everyone' || isOwner);
+    };
+
+    const endSpotify = (r: Room, itemId: string) => {
+      if (r.spotify.delete(itemId)) io.to(roomName(r.officeId)).emit('spotify:session', itemId, null);
+    };
 
     const leave = () => {
       if (!room) return;
       const r = room;
       room = null;
       socket.leave(roomName(r.officeId));
+      for (const [itemId, s] of r.spotify) if (s.dj === socket.id) endSpotify(r, itemId);
       emitLinks(r.removePlayer(socket.id));
       io.to(roomName(r.officeId)).emit('player:left', socket.id);
       if (r.players.size === 0) {
@@ -138,6 +151,7 @@ export function attachRealtime(io: IO, store: OfficeStore) {
         players: [...r.players.values()],
         chat: r.chat.filter((m) => m.scope === 'all'),
         isOwner,
+        spotify: [...r.spotify.values()],
       });
       socket.to(roomName(id)).emit('player:joined', player);
       emitLinks(r.recompute(stored.office.zones, [socket.id]));
@@ -195,8 +209,9 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       io.to(roomName(room.officeId)).emit('emote', socket.id, emoji);
     });
 
-    socket.on('office:op', (op: OfficeOp) => {
+    socket.on('office:op', (raw: OfficeOp) => {
       if (!room) return;
+      let op = raw;
       const stored = store.peek(room.officeId);
       if (!stored) return;
       const reject = (reason: string) => socket.emit('office:sync', stored.office, reason);
@@ -204,6 +219,15 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       if (stored.office.settings.buildPolicy === 'owner' && !isOwner) return reject('Only the owner can edit this office.');
       if (op?.t === 'settings' && op.settings && 'buildPolicy' in op.settings && !isOwner) {
         return reject('Only the owner can change who may edit.');
+      }
+      // A jukebox's shared settings change only through 'music' ops, so moving or copying one
+      // can't overwrite (or forge) its station and links.
+      if (op?.t === 'update' && op.item && typeof op.item === 'object') {
+        const moved = op.item;
+        const existing = stored.office.items.find((i) => i.id === moved.id);
+        if (isJukebox(existing)) op = { t: 'update', item: { ...moved, data: existing.data } };
+      } else if (op?.t === 'add' && op.item && typeof op.item === 'object') {
+        op = { ...op, item: { ...op.item, data: undefined } };
       }
       let next;
       try {
@@ -220,6 +244,7 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       else if (op.t === 'remove' || op.t === 'zone:remove') normalized = { t: op.t, id: op.id };
       io.to(roomName(room.officeId)).emit('office:op', normalized, socket.id);
       if (op.t.startsWith('zone:') || op.t === 'settings') emitLinks(room.recompute(next.zones));
+      if (op.t === 'remove') endSpotify(room, op.id);
     });
 
     socket.on('rtc:signal', (to, sid, data) => {
@@ -228,6 +253,58 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       if (room.linkSid(socket.id, to) !== sid) return;
       if (JSON.stringify(data).length > 100_000) return;
       io.to(to).emit('rtc:signal', socket.id, sid, data);
+    });
+
+    socket.on('music', (op) => {
+      const p = me();
+      if (!room || !p || !canMusic()) return;
+      const r = room;
+      const stored = store.peek(r.officeId);
+      if (!stored) return;
+      const result = applyMusicOp(stored.office, op, { id: p.id, name: p.name, canEdit: mayEdit() });
+      if ('error' in result) {
+        if (result.error) socket.emit('notice', result.error);
+        return;
+      }
+      store.update(r.officeId, result.office);
+      io.to(roomName(r.officeId)).emit('office:op', { t: 'update', item: result.item }, socket.id);
+      if (result.added) void addLinkMeta(r, result.item.id, result.added);
+    });
+
+    /** Fill in a shared link's title and cover once Spotify's oEmbed answers. */
+    const addLinkMeta = async (r: Room, itemId: string, link: MusicLink) => {
+      if (link.kind === 'jam') return;
+      const meta = await fetchLinkMeta(link.url);
+      if (!meta.title && !meta.image) return;
+      const stored = store.peek(r.officeId);
+      if (!stored || rooms.get(r.officeId) !== r) return;
+      const result = applyMusicOp(stored.office, { t: 'link:meta', itemId, linkId: link.id, ...meta }, { id: '', name: '', canEdit: true, server: true });
+      if ('error' in result) return;
+      store.update(r.officeId, result.office);
+      io.to(roomName(r.officeId)).emit('office:op', { t: 'update', item: result.item }, 'server');
+    };
+
+    socket.on('spotify:session', (itemId, update, start) => {
+      const p = me();
+      if (!room || !p || typeof itemId !== 'string' || !canSpotify()) return;
+      if (!isJukebox(office()?.items.find((i) => i.id === itemId))) return;
+      const current = room.spotify.get(itemId);
+      if (update === null) {
+        // Anyone in the room may stop the music, like turning off a shared speaker.
+        endSpotify(room, itemId);
+        return;
+      }
+      const clean = sanitizeSessionUpdate(update);
+      if (!clean) return;
+      // Only the DJ updates a running session; someone else has to take over explicitly.
+      if (current && current.dj !== p.id && start !== true) return;
+      const session: SpotifySession = { ...clean, itemId, dj: p.id, djName: p.name, at: Date.now() };
+      room.spotify.set(itemId, session);
+      io.to(roomName(room.officeId)).emit('spotify:session', itemId, session);
+    });
+
+    socket.on('time', (ack) => {
+      if (typeof ack === 'function') ack(Date.now());
     });
 
     socket.on('disconnect', leave);

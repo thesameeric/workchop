@@ -1,9 +1,10 @@
 import { create } from 'zustand';
+import type { SpotifySession } from '../../../shared/music';
 import type { AvatarConfig, ChatMessage, ChatScope, Office, PlayerState, Status } from '../../../shared/types';
 import { loadProfile } from '../lib/storage';
 
 export type Phase = 'landing' | 'lobby' | 'office';
-export type Panel = 'none' | 'chat' | 'people' | 'build';
+export type Panel = 'none' | 'chat' | 'people' | 'build' | 'music';
 export type BuildTool = 'select' | 'place' | 'zone';
 export type Modal = 'none' | 'avatar' | 'devices';
 
@@ -14,6 +15,17 @@ export interface Toast {
   text: string;
   kind: 'info' | 'error';
 }
+
+/** What the jukebox you can hear is playing. */
+export interface NowPlaying {
+  itemId: string;
+  title: string;
+  kind: 'generated' | 'stream' | 'tracks' | 'off';
+  /** 0..1: how close you are (full volume inside its area). */
+  near: number;
+}
+
+export type SpotifyStatus = 'disabled' | 'disconnected' | 'connecting' | 'ready' | 'error';
 
 export interface ChatTarget {
   scope: ChatScope;
@@ -60,9 +72,45 @@ interface State {
   hint: string | null;
   /** Private area you're currently standing in. */
   activeZoneId: string | null;
+
+  music: {
+    /** Your own music volume (0..1) and mute; saved in this browser. */
+    volume: number;
+    muted: boolean;
+    nowPlaying: NowPlaying | null;
+    /** Spotify is playing for you, so the lounge radio steps aside. */
+    spotifyPlaying: boolean;
+    /** The browser refused to start audio until the next click. */
+    blocked: boolean;
+  };
+  /** Jukebox shown in the music panel. */
+  musicItemId: string | null;
+  /** Spotify listen-along sessions by jukebox id. */
+  spotifySessions: Record<string, SpotifySession>;
+  spotify: { status: SpotifyStatus; error: string | null };
 }
 
 const profile = loadProfile();
+
+function loadMusicPrefs(): { volume: number; muted: boolean } {
+  try {
+    const raw = JSON.parse(localStorage.getItem('workchop:music') ?? '{}') as { volume?: unknown; muted?: unknown };
+    const volume = typeof raw.volume === 'number' && raw.volume >= 0 && raw.volume <= 1 ? raw.volume : 0.6;
+    return { volume, muted: raw.muted === true };
+  } catch {
+    return { volume: 0.6, muted: false };
+  }
+}
+
+export function setMusicPrefs(prefs: { volume?: number; muted?: boolean }): void {
+  setState((s) => ({ music: { ...s.music, ...prefs } }));
+  const { volume, muted } = getState().music;
+  try {
+    localStorage.setItem('workchop:music', JSON.stringify({ volume, muted }));
+  } catch {
+    // Not saved; fine.
+  }
+}
 
 export const initialBuild: State['build'] = { tool: 'select', placeType: null, rot: 0, selectedId: null, selectedZoneId: null };
 
@@ -91,6 +139,10 @@ export const useStore = create<State>()(() => ({
   toasts: [],
   hint: null,
   activeZoneId: null,
+  music: { ...loadMusicPrefs(), nowPlaying: null, spotifyPlaying: false, blocked: false },
+  musicItemId: null,
+  spotifySessions: {},
+  spotify: { status: 'disabled', error: null },
 }));
 
 export const getState = useStore.getState;

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connecting Spotify…</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; color: #333; }
+    </style>
+  </head>
+  <body>
+    <p id="msg">Connecting Spotify…</p>
+    <script>
+      // Hand the sign-in result back to the Workchop tab that opened this window, then close.
+      const params = new URLSearchParams(location.search);
+      const result = { type: 'workchop-spotify', code: params.get('code'), state: params.get('state'), error: params.get('error') };
+      if (window.opener) {
+        window.opener.postMessage(result, location.origin);
+        window.close();
+      } else {
+        document.getElementById('msg').textContent = 'You can close this window and go back to Workchop.';
+      }
+    </script>
+  </body>
+</html>

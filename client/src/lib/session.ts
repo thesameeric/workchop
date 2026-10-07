@@ -11,7 +11,11 @@ import type {
   ServerToClientEvents,
 } from '../../../shared/types';
 import { getState, initialBuild, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
+import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
 import { fetchConfig } from './api';
+import { serverNow, syncClock } from './clock';
+import { LoungeRadio } from './radio';
+import { SpotifyListenAlong } from './spotify';
 import { SpeakingDetector } from './levels';
 import { media } from './media';
 import { PeerManager } from './peers';
@@ -39,6 +43,9 @@ export class OfficeSession {
   private lastSent = { x: NaN, z: NaN, ry: NaN, anim: 'idle' as AnimState, at: 0 };
   private hasJoined = false;
   private closed = false;
+  readonly radio = new LoungeRadio((itemId, url, durationMs) => this.music({ t: 'track:duration', itemId, url, durationMs }));
+  readonly spotify = new SpotifyListenAlong((itemId, update, start) => this.socket.emit('spotify:session', itemId, update, start));
+  private spotifyClientId: string | null = null;
 
   constructor(readonly officeId: string) {
     this.socket = io({ autoConnect: false });
@@ -48,7 +55,8 @@ export class OfficeSession {
   }
 
   async join(): Promise<void> {
-    const { iceServers } = await fetchConfig();
+    const { iceServers, spotifyClientId } = await fetchConfig();
+    this.spotifyClientId = spotifyClientId;
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
@@ -117,16 +125,62 @@ export class OfficeSession {
           chat: rejoin ? getState().chat : res.chat,
           linked: {},
           streams: {},
+          spotifySessions: Object.fromEntries(res.spotify.map((s) => [s.itemId, s])),
         });
+        void syncClock(() => this.socket.timeout(5000).emitWithAck('time'));
         if (rejoin) {
           this.lastSent.at = 0;
           this.sendMove(local.x, local.z, local.ry, local.anim, true);
           this.socket.emit('profile', { screen: media.screenOn });
         } else {
+          this.startMusic();
           onFirst(res);
         }
       },
     );
+  }
+
+  private startMusic(): void {
+    this.radio.start();
+    this.spotify.configure(this.spotifyClientId);
+    // Keep Spotify listen-along in step with the session at the jukebox we can hear.
+    this.timers.push(
+      setInterval(() => {
+        const st = getState();
+        if (!st.office) return;
+        const personal = st.music.muted ? 0 : st.music.volume;
+        // A DJ hears their own session as loud as the jukebox it plays on; everyone else follows
+        // the session at the jukebox they can hear.
+        const djItem = st.office.items.find((i) => i.id === this.spotify.djJukebox);
+        if (djItem) {
+          void this.spotify.follow(st.spotifySessions[djItem.id] ?? null, musicVolumeAt(st.office, djItem, local.x, local.z) * personal * personal);
+          return;
+        }
+        const heard = audibleJukebox(st.office, local.x, local.z);
+        const session = heard ? st.spotifySessions[heard.item.id] ?? null : null;
+        void this.spotify.follow(session, heard ? heard.volume * personal * personal : 0);
+      }, 1000),
+      // Clocks drift a little; re-sync now and then.
+      setInterval(() => void syncClock(() => this.socket.timeout(5000).emitWithAck('time'), 3), 60_000),
+    );
+  }
+
+  /** Change a jukebox (station, tracks, shared links). */
+  music(op: MusicOp): void {
+    this.socket.emit('music', op);
+  }
+
+  async playForEveryone(itemId: string, link: MusicLink): Promise<void> {
+    await this.spotify.playForEveryone(itemId, link);
+  }
+
+  stopSpotify(itemId: string): void {
+    this.spotify.stopForEveryone(itemId);
+  }
+
+  /** For tests and debugging. */
+  debugMusic() {
+    return { serverNow: serverNow(), at: { x: local.x, z: local.z }, radio: this.radio.debug(), spotify: getState().spotify };
   }
 
   private wireSocket(): void {
@@ -206,6 +260,15 @@ export class OfficeSession {
     s.on('office:sync', (office, reason) => {
       this.setOffice(office);
       if (reason) toast(reason, 'error');
+    });
+    s.on('notice', (text) => toast(text, 'error'));
+    s.on('spotify:session', (itemId, session) => {
+      setState((st) => {
+        const spotifySessions = { ...st.spotifySessions };
+        if (session) spotifySessions[itemId] = session;
+        else delete spotifySessions[itemId];
+        return { spotifySessions };
+      });
     });
   }
 
@@ -356,6 +419,8 @@ export class OfficeSession {
   leave(): void {
     this.closed = true;
     for (const t of this.timers) clearInterval(t);
+    this.radio.stop();
+    this.spotify.close();
     for (const u of this.unsubs) u();
     this.peers?.close();
     this.speaking.close();
@@ -373,6 +438,9 @@ let current: OfficeSession | null = null;
 export function getSession(): OfficeSession | null {
   return current;
 }
+
+// Read-only hook for automated tests and debugging in the browser console.
+(window as unknown as { __workchop?: unknown }).__workchop = { music: () => current?.debugMusic() ?? null };
 
 export async function enterOffice(officeId: string): Promise<void> {
   current?.leave();

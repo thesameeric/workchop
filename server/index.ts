@@ -23,6 +23,8 @@ export interface ServerOptions {
   /** Directory with the built client to serve; omit in development (Vite serves it). */
   clientDir?: string | null;
   iceServers?: RTCIceServerLike[];
+  /** Spotify app client id for listen-along; defaults to SPOTIFY_CLIENT_ID. */
+  spotifyClientId?: string | null;
   quiet?: boolean;
 }
 
@@ -71,8 +73,10 @@ export async function startServer(opts: ServerOptions = {}) {
     res.json({ ok: true });
   });
 
+  // Spotify listen-along is switched on by setting SPOTIFY_CLIENT_ID (a public PKCE client id).
+  const spotifyClientId = opts.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? null;
   app.get('/api/config', (_req, res) => {
-    res.json({ iceServers });
+    res.json({ iceServers, spotifyClientId: spotifyClientId || null });
   });
 
   // Very small per-IP limit on creating offices.

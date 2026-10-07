@@ -10,6 +10,7 @@ import { ChatPanel } from './ChatPanel';
 import { Dock, copyInvite } from './Dock';
 import { CloseIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
+import { MusicPanel, NowPlayingPill } from './MusicPanel';
 import { PeoplePanel } from './PeoplePanel';
 import { SelfView, Spotlight, VideoStrip } from './VideoStrip';
 import { WorldLabels, ZoneIndicator } from './WorldLabels';
@@ -33,11 +34,12 @@ function TopBar() {
         </button>
       </div>
       <ZoneIndicator />
+      <NowPlayingPill />
     </div>
   );
 }
 
-const PANEL_TITLES = { chat: 'Chat', people: 'People', build: 'Build' } as const;
+const PANEL_TITLES = { chat: 'Chat', people: 'People', build: 'Build', music: 'Music' } as const;
 
 function SidePanel() {
   const panel = useStore((s) => s.panel);
@@ -53,6 +55,7 @@ function SidePanel() {
       {panel === 'chat' && <ChatPanel />}
       {panel === 'people' && <PeoplePanel />}
       {panel === 'build' && <BuildPanel />}
+      {panel === 'music' && <MusicPanel />}
     </aside>
   );
 }

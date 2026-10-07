@@ -6,11 +6,18 @@ async function json<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-export async function fetchConfig(): Promise<{ iceServers: RTCIceServer[] }> {
+export interface ClientConfig {
+  iceServers: RTCIceServer[];
+  /** Set when the server enables Spotify listen-along. */
+  spotifyClientId: string | null;
+}
+
+export async function fetchConfig(): Promise<ClientConfig> {
   try {
-    return await json(await fetch('/api/config', { signal: AbortSignal.timeout(8000) }));
+    const cfg = await json<Partial<ClientConfig>>(await fetch('/api/config', { signal: AbortSignal.timeout(8000) }));
+    return { iceServers: cfg.iceServers ?? [], spotifyClientId: cfg.spotifyClientId ?? null };
   } catch {
-    return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], spotifyClientId: null };
   }
 }
 

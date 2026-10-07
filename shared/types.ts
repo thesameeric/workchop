@@ -1,3 +1,5 @@
+import type { JukeboxData, MusicOp, SpotifySession, SpotifySessionUpdate } from './music';
+
 // Types shared by the browser client and the Node server.
 
 export type HairStyle = 'none' | 'short' | 'long' | 'bun' | 'ponytail' | 'mohawk' | 'curly' | 'spiky';
@@ -49,6 +51,8 @@ export interface OfficeItem {
   /** Quarter turns around the vertical axis, 0..3. */
   rot: number;
   color?: string;
+  /** Item-specific settings (jukebox: radio station and shared Spotify links). */
+  data?: JukeboxData;
 }
 
 /** A private area: people inside hear only each other, regardless of distance. */
@@ -131,6 +135,8 @@ export type JoinResponse =
       players: PlayerState[];
       chat: ChatMessage[];
       isOwner: boolean;
+      /** Spotify listen-along sessions running in this office. */
+      spotify: SpotifySession[];
     }
   | { ok: false; error: string };
 
@@ -149,6 +155,8 @@ export interface ServerToClientEvents {
   emote: (id: string, emoji: string) => void;
   'office:op': (op: OfficeOp, by: string) => void;
   'office:sync': (office: Office, reason?: string) => void;
+  'spotify:session': (itemId: string, session: SpotifySession | null) => void;
+  notice: (text: string) => void;
 }
 
 export interface ClientToServerEvents {
@@ -159,4 +167,10 @@ export interface ClientToServerEvents {
   emote: (emoji: string) => void;
   'office:op': (op: OfficeOp) => void;
   'rtc:signal': (to: string, sid: number, data: RtcSignal) => void;
+  /** Change a jukebox (radio station, shared links). Allowed for everyone in the office. */
+  music: (op: MusicOp) => void;
+  /** Start (start=true), update or stop (null) a Spotify listen-along session on a jukebox. */
+  'spotify:session': (itemId: string, update: SpotifySessionUpdate | null, start?: boolean) => void;
+  /** Server clock, for keeping listen-along playback in sync. */
+  time: (ack: (serverNow: number) => void) => void;
 }

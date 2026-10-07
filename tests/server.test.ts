@@ -4,6 +4,7 @@ import path from 'node:path';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_AVATAR } from '../shared/avatar';
+import type { SpotifySession } from '../shared/music';
 import type { ClientToServerEvents, JoinResponse, ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
 
@@ -80,7 +81,7 @@ describe('REST API', () => {
 
   it('serves ICE configuration', async () => {
     const cfg = await (await fetch(`${base}/api/config`)).json();
-    expect(cfg).toEqual({ iceServers: [] });
+    expect(cfg).toEqual({ iceServers: [], spotifyClientId: null });
   });
 });
 
@@ -198,6 +199,109 @@ describe('realtime', () => {
     expect(saved.office.items.some((i: { id: string }) => i.id === 'sofa1')).toBe(true);
     expect(saved.office.settings.buildPolicy).toBe('owner');
     expect(JSON.stringify(guest.res)).not.toContain(ownerKey);
+  });
+
+  it('jukebox changes are shared, saved, and protected from build edits', async () => {
+    const { id, ownerKey } = await createOffice('startup');
+    const owner = await join(id, 'Owner', ownerKey);
+    const guest = await join(id, 'Guest');
+    const office = owner.res.ok ? owner.res.office : null;
+    const jukebox = office!.items.find((i) => i.type === 'jukebox')!;
+    expect(jukebox.data?.station).toBe('lofi');
+
+    // Any guest can change the station; everyone gets the update.
+    const seen = next(owner.socket, 'office:op');
+    guest.socket.emit('music', { t: 'station', itemId: jukebox.id, station: 'ambient' });
+    const [op] = await seen;
+    expect(op).toMatchObject({ t: 'update', item: { id: jukebox.id, data: { station: 'ambient' } } });
+
+    // Guests can't set up a custom stream when only the owner may edit.
+    owner.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
+    await next(guest.socket, 'office:op');
+    const refused = next(guest.socket, 'notice');
+    guest.socket.emit('music', { t: 'station', itemId: jukebox.id, station: 'stream', stream: 'https://radio.example/live' });
+    expect((await refused)[0]).toMatch(/edit/i);
+
+    // Share a link, then try to wipe it with a stale build edit: the board survives.
+    const shared = Promise.all([next(owner.socket, 'office:op'), next(guest.socket, 'office:op')]);
+    guest.socket.emit('music', { t: 'link:add', itemId: jukebox.id, url: 'https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3' });
+    await shared;
+    const moved = next(guest.socket, 'office:op');
+    owner.socket.emit('office:op', { t: 'update', item: { ...jukebox, x: jukebox.x - 1, data: { station: null, links: [] } } });
+    const [moveOp] = await moved;
+    expect(moveOp).toMatchObject({ t: 'update', item: { x: jukebox.x - 1, data: { station: 'ambient' } } });
+    expect(moveOp.t === 'update' && moveOp.item.data?.links).toHaveLength(1);
+
+    await server.store.flush();
+    const saved = JSON.parse(readFileSync(path.join(dataDir, `${id}.json`), 'utf8'));
+    const savedBox = saved.office.items.find((i: { id: string }) => i.id === jukebox.id);
+    expect(savedBox.data.station).toBe('ambient');
+    expect(savedBox.data.links[0].url).toBe('https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3');
+  });
+
+  it('runs Spotify listen-along sessions: start, take over, stop, and end when the DJ leaves', async () => {
+    const { id, ownerKey } = await createOffice('startup');
+    const a = await join(id, 'Ann', ownerKey);
+    const b = await join(id, 'Bob');
+    const jukebox = (a.res.ok ? a.res.office : null)!.items.find((i) => i.type === 'jukebox')!;
+    const track = (n: number) => ({ uri: `spotify:track:4uLU6hMCjMI75M1A2tKUQ${n}`, name: `Song ${n}`, artists: 'Band', durationMs: 180_000, positionMs: 0, paused: false });
+
+    // Record every session event per person, then wait for the expected number to arrive.
+    const record = (socket: Client) => {
+      const events: (SpotifySession | null)[] = [];
+      socket.on('spotify:session', (itemId, session) => {
+        expect(itemId).toBe(jukebox.id);
+        events.push(session);
+      });
+      return events;
+    };
+    const until = async (cond: () => boolean) => {
+      for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(cond()).toBe(true);
+    };
+    const evA = record(a.socket);
+    const evB = record(b.socket);
+
+    // Server clock for syncing.
+    const now = await a.socket.timeout(2000).emitWithAck('time');
+    expect(Math.abs(now - Date.now())).toBeLessThan(1000);
+
+    a.socket.emit('spotify:session', jukebox.id, track(1), true);
+    await until(() => evB.length === 1);
+    expect(evB[0]).toMatchObject({ djName: 'Ann', uri: track(1).uri, itemId: jukebox.id });
+
+    // Someone joining late learns about it.
+    const c = await join(id, 'Cat');
+    const evC = record(c.socket);
+    expect(c.res.ok && c.res.spotify.map((s) => s.uri)).toEqual([track(1).uri]);
+
+    // Bob can't push updates into Ann's session without taking over...
+    b.socket.emit('spotify:session', jukebox.id, track(2));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(evA).toHaveLength(1);
+    // ...but can take over explicitly.
+    b.socket.emit('spotify:session', jukebox.id, track(3), true);
+    await until(() => evA.length === 2 && evC.length === 1);
+    expect(evA[1]).toMatchObject({ djName: 'Bob', uri: track(3).uri });
+
+    // When the DJ leaves, the session ends for everyone.
+    b.socket.disconnect();
+    await until(() => evA.length === 3 && evC.length === 2);
+    expect([evA[2], evC[1]]).toEqual([null, null]);
+
+    // Anyone can stop a session.
+    a.socket.emit('spotify:session', jukebox.id, track(4), true);
+    await until(() => evC.length === 3);
+    c.socket.emit('spotify:session', jukebox.id, null);
+    await until(() => evA.length === 5 && evC.length === 4);
+    expect([evA[4], evC[3]]).toEqual([null, null]);
+
+    // Deleting the jukebox stops it too.
+    a.socket.emit('spotify:session', jukebox.id, track(5), true);
+    await until(() => evC.length === 5);
+    a.socket.emit('office:op', { t: 'remove', id: jukebox.id });
+    await until(() => evC.length === 6);
+    expect(evC[5]).toBeNull();
   });
 
   it('tells others when someone leaves', async () => {

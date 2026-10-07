@@ -14,6 +14,7 @@ import {
   LinkIcon,
   MicIcon,
   MicOffIcon,
+  MusicIcon,
   PeopleIcon,
   ScreenIcon,
   SettingsIcon,
@@ -114,6 +115,9 @@ export function Dock() {
         <button className={`dock-btn${panel === 'chat' ? ' on' : ''}`} onClick={() => setPanel('chat')} title="Chat (Enter)">
           <ChatIcon />
           {unread > 0 && <span className="badge-count">{unread > 9 ? '9+' : unread}</span>}
+        </button>
+        <button className={`dock-btn hide-mobile${panel === 'music' ? ' on' : ''}`} onClick={() => setPanel('music')} title="Music">
+          <MusicIcon />
         </button>
         <button className={`dock-btn${panel === 'people' ? ' on' : ''}`} onClick={() => setPanel('people')} title="People">
           <PeopleIcon />

@@ -18,9 +18,15 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 **The office**
 - Two starting templates: a furnished startup office with desk pods, a glass meeting room, a lounge, a kitchen and ping pong, or a blank floor.
-- **Build mode** (hammer button or `B`): 31 pieces of furniture and structure in 6 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
+- **Build mode** (hammer button or `B`): 32 pieces of furniture and structure in 6 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
 - Office settings: name, floor size, floor style and colour, wall colour, and spawn point. The owner can lock building to themselves.
 - Every edit is synced live to everyone in the office and saved on the server.
+
+**Lounge music**
+- A **jukebox** (in the startup lounge, or add one from Build → Fun) plays music for everyone in the private area it stands in, or within about 7 m if it's out in the open. Click it, the 🎵 dock button, or the "now playing" chip to open it. Everyone has their own volume and mute.
+- **Radio:** two built-in stations, *Workchop Lo-fi* and *Workchop Ambient*, are composed live in each browser from the server clock, so everyone hears the same notes at the same moment, with nothing to license or stream. Editors can also add **the office's own tracks** (audio files, looped in sync for everyone) or **a live stream** (an https Icecast/Shoutcast URL). Anyone can switch stations.
+- **Spotify board:** share Spotify playlists, albums, tracks, podcasts, or a **Jam** invite. Everyone opens them in their own Spotify app.
+- **Spotify listen-along** (optional, needs `SPOTIFY_CLIENT_ID`, see below): people connect their own Spotify Premium account, someone presses ▶ "Play for everyone", and everyone connected at that jukebox hears the same track at the same position on their own account. Workchop only syncs what's playing; it never streams audio from one person to another.
 
 **Getting around**
 - `WASD` or the arrow keys move you relative to the camera, and `Shift` runs. Click the floor to walk there (with pathfinding); click a chair to walk over and sit.
@@ -90,6 +96,8 @@ Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose
 | --- | --- |
 | Offices: layout, furniture, private areas, settings, owner key | Postgres (when `DATABASE_URL` is set), otherwise one JSON file per office in `DATA_DIR` |
 | Names and characters | Each person's browser (local storage) |
+| Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
+| Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
 | Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
 | Who's online, positions, calls | In memory only (live state) |
 
@@ -117,8 +125,19 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `DATA_DIR` | `./data/offices` | Where offices are saved when there's no `DATABASE_URL` (one JSON file each) |
 | `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | – | Shortcut for adding one TURN server (comma-separate several URLs) |
+| `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
+
+### Music and Spotify
+
+The built-in radio stations work out of the box. Two things to know before adding your own music:
+
+- **Your own tracks and streams** must be music your organisation may play to its staff, e.g. royalty-free or licensed tracks, your own Icecast server, or a business music provider's stream URL. Most consumer radio stations and services (including YouTube, SoundCloud, and Spotify itself) don't allow being re-played inside another app. URLs must be `https://`. Audio files need range requests (any normal web server or bucket has them) so late joiners can start in the middle of a track.
+- **Spotify listen-along** uses Spotify's Web Playback SDK, which has strict rules:
+  1. Create an app at <https://developer.spotify.com/dashboard>, tick **Web Playback SDK** and **Web API**, and add the redirect URI `https://<your domain>/spotify-callback.html`. For local testing, open Workchop at `http://127.0.0.1:5173` (not `localhost`; Spotify only accepts loopback IPs over plain http) and register `http://127.0.0.1:5173/spotify-callback.html`.
+  2. Set `SPOTIFY_CLIENT_ID` (in `.env` for Docker Compose) and restart. No client secret is needed (sign-in uses PKCE).
+  3. Every listener needs **Spotify Premium** and a desktop browser. Apps in Spotify's *development mode* work only for accounts you add under *User Management* (currently up to 5). Spotify grants wider access only to established organisations, and its developer policy doesn't allow apps aimed at businesses. So treat listen-along as a feature for small teams and friends, and use the board's links and Jams for everyone else.
 
 ## How it works
 
@@ -126,10 +145,12 @@ STUN alone is enough on most home and office networks. People behind strict corp
 client/   React + react-three-fiber app (Vite)
   src/world/   3D scene: furniture models, avatar, movement, camera, build tools
   src/ui/      Landing page, lobby, character editor, dock, chat, people and build panels
-  src/lib/     Socket session, WebRTC mesh (peers.ts), local media, speaking detection
+  src/lib/     Socket session, WebRTC mesh (peers.ts), local media, speaking detection,
+               lounge radio (radio.ts, genmusic.ts), Spotify listen-along (spotify.ts)
 server/   Express + Socket.IO
-  realtime.ts  Presence, movement, chat, office edits, WebRTC signalling relay
+  realtime.ts  Presence, movement, chat, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   room.ts      Who is linked to whom
+  music.ts     Jukebox changes and who may make them, Spotify link previews
   officeStore.ts  Cache of open offices, debounced saves, flush on shutdown
   repos.ts     Storage backends: JSON files or Postgres (jsonb)
 shared/   Code used by both sides: types, furniture catalog, avatar options,
@@ -139,6 +160,7 @@ shared/   Code used by both sides: types, furniture catalog, avatar options,
 - **The server decides who talks to whom.** Clients stream their position to the server, which runs the proximity and private-area rules in `shared/geometry.ts`. When two people should be connected it sends `peer:connect` to both, with a link id and which side makes the WebRTC offer. When they drift apart it sends `peer:disconnect`. Signalling messages are relayed only between currently linked people, on their current link id, so nobody can open a call with someone they shouldn't hear.
 - **Media is peer-to-peer** (a mesh). Every connection always has one audio and one video transceiver, so muting, turning the camera on or off, or starting a screen share is just `replaceTrack`, with no renegotiation. Remote audio volume is set from the distance between the two people.
 - **Office edits are operations** (`add`, `update`, `remove`, `zone:*`, `settings`). They are applied optimistically on the client and validated and normalised by the server with the same `applyOp` code. The server then echoes them to everyone in its own order, so all clients converge. Rejected edits trigger a full resync.
+- **Music is synced by clock, not streamed.** Clients estimate the server's clock (`time` pings). The built-in stations are generated from it with a seeded pattern, so every browser plays the same bar. Track lists play from a shared start time. Listen-along sessions store the DJ's track, position and server time, and listeners seek to match (the DJ re-sends on track changes, pauses and seeks).
 - **Everything in the world is generated in code** (furniture, characters, floor textures), so there are no asset files to load.
 
 ## Development
