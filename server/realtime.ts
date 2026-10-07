@@ -96,7 +96,13 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       if (typeof ack !== 'function') return;
       if (!req || typeof req !== 'object') return ack({ ok: false, error: 'Bad request' });
       leave();
-      const stored = await store.get(String(req.officeId));
+      let stored;
+      try {
+        stored = await store.get(String(req.officeId));
+      } catch (err) {
+        console.error('[store] could not load office:', err);
+        return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+      }
       if (!stored) return ack({ ok: false, error: 'This office does not exist.' });
       if (socket.disconnected) return;
       const id = stored.office.id;

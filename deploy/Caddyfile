@@ -1,0 +1,5 @@
+{$DOMAIN} {
+	encode zstd gzip
+	# WebSocket upgrades (Socket.IO) are proxied automatically.
+	reverse_proxy app:3001
+}

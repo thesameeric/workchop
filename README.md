@@ -66,21 +66,45 @@ cloudflared tunnel --url http://localhost:3001    # or: ngrok http 3001
 
 `cloudflared` works without an account; `ngrok` needs a free account and a one-time `ngrok config add-authtoken <token>`. Use the production build for this: Vite's dev server rejects unfamiliar host names such as tunnel addresses.
 
-### Production
+## Deploying
+
+Browsers only allow the camera and microphone over **HTTPS**, so a deployment needs a domain name and a certificate. The included Docker Compose setup takes care of both.
+
+### Docker Compose (recommended)
+
+Runs three containers: the app, **Postgres** for storage, and **Caddy**, which gets an HTTPS certificate automatically and forwards WebSockets. You need a server with Docker, a domain (or subdomain) whose DNS points at it, and ports 80 and 443 open.
+
+```bash
+cp .env.example .env      # set DOMAIN and a long random POSTGRES_PASSWORD
+docker compose up -d --build
+```
+
+Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose up -d --build`. To try the stack on your own machine, set `DOMAIN=localhost` and accept the browser's warning about Caddy's local certificate.
+
+- **Where the data lives:** in the `db-data` Docker volume, and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
+- **TURN (optional):** people behind strict corporate firewalls may need a relay for calls to connect. Set `TURN_URL=turn:<DOMAIN>:3478`, `TURN_USERNAME` and `TURN_CREDENTIAL` in `.env`, open TCP/UDP 3478 and UDP 49160–49200, and start with `docker compose --profile turn up -d --build`.
+
+### What is stored
+
+| Data | Where |
+| --- | --- |
+| Offices: layout, furniture, private areas, settings, owner key | Postgres (when `DATABASE_URL` is set), otherwise one JSON file per office in `DATA_DIR` |
+| Names and characters | Each person's browser (local storage) |
+| Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
+| Who's online, positions, calls | In memory only (live state) |
+
+**Postgres or files?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in one `offices` table, created automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. The JSON files are fine for a single server with a persistent disk, and need no setup. Switching storage doesn't move existing offices over.
+
+Run **one app instance**. Live rooms (who's where, call links) are kept in memory, so several instances behind a load balancer would split an office in two. One instance comfortably serves many offices.
+
+### Without Compose
 
 ```bash
 npm run build      # client -> dist/client, server -> dist/server
 npm start          # serves both on PORT (default 3001)
 ```
 
-Or with Docker:
-
-```bash
-docker build -t workchop .
-docker run -p 3001:3001 -v workchop-data:/app/data workchop
-```
-
-Browsers only allow camera and microphone access on **HTTPS** (or `localhost`), so put the server behind a TLS-terminating proxy (Caddy, nginx, a load balancer…) that forwards WebSockets.
+or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgres://… workchop` (leave out `DATABASE_URL` to store files in the `/app/data` volume). Put it behind any HTTPS reverse proxy that forwards WebSockets (Caddy, nginx, a cloud load balancer).
 
 ### Configuration
 
@@ -88,7 +112,9 @@ Browsers only allow camera and microphone access on **HTTPS** (or `localhost`), 
 | --- | --- | --- |
 | `PORT` | `3001` | HTTP port of the server (in `npm run dev`, the API port Vite proxies to) |
 | `HOST` | `0.0.0.0` | Bind address |
-| `DATA_DIR` | `./data/offices` | Where offices are saved (one JSON file each) |
+| `DATABASE_URL` | – | Postgres connection string. When set, offices are stored in Postgres |
+| `DATABASE_SSL` | – | `require` (verified TLS) or `no-verify` (TLS without certificate checks, for some managed providers) |
+| `DATA_DIR` | `./data/offices` | Where offices are saved when there's no `DATABASE_URL` (one JSON file each) |
 | `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | – | Shortcut for adding one TURN server (comma-separate several URLs) |
 
@@ -104,7 +130,8 @@ client/   React + react-three-fiber app (Vite)
 server/   Express + Socket.IO
   realtime.ts  Presence, movement, chat, office edits, WebRTC signalling relay
   room.ts      Who is linked to whom
-  officeStore.ts  JSON persistence with debounced atomic writes
+  officeStore.ts  Cache of open offices, debounced saves, flush on shutdown
+  repos.ts     Storage backends: JSON files or Postgres (jsonb)
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 ```
@@ -120,6 +147,8 @@ shared/   Code used by both sides: types, furniture catalog, avatar options,
 npm run typecheck
 npm test          # unit tests for geometry/office rules + server integration tests
 ```
+
+The storage tests also run against Postgres when `TEST_DATABASE_URL` points at a database they may write to, e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`.
 
 ## Limits
 

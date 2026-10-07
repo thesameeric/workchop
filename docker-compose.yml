@@ -1,0 +1,72 @@
+# Workchop with Postgres and automatic HTTPS (Caddy).
+#
+#   cp .env.example .env    # then set DOMAIN and POSTGRES_PASSWORD
+#   docker compose up -d --build
+#
+# Optional TURN relay for people behind strict firewalls:
+#   docker compose --profile turn up -d --build
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://workchop:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/workchop
+      TURN_URL: ${TURN_URL:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: workchop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: workchop
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workchop -d workchop"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Terminates HTTPS (browsers only allow camera and microphone over HTTPS) and gets the
+  # certificate for DOMAIN automatically. DOMAIN must point at this server, ports 80/443 open.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  # TURN relay (coturn). Needs UDP 3478 and 49160-49200 plus TCP 3478 open on the server,
+  # and TURN_URL=turn:<DOMAIN>:3478 with TURN_USERNAME / TURN_CREDENTIAL in .env.
+  turn:
+    image: coturn/coturn:4.6
+    profiles: ["turn"]
+    restart: unless-stopped
+    network_mode: host
+    command: >-
+      -n --log-file=stdout --fingerprint --lt-cred-mech
+      --realm=${DOMAIN:-workchop}
+      --user=${TURN_USERNAME:-workchop}:${TURN_CREDENTIAL:-change-me}
+      --listening-port=3478 --min-port=49160 --max-port=49200
+      --external-ip=$$(detect-external-ip)
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

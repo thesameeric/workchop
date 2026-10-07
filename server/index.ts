@@ -10,11 +10,16 @@ import type { TemplateId } from '../shared/templates';
 import type { ClientToServerEvents, ServerToClientEvents } from '../shared/types';
 import { OfficeStore } from './officeStore';
 import { attachRealtime } from './realtime';
+import { FileRepo, PostgresRepo, type DatabaseSsl } from './repos';
 
 export interface ServerOptions {
   port?: number;
   host?: string;
+  /** Directory for office JSON files (used when no database is configured). */
   dataDir?: string;
+  /** Postgres connection string; when set, offices are stored in Postgres instead of files. */
+  databaseUrl?: string;
+  databaseSsl?: DatabaseSsl;
   /** Directory with the built client to serve; omit in development (Vite serves it). */
   clientDir?: string | null;
   iceServers?: RTCIceServerLike[];
@@ -44,8 +49,12 @@ export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceS
 }
 
 export async function startServer(opts: ServerOptions = {}) {
-  const store = new OfficeStore(opts.dataDir ?? path.resolve('data/offices'));
+  const repo = opts.databaseUrl
+    ? new PostgresRepo(opts.databaseUrl, opts.databaseSsl)
+    : new FileRepo(opts.dataDir ?? path.resolve('data/offices'));
+  const store = new OfficeStore(repo);
   await store.init();
+  if (!opts.quiet) console.log(`[workchop] storing offices in ${store.description}`);
 
   const app = express();
   app.disable('x-powered-by');
@@ -79,12 +88,26 @@ export async function startServer(opts: ServerOptions = {}) {
     creations.set(ip, [...recent, now]);
     const name = sanitizeName(req.body?.name, 48) || 'My Office';
     const template: TemplateId = req.body?.template === 'blank' ? 'blank' : 'startup';
-    const stored = await store.create(name, template);
+    let stored;
+    try {
+      stored = await store.create(name, template);
+    } catch (err) {
+      console.error('[store] could not create office:', err);
+      res.status(503).json({ error: 'Could not save the new office. Please try again.' });
+      return;
+    }
     res.status(201).json({ id: stored.office.id, ownerKey: stored.ownerKey });
   });
 
   app.get('/api/offices/:id', async (req, res) => {
-    const stored = await store.get(req.params.id);
+    let stored;
+    try {
+      stored = await store.get(req.params.id);
+    } catch (err) {
+      console.error('[store] could not load office:', err);
+      res.status(503).json({ error: 'Storage is unavailable right now.' });
+      return;
+    }
     if (!stored) {
       res.status(404).json({ error: 'Office not found' });
       return;
@@ -140,7 +163,7 @@ export async function startServer(opts: ServerOptions = {}) {
       io.close();
       httpServer.closeAllConnections();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      await store.flush();
+      await store.close();
     },
   };
 }
@@ -154,6 +177,8 @@ if (isMain) {
     port,
     host: process.env.HOST,
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
+    databaseUrl: process.env.DATABASE_URL || undefined,
+    databaseSsl: process.env.DATABASE_SSL === 'require' || process.env.DATABASE_SSL === 'no-verify' ? process.env.DATABASE_SSL : undefined,
     clientDir: production ? (process.env.CLIENT_DIR ?? path.resolve(here, '../client')) : null,
   }).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'EADDRINUSE') throw err;

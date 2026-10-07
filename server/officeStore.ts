@@ -1,15 +1,10 @@
 import crypto from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { isValidId, sanitizeOffice } from '../shared/office';
 import { createFromTemplate, type TemplateId } from '../shared/templates';
 import type { Office } from '../shared/types';
+import type { OfficeRepo, StoredOffice } from './repos';
 
-export interface StoredOffice {
-  office: Office;
-  /** Secret handed to whoever created the office; grants owner rights. Never sent to other clients. */
-  ownerKey: string;
-}
+export type { StoredOffice } from './repos';
 
 const ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 
@@ -20,27 +15,27 @@ export function randomId(length = 10): string {
   return out;
 }
 
-/** Offices persisted as one JSON file each, cached in memory and written back with a short debounce. */
+/**
+ * Offices in use are cached in memory; edits are written back to the repo (files or Postgres)
+ * after a short debounce, one save at a time per office.
+ */
 export class OfficeStore {
   private cache = new Map<string, StoredOffice>();
   private loading = new Map<string, Promise<StoredOffice | null>>();
   private timers = new Map<string, NodeJS.Timeout>();
   private writes = new Map<string, Promise<void>>();
 
-  constructor(private readonly dir: string) {}
+  constructor(private readonly repo: OfficeRepo) {}
 
-  async init(): Promise<void> {
-    await fs.mkdir(this.dir, { recursive: true });
-    // Remove temp files left behind if a previous run was killed mid-write.
-    for (const name of await fs.readdir(this.dir)) {
-      if (/\.json\.\d+\.tmp$/.test(name)) await fs.rm(path.join(this.dir, name), { force: true });
-    }
+  get description(): string {
+    return this.repo.description;
   }
 
-  private file(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+  init(): Promise<void> {
+    return this.repo.init();
   }
 
+  /** The office, or null if it doesn't exist. Throws if storage is unavailable. */
   async get(id: string): Promise<StoredOffice | null> {
     if (!isValidId(id)) return null;
     const cached = this.cache.get(id);
@@ -59,44 +54,29 @@ export class OfficeStore {
   }
 
   private async load(id: string): Promise<StoredOffice | null> {
-    let raw: string;
-    try {
-      raw = await fs.readFile(this.file(id), 'utf8');
-    } catch {
+    const raw = await this.repo.load(id);
+    if (!raw) return null;
+    const office = sanitizeOffice(raw.office);
+    if (!office || typeof raw.ownerKey !== 'string') {
+      console.error(`[store] office ${id} is malformed; ignoring it`);
       return null;
     }
-    try {
-      const json = JSON.parse(raw) as { office?: unknown; ownerKey?: unknown };
-      const office = sanitizeOffice(json.office);
-      if (!office || typeof json.ownerKey !== 'string') return null;
-      const stored: StoredOffice = { office: { ...office, id }, ownerKey: json.ownerKey };
-      this.cache.set(id, stored);
-      return stored;
-    } catch (err) {
-      console.error(`[store] could not parse office ${id}:`, err);
-      return null;
-    }
+    const stored: StoredOffice = { office: { ...office, id }, ownerKey: raw.ownerKey };
+    this.cache.set(id, stored);
+    return stored;
   }
 
+  /** Create and immediately persist a new office. Throws if it can't be saved. */
   async create(name: string, template: TemplateId): Promise<StoredOffice> {
     let id = randomId();
-    while (this.cache.has(id) || (await this.exists(id))) id = randomId();
+    while (this.cache.has(id) || (await this.repo.exists(id))) id = randomId();
     const stored: StoredOffice = {
       office: createFromTemplate(template, id, name),
       ownerKey: crypto.randomBytes(18).toString('base64url'),
     };
+    await this.repo.save(stored);
     this.cache.set(id, stored);
-    await this.write(id);
     return stored;
-  }
-
-  private async exists(id: string): Promise<boolean> {
-    try {
-      await fs.access(this.file(id));
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   update(id: string, office: Office): void {
@@ -113,15 +93,12 @@ export class OfficeStore {
     );
   }
 
-  /** Serialised, atomic write (temp file + rename) so a crash never leaves half a file. */
+  /** Save the latest state of an office, after any save of it that is already running. */
   private write(id: string): Promise<void> {
     const prev = this.writes.get(id) ?? Promise.resolve();
     const next = prev.then(async () => {
       const stored = this.cache.get(id);
-      if (!stored) return;
-      const tmp = `${this.file(id)}.${process.pid}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(stored, null, 1));
-      await fs.rename(tmp, this.file(id));
+      if (stored) await this.repo.save(stored);
     });
     const tracked = next.catch((err) => console.error(`[store] failed to save office ${id}:`, err));
     this.writes.set(id, tracked);
@@ -142,9 +119,15 @@ export class OfficeStore {
     );
   }
 
-  /** Flush an office to disk and drop it from memory, unless `inUse()` says someone came back meanwhile. */
+  /** Flush an office and drop it from memory, unless `inUse()` says someone came back meanwhile. */
   async evict(id: string, inUse: () => boolean): Promise<void> {
     await this.flush(id);
     if (!inUse() && !this.timers.has(id)) this.cache.delete(id);
+  }
+
+  /** Save everything and release the storage connection. */
+  async close(): Promise<void> {
+    await this.flush();
+    await this.repo.close();
   }
 }
