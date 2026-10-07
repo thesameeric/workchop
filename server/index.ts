@@ -110,7 +110,7 @@ export async function startServer(opts: ServerOptions = {}) {
   } else {
     // In development the page is served by Vite; point lost visitors there.
     app.get(/.*/, (_req, res) => {
-      res.type('text').send('This is the Workchop API server. Open the app at the Vite URL instead (http://localhost:5173 by default).');
+      res.type('text').send('This is the Workchop API server. Open the app at the "Local:" address that npm run dev printed (usually http://localhost:5173).');
     });
   }
 
@@ -126,7 +126,7 @@ export async function startServer(opts: ServerOptions = {}) {
     console.log(
       servesClient
         ? `[workchop] open http://localhost:${port}`
-        : `[workchop] API server listening on port ${port} (the app itself is on the Vite URL)`,
+        : `[workchop] API server listening on port ${port} (open the app at the "Local:" address above)`,
     );
   }
 
@@ -135,7 +135,10 @@ export async function startServer(opts: ServerOptions = {}) {
     io,
     store,
     async close() {
+      // Save pending office edits first, so nothing is lost even if shutdown gets cut short.
+      await store.flush();
       io.close();
+      httpServer.closeAllConnections();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await store.flush();
     },
@@ -157,7 +160,10 @@ if (isMain) {
     console.error(`[workchop] port ${port} is already in use. Stop the other process or choose another one, e.g. PORT=${port + 1}.`);
     process.exit(1);
   });
+  let closing = false;
   const shutdown = async () => {
+    if (closing) return;
+    closing = true;
     await server.close();
     process.exit(0);
   };

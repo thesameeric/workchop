@@ -31,6 +31,10 @@ export class OfficeStore {
 
   async init(): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
+    // Remove temp files left behind if a previous run was killed mid-write.
+    for (const name of await fs.readdir(this.dir)) {
+      if (/\.json\.\d+\.tmp$/.test(name)) await fs.rm(path.join(this.dir, name), { force: true });
+    }
   }
 
   private file(id: string): string {

@@ -17,6 +17,7 @@ export function Lobby() {
   const [avatar, setAvatar] = useState(me.avatar);
   const [info, setInfo] = useState<{ name: string; online: number } | null | undefined>(undefined);
   const [unreachable, setUnreachable] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,11 +25,15 @@ export function Lobby() {
 
   useEffect(() => {
     let alive = true;
-    setUnreachable(false);
     // null means the server answered "not found"; a thrown error means we couldn't ask it.
     fetchOfficeInfo(officeId)
-      .then((i) => alive && setInfo(i))
-      .catch(() => alive && setUnreachable(true));
+      .then((i) => {
+        if (!alive) return;
+        setInfo(i);
+        setUnreachable(false);
+      })
+      .catch(() => alive && setUnreachable(true))
+      .finally(() => alive && setRetrying(false));
     return () => {
       alive = false;
     };
@@ -64,8 +69,15 @@ export function Lobby() {
         <div className="card narrow">
           <h2>Can’t reach the server</h2>
           <p className="muted">The Workchop server isn’t responding. Check that it’s running, then try again.</p>
-          <button className="btn primary" onClick={() => setAttempt((n) => n + 1)}>
-            Try again
+          <button
+            className="btn primary"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              setAttempt((n) => n + 1);
+            }}
+          >
+            {retrying ? 'Trying…' : 'Try again'}
           </button>
         </div>
       </div>

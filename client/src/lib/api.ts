@@ -25,7 +25,8 @@ export async function createOffice(name: string, template: TemplateId): Promise<
 }
 
 export async function fetchOfficeInfo(id: string): Promise<{ id: string; name: string; online: number } | null> {
-  const res = await fetch(`/api/offices/${encodeURIComponent(id)}`);
+  // A server that accepts the connection but never answers counts as unreachable.
+  const res = await fetch(`/api/offices/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(8000) });
   if (res.status === 404) return null;
   return json(res);
 }

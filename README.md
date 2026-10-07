@@ -40,29 +40,31 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 ## Getting started
 
-Requires Node.js 22.12 or newer (Node 20.19+ can run the app, but the test runner needs 22.12+). Check with `node --version`.
+Requires Node.js 22.12+ or 24+ (the current LTS releases; 20.19+ also works). Check with `node --version`.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173, create an office, pick a name and join. Allow the camera and microphone when the browser asks.
+Open the `Local:` address it prints (normally http://localhost:5173), create an office, pick a name and join. Allow the camera and microphone when the browser asks.
 
-`npm run dev` starts the API and realtime server on port 3001 (reloading on change) and Vite on port 5173, which proxies `/api` and `/socket.io` to the server. If port 3001 is taken, run it on another one, e.g. `PORT=4001 npm run dev` (the proxy follows `PORT`). Stop it with `Ctrl+C`.
+`npm run dev` starts the API and realtime server on port 3001 (reloading on change) and Vite on port 5173, which proxies `/api` and `/socket.io` to the server. If port 3001 is taken, run it on another one, e.g. `PORT=4001 npm run dev` (the proxy follows `PORT`; on Windows use `$env:PORT=4001; npm run dev` in PowerShell or `set PORT=4001&& npm run dev` in cmd). Stop it with `Ctrl+C`.
 
 ### Testing a call
 
-**On your own:** copy the invite link (link button in the top bar) and open it in a private/incognito window, which gets its own name and character. Walk the two characters toward each other: the video tiles appear at the top once you're within a few metres, and disappear when you walk apart. Use headphones or mute one window to avoid echo.
+**On your own:** copy the invite link (link button in the top bar) and open it in a private/incognito window, which gets its own name and character. New arrivals start next to each other, so the video tiles at the top show up straight away. Walk apart (WASD, or click the floor) and they disappear; walk back and they return. Use headphones or mute one window to avoid echo.
 
 **With other people or your phone:** browsers only allow the camera and microphone on HTTPS (or `localhost`). The `Network:` address Vite prints works on your Wi-Fi, but people joining that way can only watch and listen. For full two-way calls, run the production build behind any HTTPS tunnel and share the `https://…` address it prints:
 
 ```bash
-npm run build && npm start              # serves the app on http://localhost:3001
-cloudflared tunnel --url http://localhost:3001   # or: ngrok http 3001
+npm run build && npm start                        # serves the app on http://localhost:3001
+
+# then, in a second terminal (use the same port as above if you changed PORT):
+cloudflared tunnel --url http://localhost:3001    # or: ngrok http 3001
 ```
 
-(Use the production build for this: Vite's dev server rejects unfamiliar host names such as tunnel addresses.)
+`cloudflared` works without an account; `ngrok` needs a free account and a one-time `ngrok config add-authtoken <token>`. Use the production build for this: Vite's dev server rejects unfamiliar host names such as tunnel addresses.
 
 ### Production
 

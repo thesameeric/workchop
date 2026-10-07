@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('..', import.meta.url);
 const bin = (path) => fileURLToPath(new URL(`node_modules/${path}`, root));
+
 const apiPort = Number(process.env.PORT ?? 3001);
+if (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535) {
+  console.error(`PORT must be a number between 1 and 65535 (got "${process.env.PORT}").`);
+  process.exit(1);
+}
 
 // Fail fast with a clear message rather than letting Vite proxy to some other app.
 const free = await new Promise((resolve) => {
@@ -37,20 +42,41 @@ const procs = [
   };
   pipe(child.stdout, process.stdout);
   pipe(child.stderr, process.stderr);
-  child.on('exit', (code, signal) => {
-    if (!stopping) console.log(`${prefix}stopped (${signal ?? `exit code ${code}`})`);
-    shutdown(code ?? 0);
+  child.on('close', (code, signal) => {
+    if (!stopping) {
+      // One side stopped on its own (e.g. a crash): take the other down with it.
+      console.log(`${prefix}stopped (${signal ?? `exit code ${code}`})`);
+      stop(code || 1, 'SIGTERM');
+    } else {
+      stop();
+    }
   });
   return child;
 });
 
+const running = () => procs.filter((p) => p.exitCode === null && p.signalCode === null);
 let stopping = false;
-function shutdown(code) {
-  if (stopping) return;
-  stopping = true;
-  for (const p of procs) if (p.exitCode === null && p.signalCode === null) p.kill('SIGTERM');
-  setTimeout(() => process.exit(code), 500);
+let exitCode = 0;
+
+/**
+ * Stop everything, then exit once both children are gone. `forward` is the signal to pass on;
+ * on Ctrl+C the terminal has already sent SIGINT to the children, and signalling them a second
+ * time makes tsx force-kill the API server before it finishes saving.
+ */
+function stop(code = exitCode, forward = null) {
+  if (!stopping) {
+    stopping = true;
+    exitCode = code;
+    if (forward) for (const p of running()) p.kill(forward);
+    // Escalate only if something hangs.
+    setTimeout(() => running().forEach((p) => p.kill('SIGTERM')), 4000).unref();
+    setTimeout(() => {
+      running().forEach((p) => p.kill('SIGKILL'));
+      process.exit(exitCode);
+    }, 8000).unref();
+  }
+  if (procs.every((p) => p.exitCode !== null || p.signalCode !== null)) process.exit(exitCode);
 }
 
-process.on('SIGINT', () => shutdown(0));
-process.on('SIGTERM', () => shutdown(0));
+process.on('SIGINT', () => stop(0));
+process.on('SIGTERM', () => stop(0, 'SIGTERM'));

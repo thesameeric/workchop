@@ -7,11 +7,18 @@ const SERVER = process.env.WORKCHOP_SERVER ?? `http://localhost:${process.env.PO
 
 // Closing a browser tab drops its socket mid-stream and the dev proxy logs that as an error with
 // a stack trace. It's expected and harmless, so keep it out of the terminal.
+// And if the API server is down, say so in one line instead of a stack trace per request.
 const logger = createLogger();
 const logError = logger.error.bind(logger);
+let lastRefused = 0;
 logger.error = (msg, options) => {
   const code = (options?.error as NodeJS.ErrnoException | undefined)?.code;
   if (msg.includes('ws proxy') && (code === 'ECONNRESET' || code === 'EPIPE')) return;
+  if (msg.includes('proxy error') && code === 'ECONNREFUSED') {
+    if (Date.now() - lastRefused > 5000) logger.warn(`Can't reach the API server at ${SERVER}. Is it running?`, { timestamp: true });
+    lastRefused = Date.now();
+    return;
+  }
   logError(msg, options);
 };
 
