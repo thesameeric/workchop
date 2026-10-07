@@ -5,6 +5,11 @@ export function serverNow(): number {
   return Date.now() + offset;
 }
 
+/** The current correction (ms); music players restart in step when it changes a lot. */
+export function clockOffset(): number {
+  return offset;
+}
+
 /** Estimate the offset from a few round trips, keeping the one with the shortest delay. */
 export async function syncClock(ask: () => Promise<number>, samples = 5): Promise<void> {
   let best: { rtt: number; offset: number } | null = null;

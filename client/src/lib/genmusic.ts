@@ -75,6 +75,8 @@ export class GenerativeStation {
   private readonly stepMs: number;
   private readonly sources = new Set<AudioScheduledSourceNode>();
   private stopped = false;
+  /** Whether anything has been scheduled yet (someone arriving mid-phrase gets the current chord). */
+  private primed = false;
 
   constructor(
     private readonly ctx: AudioContext,
@@ -121,7 +123,6 @@ export class GenerativeStation {
 
   start(): void {
     this.scheduledUntil = this.serverNow();
-    if (this.id === 'lofi') this.startCrackle();
     this.tick();
     this.timer = setInterval(() => this.tick(), 250);
   }
@@ -164,6 +165,16 @@ export class GenerativeStation {
   private tick(): void {
     if (this.stopped) return;
     const now = this.serverNow();
+    // While the browser keeps audio suspended its clock stands still: queueing notes would only
+    // pile them up to all sound at once later.
+    if (this.ctx.state !== 'running') {
+      this.scheduledUntil = now;
+      return;
+    }
+    if (!this.primed) {
+      this.primed = true;
+      this.prime(now);
+    }
     // After a long pause (e.g. a frozen tab) don't try to catch up on old notes.
     if (this.scheduledUntil < now - 200) this.scheduledUntil = now;
     const until = now + LOOKAHEAD_MS;
@@ -175,7 +186,24 @@ export class GenerativeStation {
       if (this.id === 'lofi') this.lofiStep(step, Math.max(when, this.ctx.currentTime));
       else this.ambientStep(step, Math.max(when, this.ctx.currentTime));
     }
-    this.scheduledUntil = until;
+    // Never move backwards (a clock correction mid-way): that would schedule notes twice.
+    this.scheduledUntil = Math.max(this.scheduledUntil, until);
+  }
+
+  /** Sounds that started before we tuned in: the record crackle, and the ambient chord in progress. */
+  private prime(now: number): void {
+    if (this.id === 'lofi') {
+      this.startCrackle();
+      return;
+    }
+    const bar = Math.floor(now / this.stepMs / 16);
+    const chordStart = Math.floor(bar / this.style.barsPerChord) * this.style.barsPerChord;
+    const chordEnd = (chordStart + this.style.barsPerChord) * 16 * this.stepMs;
+    const left = (chordEnd - now) / 1000;
+    if (left < 2) return;
+    const chord = this.chordAt(chordStart);
+    this.pad(chord.notes, this.ctx.currentTime, left);
+    this.drone(chord.root, this.ctx.currentTime, left);
   }
 
   // --- Lo-fi -----------------------------------------------------------------

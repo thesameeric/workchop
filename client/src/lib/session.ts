@@ -43,7 +43,7 @@ export class OfficeSession {
   private lastSent = { x: NaN, z: NaN, ry: NaN, anim: 'idle' as AnimState, at: 0 };
   private hasJoined = false;
   private closed = false;
-  readonly radio = new LoungeRadio((itemId, url, durationMs) => this.music({ t: 'track:duration', itemId, url, durationMs }));
+  readonly radio = new LoungeRadio((itemId, durations) => this.music({ t: 'track:durations', itemId, durations }));
   readonly spotify = new SpotifyListenAlong((itemId, update, start) => this.socket.emit('spotify:session', itemId, update, start));
   private spotifyClientId: string | null = null;
 
@@ -127,13 +127,15 @@ export class OfficeSession {
           streams: {},
           spotifySessions: Object.fromEntries(res.spotify.map((s) => [s.itemId, s])),
         });
-        void syncClock(() => this.socket.timeout(5000).emitWithAck('time'));
+        const synced = syncClock(() => this.socket.timeout(5000).emitWithAck('time'));
         if (rejoin) {
           this.lastSent.at = 0;
           this.sendMove(local.x, local.z, local.ry, local.anim, true);
           this.socket.emit('profile', { screen: media.screenOn });
+          this.spotify.rejoined();
         } else {
-          this.startMusic();
+          // Music waits for the clock, so it starts in step with everyone else.
+          void synced.then(() => !this.closed && this.startMusic());
           onFirst(res);
         }
       },
@@ -176,6 +178,10 @@ export class OfficeSession {
 
   stopSpotify(itemId: string): void {
     this.spotify.stopForEveryone(itemId);
+  }
+
+  debugDropConnection(): void {
+    this.socket.io.engine?.close();
   }
 
   /** For tests and debugging. */
@@ -440,7 +446,11 @@ export function getSession(): OfficeSession | null {
 }
 
 // Read-only hook for automated tests and debugging in the browser console.
-(window as unknown as { __workchop?: unknown }).__workchop = { music: () => current?.debugMusic() ?? null };
+(window as unknown as { __workchop?: unknown }).__workchop = {
+  music: () => current?.debugMusic() ?? null,
+  /** Simulate a dropped connection (it reconnects by itself), for testing. */
+  dropConnection: () => current?.debugDropConnection(),
+};
 
 export async function enterOffice(officeId: string): Promise<void> {
   current?.leave();

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import {
   isJukebox,
   jukeboxData,
@@ -68,10 +68,13 @@ function RadioSection({ item }: { item: OfficeItem }) {
   const [tracksText, setTracksText] = useState('');
   const [streamText, setStreamText] = useState('');
 
-  useEffect(() => {
-    setTracksText((data.tracks ?? []).map((t) => `${t.title} | ${t.url}`).join('\n'));
-    setStreamText(data.stream ?? '');
-  }, [data.tracks, data.stream]);
+  // Fill the form when it opens (not on every jukebox update, which would wipe what's being typed).
+  const toggle = (form: 'tracks' | 'stream') => {
+    if (editing === form) return setEditing(null);
+    if (form === 'tracks') setTracksText((data.tracks ?? []).map((t) => `${t.title} | ${t.url}`).join('\n'));
+    else setStreamText(data.stream ?? '');
+    setEditing(form);
+  };
 
   const choose = (station: StationChoice | null) => getSession()?.music({ t: 'station', itemId: item.id, station });
 
@@ -122,10 +125,10 @@ function RadioSection({ item }: { item: OfficeItem }) {
       </div>
       {editor && (
         <div className="music-edit-links">
-          <button className="btn small" onClick={() => setEditing(editing === 'tracks' ? null : 'tracks')}>
+          <button className="btn small" onClick={() => toggle('tracks')}>
             {data.tracks?.length ? 'Edit our tracks' : 'Add our own tracks'}
           </button>
-          <button className="btn small" onClick={() => setEditing(editing === 'stream' ? null : 'stream')}>
+          <button className="btn small" onClick={() => toggle('stream')}>
             {data.stream ? 'Change our stream' : 'Add a live stream'}
           </button>
         </div>

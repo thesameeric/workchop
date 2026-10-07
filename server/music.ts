@@ -3,6 +3,7 @@ import {
   isJukebox,
   jukeboxData,
   MAX_LINKS,
+  MAX_TRACKS,
   parseSpotifyLink,
   sanitizeStreamUrl,
   sanitizeTracks,
@@ -48,11 +49,9 @@ export function applyMusicOp(office: Office, op: MusicOp, actor: MusicActor): Mu
       } else if (op.station === 'tracks') {
         const changing = op.tracks !== undefined;
         if (changing && !actor.canEdit) return { error: 'Only people who can edit this office can change its tracks.' };
-        // Keep durations already learned for tracks that stay on the list.
-        const known = new Map((data.tracks ?? []).map((t) => [t.url, t.durationMs]));
-        const tracks = changing
-          ? sanitizeTracks(op.tracks).map((t) => ({ ...t, durationMs: t.durationMs ?? known.get(t.url) }))
-          : (data.tracks ?? []);
+        // Lengths are measured afresh by the first listener, so saving the list again also clears
+        // any wrong ones.
+        const tracks = changing ? sanitizeTracks(op.tracks).map(({ url, title }) => ({ url, title })) : (data.tracks ?? []);
         if (!tracks.length) return { error: 'Add at least one https:// audio file (MP3, OGG, M4A…).' };
         next = { ...data, station: 'tracks', tracks, startedAt };
       } else if (typeof op.station === 'string' && getStation(op.station)) {
@@ -62,13 +61,24 @@ export function applyMusicOp(office: Office, op: MusicOp, actor: MusicActor): Mu
       }
       break;
     }
-    case 'track:duration': {
-      // Any listener can report a duration, but only once per track and only for listed tracks.
-      const ms = typeof op.durationMs === 'number' && Number.isFinite(op.durationMs) ? Math.round(op.durationMs) : 0;
-      if (ms < 1000 || ms > 6 * 3600_000) return { error: 'Invalid duration.' };
-      const track = data.tracks?.find((t) => t.url === op.url);
-      if (!track || track.durationMs) return { error: '' };
-      next = { ...data, tracks: data.tracks!.map((t) => (t.url === op.url ? { ...t, durationMs: ms } : t)) };
+    case 'track:durations': {
+      // Listeners measure track lengths (the server never fetches the audio). Anyone may fill in an
+      // unknown length; only editors may correct a known one, so guests can't skew the timing.
+      if (!Array.isArray(op.durations) || !data.tracks) return { error: '' };
+      const reported = new Map<string, number>();
+      for (const d of op.durations.slice(0, MAX_TRACKS)) {
+        const ms = d && typeof d.durationMs === 'number' && Number.isFinite(d.durationMs) ? Math.round(d.durationMs) : 0;
+        if (d && typeof d.url === 'string' && ms >= 1000 && ms <= 6 * 3600_000) reported.set(d.url, ms);
+      }
+      let changed = false;
+      const tracks = data.tracks.map((t) => {
+        const ms = reported.get(t.url);
+        if (ms === undefined || (t.durationMs && (!actor.canEdit || Math.abs(t.durationMs - ms) < 2000))) return t;
+        changed = true;
+        return { ...t, durationMs: ms };
+      });
+      if (!changed) return { error: '' };
+      next = { ...data, tracks };
       break;
     }
     case 'link:add': {

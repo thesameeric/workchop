@@ -219,18 +219,21 @@ export function sameSource(a: MusicSource | null, b: MusicSource | null): boolea
 }
 
 /**
- * Which track of a looping list should be playing at `serverNow`, and how far into it.
- * Returns null until every track's duration is known.
+ * Which track of a looping list should be playing at `serverNow`, and how far into it (`index`
+ * is into `tracks`). Tracks whose length isn't known yet (or can't be: broken links) are left
+ * out; returns null while no track's length is known.
  */
 export function trackAt(tracks: Track[], startedAt: number, serverNow: number): { index: number; offsetMs: number } | null {
-  if (!tracks.length || tracks.some((t) => !t.durationMs)) return null;
-  const total = tracks.reduce((sum, t) => sum + t.durationMs!, 0);
+  const total = tracks.reduce((sum, t) => sum + (t.durationMs ?? 0), 0);
+  if (!total) return null;
   let offset = (((serverNow - startedAt) % total) + total) % total;
   for (let i = 0; i < tracks.length; i++) {
-    if (offset < tracks[i].durationMs!) return { index: i, offsetMs: offset };
-    offset -= tracks[i].durationMs!;
+    const d = tracks[i].durationMs;
+    if (!d) continue;
+    if (offset < d) return { index: i, offsetMs: offset };
+    offset -= d;
   }
-  return { index: 0, offsetMs: 0 };
+  return null;
 }
 
 /**
@@ -269,7 +272,7 @@ export function audibleJukebox(office: Office, x: number, z: number): { item: Of
 
 export type MusicOp =
   | { t: 'station'; itemId: string; station: StationChoice | null; stream?: string; tracks?: { url: string; title?: string }[] }
-  | { t: 'track:duration'; itemId: string; url: string; durationMs: number }
+  | { t: 'track:durations'; itemId: string; durations: { url: string; durationMs: number }[] }
   | { t: 'link:add'; itemId: string; url: string }
   | { t: 'link:remove'; itemId: string; linkId: string }
   | { t: 'link:meta'; itemId: string; linkId: string; title?: string; image?: string };

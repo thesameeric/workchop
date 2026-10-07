@@ -220,12 +220,12 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       if (op?.t === 'settings' && op.settings && 'buildPolicy' in op.settings && !isOwner) {
         return reject('Only the owner can change who may edit.');
       }
-      // A jukebox's shared settings change only through 'music' ops, so moving or copying one
-      // can't overwrite (or forge) its station and links.
+      // A jukebox's shared settings change only through 'music' ops, so moving, copying or
+      // re-typing an item can't overwrite (or forge) a station and links.
       if (op?.t === 'update' && op.item && typeof op.item === 'object') {
         const moved = op.item;
         const existing = stored.office.items.find((i) => i.id === moved.id);
-        if (isJukebox(existing)) op = { t: 'update', item: { ...moved, data: existing.data } };
+        op = { t: 'update', item: { ...moved, data: isJukebox(existing) ? existing.data : undefined } };
       } else if (op?.t === 'add' && op.item && typeof op.item === 'object') {
         op = { ...op, item: { ...op.item, data: undefined } };
       }
@@ -244,7 +244,10 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       else if (op.t === 'remove' || op.t === 'zone:remove') normalized = { t: op.t, id: op.id };
       io.to(roomName(room.officeId)).emit('office:op', normalized, socket.id);
       if (op.t.startsWith('zone:') || op.t === 'settings') emitLinks(room.recompute(next.zones));
-      if (op.t === 'remove') endSpotify(room, op.id);
+      // Listen-along sessions end with their jukebox (removed, re-typed, or cut off by a smaller floor).
+      for (const itemId of [...room.spotify.keys()]) {
+        if (!isJukebox(next.items.find((i) => i.id === itemId))) endSpotify(room, itemId);
+      }
     });
 
     socket.on('rtc:signal', (to, sid, data) => {
@@ -286,14 +289,14 @@ export function attachRealtime(io: IO, store: OfficeStore) {
 
     socket.on('spotify:session', (itemId, update, start) => {
       const p = me();
-      if (!room || !p || typeof itemId !== 'string' || !canSpotify()) return;
-      if (!isJukebox(office()?.items.find((i) => i.id === itemId))) return;
-      const current = room.spotify.get(itemId);
+      if (!room || !p || typeof itemId !== 'string') return;
       if (update === null) {
         // Anyone in the room may stop the music, like turning off a shared speaker.
         endSpotify(room, itemId);
         return;
       }
+      if (!canSpotify() || !isJukebox(office()?.items.find((i) => i.id === itemId))) return;
+      const current = room.spotify.get(itemId);
       const clean = sanitizeSessionUpdate(update);
       if (!clean) return;
       // Only the DJ updates a running session; someone else has to take over explicitly.

@@ -84,8 +84,12 @@ describe('track timing', () => {
     expect(trackAt(tracks, 1000, 16_000)).toEqual({ index: 1, offsetMs: 5000 });
     expect(trackAt(tracks, 1000, 1000 + 30_000 + 2000)).toEqual({ index: 0, offsetMs: 2000 });
   });
-  it('waits until every duration is known', () => {
-    expect(trackAt([...tracks, { url: 'https://x/c.mp3', title: 'c' }], 0, 5)).toBeNull();
+  it('plays only tracks whose length is known', () => {
+    const c = { url: 'https://x/c.mp3', title: 'c' };
+    expect(trackAt([c], 0, 5)).toBeNull();
+    // c (unmeasured or broken) is skipped: indexes still point into the full list.
+    expect(trackAt([c, ...tracks], 1000, 16_000)).toEqual({ index: 2, offsetMs: 5000 });
+    expect(trackAt([tracks[0], c, tracks[1]], 1000, 12_000)).toEqual({ index: 2, offsetMs: 1000 });
   });
   it('projects listen-along positions with the server clock', () => {
     const s = { positionMs: 1000, at: 50_000, paused: false, durationMs: 200_000 };
@@ -156,15 +160,24 @@ describe('applyMusicOp', () => {
     expect(data(o).tracks).toEqual([{ url: 'https://x/a.mp3', title: 'A' }]);
   });
 
-  it('records a track duration once, from any listener', () => {
-    let o = ok(applyMusicOp(office, { t: 'station', itemId: jukeboxId, station: 'tracks', tracks: [{ url: 'https://x/a.mp3' }] }, editor)).office;
-    o = ok(applyMusicOp(o, { t: 'track:duration', itemId: jukeboxId, url: 'https://x/a.mp3', durationMs: 123_456 }, guest)).office;
-    expect(data(o).tracks![0].durationMs).toBe(123_456);
-    // A second (possibly wrong) report is ignored.
-    expect(applyMusicOp(o, { t: 'track:duration', itemId: jukeboxId, url: 'https://x/a.mp3', durationMs: 5000 }, guest)).toEqual({ error: '' });
-    // Re-saving the list keeps known durations.
-    o = ok(applyMusicOp(o, { t: 'station', itemId: jukeboxId, station: 'tracks', tracks: [{ url: 'https://x/a.mp3' }, { url: 'https://x/b.mp3' }] }, editor)).office;
+  it('takes track lengths from listeners, but only editors can correct them', () => {
+    const list = [{ url: 'https://x/a.mp3' }, { url: 'https://x/b.mp3' }];
+    let o = ok(applyMusicOp(office, { t: 'station', itemId: jukeboxId, station: 'tracks', tracks: list }, editor)).office;
+    const report = (durations: { url: string; durationMs: number }[], who: typeof guest) =>
+      applyMusicOp(o, { t: 'track:durations', itemId: jukeboxId, durations }, who);
+    // Several lengths in one report; nonsense and unknown tracks are ignored.
+    o = ok(report([{ url: 'https://x/a.mp3', durationMs: 123_456 }, { url: 'https://x/zzz.mp3', durationMs: 5000 }, { url: 'https://x/b.mp3', durationMs: 20 }], guest)).office;
     expect(data(o).tracks!.map((t) => t.durationMs)).toEqual([123_456, undefined]);
+    // A guest can't change a known length; nothing changes, so nothing is said.
+    expect(report([{ url: 'https://x/a.mp3', durationMs: 1000 }], guest)).toEqual({ error: '' });
+    // An editor's player can correct it (small differences are ignored).
+    expect(report([{ url: 'https://x/a.mp3', durationMs: 124_000 }], editor)).toEqual({ error: '' });
+    o = ok(report([{ url: 'https://x/a.mp3', durationMs: 200_000 }], editor)).office;
+    expect(data(o).tracks![0].durationMs).toBe(200_000);
+    // Saving the list again starts measuring afresh (also ignoring lengths sent with it).
+    o = ok(applyMusicOp(o, { t: 'station', itemId: jukeboxId, station: 'tracks', tracks: [{ url: 'https://x/a.mp3', durationMs: 1000 } as never, ...list.slice(1)] }, editor)).office;
+    expect(data(o).tracks!.map((t) => t.durationMs)).toEqual([undefined, undefined]);
+    expect(applyMusicOp(o, { t: 'track:durations', itemId: jukeboxId, durations: 'x' as never }, guest)).toEqual({ error: '' });
   });
 
   it('manages the Spotify board', () => {

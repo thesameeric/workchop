@@ -1,6 +1,6 @@
 import { audibleJukebox, sameSource, sourceOf, trackAt, type MusicSource, type Track } from '../../../shared/music';
 import { getState, setState, type NowPlaying } from '../state/store';
-import { serverNow } from './clock';
+import { clockOffset, serverNow } from './clock';
 import { GenerativeStation } from './genmusic';
 import { local } from './positions';
 
@@ -21,16 +21,45 @@ function mediaInfo(audio: HTMLAudioElement) {
 /** A live stream: everyone listening hears roughly the same moment by nature. */
 class StreamPlayer implements Player {
   private readonly audio = new Audio();
+  private failedAt = 0;
+  private retryMs = 2000;
+  private blocked = false;
 
   constructor(
-    url: string,
+    private readonly url: string,
     private readonly name: string,
-    onBlocked: () => void,
+    private readonly onBlocked: () => void,
   ) {
     this.audio.preload = 'none';
     this.audio.volume = 0;
-    this.audio.src = url;
-    this.audio.play().catch((err) => err?.name === 'NotAllowedError' && onBlocked());
+    const failed = () => {
+      if (!this.failedAt) this.failedAt = Date.now();
+    };
+    this.audio.addEventListener('error', failed);
+    this.audio.addEventListener('ended', failed);
+    this.audio.addEventListener('playing', () => {
+      this.failedAt = 0;
+      this.retryMs = 2000;
+    });
+    this.connect();
+  }
+
+  private connect() {
+    this.audio.src = this.url;
+    this.audio.play().catch((err) => {
+      if (err?.name === 'NotAllowedError') {
+        this.blocked = true;
+        this.onBlocked();
+      }
+    });
+  }
+
+  /** Streams drop now and then (server restarts, network changes): reconnect with back-off. */
+  tick() {
+    if (this.blocked || !this.failedAt || Date.now() - this.failedAt < this.retryMs) return;
+    this.failedAt = 0;
+    this.retryMs = Math.min(this.retryMs * 2, 60_000);
+    this.connect();
   }
 
   setVolume(v: number) {
@@ -52,21 +81,34 @@ class StreamPlayer implements Player {
   }
 }
 
+export interface TrackLength {
+  url: string;
+  durationMs: number;
+}
+
 /** The office's own track list, looped and positioned from the shared clock. */
 class TracksPlayer implements Player {
   private readonly audio = new Audio();
   private index = -1;
-  private probing = new Set<string>();
+  private readonly probing = new Set<string>();
+  /** Lengths measured here, until the server's copy has them. */
+  private readonly measured = new Map<string, number>();
+  /** Tracks that couldn't be measured: when to try again (Infinity: never, e.g. a live stream). */
+  private readonly failed = new Map<string, { retryAt: number; wait: number }>();
+  /** Known lengths we found to be wrong; reported once (editors' corrections are accepted). */
+  private readonly corrected = new Set<string>();
+  private lastReport = 0;
   private lastSeek = 0;
 
   constructor(
     private tracks: Track[],
     private readonly startedAt: number,
-    private readonly reportDuration: (url: string, ms: number) => void,
+    private readonly reportDurations: (lengths: TrackLength[]) => void,
     private readonly onBlocked: () => void,
   ) {
     this.audio.preload = 'auto';
     this.audio.volume = 0;
+    this.audio.addEventListener('loadedmetadata', () => this.checkLength());
   }
 
   /** Durations arrive after the first listener measures them. */
@@ -74,12 +116,36 @@ class TracksPlayer implements Player {
     this.tracks = tracks;
   }
 
-  tick() {
-    const at = trackAt(this.tracks, this.startedAt, serverNow());
-    if (!at) {
-      for (const t of this.tracks) if (!t.durationMs) this.probe(t.url);
-      return;
+  /** Measure tracks nobody has measured yet, and report them (again, until the server has them). */
+  private measure() {
+    const now = Date.now();
+    const missing: TrackLength[] = [];
+    for (const t of this.tracks) {
+      if (t.durationMs) continue;
+      const ms = this.measured.get(t.url);
+      if (ms) missing.push({ url: t.url, durationMs: ms });
+      else if (!this.probing.has(t.url) && now >= (this.failed.get(t.url)?.retryAt ?? 0)) this.probe(t.url);
     }
+    if (missing.length && now - this.lastReport > 3000) {
+      this.lastReport = now;
+      this.reportDurations(missing);
+    }
+  }
+
+  /** The track we're playing turned out to have a different length than everyone assumes. */
+  private checkLength() {
+    const track = this.tracks[this.index];
+    const real = this.audio.duration * 1000;
+    if (!track?.durationMs || !Number.isFinite(real) || Math.abs(real - track.durationMs) < 2000) return;
+    if (this.corrected.has(track.url)) return;
+    this.corrected.add(track.url);
+    this.reportDurations([{ url: track.url, durationMs: Math.round(real) }]);
+  }
+
+  tick() {
+    this.measure();
+    const at = trackAt(this.tracks, this.startedAt, serverNow());
+    if (!at) return;
     const track = this.tracks[at.index];
     if (at.index !== this.index || this.audio.src !== track.url) {
       this.index = at.index;
@@ -103,15 +169,34 @@ class TracksPlayer implements Player {
   }
 
   private probe(url: string) {
-    if (this.probing.has(url)) return;
     this.probing.add(url);
     const a = new Audio();
     a.preload = 'metadata';
-    a.addEventListener('loadedmetadata', () => {
-      if (Number.isFinite(a.duration) && a.duration > 0) this.reportDuration(url, Math.round(a.duration * 1000));
+    const done = (ms: number | null) => {
+      this.probing.delete(url);
       a.removeAttribute('src');
+      a.load();
+      if (ms !== null) {
+        this.measured.set(url, ms);
+        this.failed.delete(url);
+        return;
+      }
+      // Broken link or not a file: try again later, less and less often.
+      const wait = Math.min((this.failed.get(url)?.wait ?? 15_000) * 2, 10 * 60_000);
+      this.failed.set(url, { retryAt: Date.now() + wait, wait });
+    };
+    a.addEventListener('loadedmetadata', () => {
+      const ms = a.duration * 1000;
+      if (Number.isFinite(ms) && ms >= 1000) done(Math.round(ms));
+      else {
+        // A live stream (no end) or a sound too short to loop: never playable as a track.
+        this.probing.delete(url);
+        this.failed.set(url, { retryAt: Infinity, wait: Infinity });
+        a.removeAttribute('src');
+        a.load();
+      }
     }, { once: true });
-    a.addEventListener('error', () => this.probing.delete(url), { once: true });
+    a.addEventListener('error', () => done(null), { once: true });
     a.src = url;
   }
 
@@ -126,7 +211,10 @@ class TracksPlayer implements Player {
   }
 
   title() {
-    return this.tracks[this.index]?.title ?? 'Loading…';
+    const track = this.tracks[this.index];
+    if (track) return track.title;
+    const pending = this.tracks.some((t) => !t.durationMs && this.failed.get(t.url)?.retryAt !== Infinity);
+    return pending ? 'Loading…' : 'None of the tracks can be played';
   }
 
   media() {
@@ -137,8 +225,15 @@ class TracksPlayer implements Player {
 /** A built-in station generated in this browser. */
 class GeneratedPlayer implements Player {
   private readonly station: GenerativeStation;
+  /** The clock correction it started with: a big change means restarting in step. */
+  readonly offset = clockOffset();
+  readonly startedAt = Date.now();
 
-  constructor(ctx: AudioContext, private readonly source: Extract<MusicSource, { kind: 'generated' }>, destination: AudioNode) {
+  constructor(
+    readonly ctx: AudioContext,
+    private readonly source: Extract<MusicSource, { kind: 'generated' }>,
+    destination: AudioNode,
+  ) {
     this.station = new GenerativeStation(ctx, source.station.id, serverNow, destination);
     this.station.start();
   }
@@ -174,7 +269,7 @@ export class LoungeRadio {
   private silentSince = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly reportDuration: (itemId: string, url: string, ms: number) => void) {}
+  constructor(private readonly reportDurations: (itemId: string, lengths: TrackLength[]) => void) {}
 
   start(): void {
     this.timer = setInterval(() => this.tick(), 250);
@@ -204,7 +299,8 @@ export class LoungeRadio {
 
   /** Retry after the browser blocked playback (needs to run inside a click handler). */
   unblock(): void {
-    void this.ctx?.resume().catch(() => {});
+    // Create the audio context inside the click if there isn't one yet, so it's allowed to start.
+    void this.audioContext().resume().catch(() => {});
     const { source, itemId } = this;
     this.stopPlayer();
     this.source = source;
@@ -233,6 +329,8 @@ export class LoungeRadio {
     const volume = heard && source && !onSpotify ? heard.volume * personal * personal : 0;
 
     if (!sameSource(source, this.source) || (heard?.item.id ?? null) !== this.itemId) this.stopPlayer();
+    // The shared clock was corrected noticeably: restart the generated station in step.
+    if (this.player instanceof GeneratedPlayer && Math.abs(clockOffset() - this.player.offset) > 120) this.stopPlayer();
 
     if (volume > 0 && source && !this.player) {
       this.source = source;
@@ -243,9 +341,15 @@ export class LoungeRadio {
         this.player = new GeneratedPlayer(ctx, source, this.meter!);
       }
       else if (source.kind === 'stream') this.player = new StreamPlayer(source.url, source.name, this.onBlocked);
-      else this.player = new TracksPlayer(source.tracks, source.startedAt, (url, ms) => this.reportDuration(id, url, ms), this.onBlocked);
+      else this.player = new TracksPlayer(source.tracks, source.startedAt, (lengths) => this.reportDurations(id, lengths), this.onBlocked);
     }
     if (this.player && source?.kind === 'tracks' && this.player instanceof TracksPlayer) this.player.update(source.tracks);
+
+    // Browsers may keep audio suspended until a click (Safari, iOS): offer an "Enable sound" button.
+    const p = this.player;
+    if (p instanceof GeneratedPlayer && volume > 0 && p.ctx.state === 'suspended' && Date.now() - p.startedAt > 1000 && !st.music.blocked) {
+      this.onBlocked();
+    }
 
     if (this.player) {
       this.player.setVolume(volume);
@@ -284,7 +388,7 @@ export class LoungeRadio {
     void this.ctx?.close().catch(() => {});
     this.ctx = null;
     this.meter = null;
-    setState((s) => ({ music: { ...s.music, nowPlaying: null } }));
+    setState((s) => ({ music: { ...s.music, nowPlaying: null, blocked: false } }));
   }
 }
 

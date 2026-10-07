@@ -156,12 +156,13 @@ export class SpotifyListenAlong {
   }
 
   disconnect(): void {
-    this.stopDj();
+    this.stopDj(true);
     this.player?.disconnect();
     this.player = null;
     this.deviceId = null;
     this.tokens = null;
     this.followingUri = null;
+    this.lastVolume = -1;
     try {
       localStorage.removeItem(STORAGE);
     } catch {
@@ -278,6 +279,7 @@ export class SpotifyListenAlong {
   private async startPlayer(): Promise<void> {
     if (this.player) return;
     this.setStatus('connecting');
+    this.lastVolume = -1; // A new player starts silent.
     let sdk: SpotifySDK;
     try {
       sdk = await loadSdk();
@@ -309,6 +311,7 @@ export class SpotifyListenAlong {
       this.setStatus('error', 'Spotify didn’t accept the sign-in. Please connect again.');
     });
     player.addListener('account_error', () => {
+      this.stopDj(true);
       this.player?.disconnect();
       this.player = null;
       this.setStatus('error', 'Listening along needs Spotify Premium.');
@@ -323,6 +326,8 @@ export class SpotifyListenAlong {
   async playForEveryone(itemId: string, link: MusicLink): Promise<void> {
     if (!this.player || !this.deviceId || !link.uri) return;
     await this.player.activateElement?.();
+    // One session per DJ: moving to another jukebox ends the one we were running.
+    if (this.djItemId && this.djItemId !== itemId) this.sendDj(this.djItemId, null);
     const body = link.kind === 'track' || link.kind === 'episode' ? { uris: [link.uri] } : { context_uri: link.uri };
     this.djItemId = itemId;
     this.djStarting = true;
@@ -339,16 +344,39 @@ export class SpotifyListenAlong {
 
   /** Stop the session (anyone at the jukebox may). */
   stopForEveryone(itemId: string): void {
-    if (this.djItemId === itemId) this.stopDj();
+    if (this.djItemId === itemId) this.stopDj(false);
     this.sendDj(itemId, null);
   }
 
-  private stopDj(): void {
-    if (!this.djItemId) return;
+  /** Stop being the DJ (and stop playing); `tellRoom` ends the session for the listeners too. */
+  private stopDj(tellRoom: boolean): void {
+    const itemId = this.djItemId;
+    if (!itemId) return;
     this.djItemId = null;
     this.djStarting = false;
     void this.player?.pause().catch(() => {});
     setState((s) => ({ music: { ...s.music, spotifyPlaying: false } }));
+    if (tellRoom) this.sendDj(itemId, null);
+  }
+
+  /**
+   * After reconnecting to the office: the server ended our session when the connection dropped,
+   * so start it again, unless someone else has taken the jukebox over meanwhile.
+   */
+  rejoined(): void {
+    const itemId = this.djItemId;
+    if (!itemId || !this.player) return;
+    if (getState().spotifySessions[itemId]) {
+      this.djItemId = null;
+      this.followingUri = this.lastSent?.uri ?? 'dj';
+      return;
+    }
+    this.djStarting = true;
+    this.lastSent = null;
+    void this.player
+      .getCurrentState()
+      .then((state) => (state?.track_window.current_track ? this.onState(state) : this.stopDj(false)))
+      .catch(() => this.stopDj(false));
   }
 
   /** As DJ, tell the room whenever our playback changes in a way listeners need to follow. */
@@ -454,10 +482,11 @@ export class SpotifyListenAlong {
   }
 
   close(): void {
-    this.stopDj();
+    this.stopDj(false); // The server ends our sessions when we leave.
     this.player?.disconnect();
     this.player = null;
     this.deviceId = null;
     this.followingUri = null;
+    setState((s) => ({ music: { ...s.music, spotifyPlaying: false } }));
   }
 }

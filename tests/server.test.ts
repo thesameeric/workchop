@@ -232,6 +232,15 @@ describe('realtime', () => {
     expect(moveOp).toMatchObject({ t: 'update', item: { x: jukebox.x - 1, data: { station: 'ambient' } } });
     expect(moveOp.t === 'update' && moveOp.item.data?.links).toHaveLength(1);
 
+    // Turning some other item into a jukebox can't smuggle in a forged board or stream.
+    const desk = office!.items.find((i) => i.type === 'desk')!;
+    const retyped = next(guest.socket, 'office:op');
+    const forged = { station: 'stream' as const, stream: 'https://evil.example/s', links: [{ id: 'x1', url: 'https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3', kind: 'album' as const, title: 'Spoofed', by: 'Owner', byId: 'nobody', at: 1 }] };
+    owner.socket.emit('office:op', { t: 'update', item: { ...desk, type: 'jukebox', data: forged } });
+    const [retypeOp] = await retyped;
+    expect(retypeOp).toMatchObject({ t: 'update', item: { id: desk.id, type: 'jukebox', data: { station: null, links: [] } } });
+    expect(retypeOp.t === 'update' && retypeOp.item.data?.stream).toBeUndefined();
+
     await server.store.flush();
     const saved = JSON.parse(readFileSync(path.join(dataDir, `${id}.json`), 'utf8'));
     const savedBox = saved.office.items.find((i: { id: string }) => i.id === jukebox.id);
@@ -302,6 +311,39 @@ describe('realtime', () => {
     a.socket.emit('office:op', { t: 'remove', id: jukebox.id });
     await until(() => evC.length === 6);
     expect(evC[5]).toBeNull();
+  });
+
+  it('ends listen-along sessions whose jukebox is re-typed or cut off by a smaller floor', async () => {
+    const { id, ownerKey } = await createOffice('startup');
+    const a = await join(id, 'Ann', ownerKey);
+    const b = await join(id, 'Bob');
+    const office = (a.res.ok ? a.res.office : null)!;
+    const jukebox = office.items.find((i) => i.type === 'jukebox')!;
+    const events: [string, SpotifySession | null][] = [];
+    b.socket.on('spotify:session', (itemId, session) => events.push([itemId, session]));
+    const until = async (cond: () => boolean) => {
+      for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(cond()).toBe(true);
+    };
+    const track = { uri: 'spotify:track:4uLU6hMCjMI75M1A2tKUQC', name: 'Song', artists: 'Band', durationMs: 180_000, positionMs: 0, paused: false };
+
+    a.socket.emit('spotify:session', jukebox.id, track, true);
+    await until(() => events.length === 1);
+    a.socket.emit('office:op', { t: 'update', item: { ...jukebox, type: 'plant' } });
+    await until(() => events.length === 2);
+    expect(events[1]).toEqual([jukebox.id, null]);
+
+    // A second jukebox far out on the floor, then the floor shrinks under it.
+    const far = { ...jukebox, id: 'farbox', type: 'jukebox', x: office.settings.width - 1.5, z: office.settings.depth - 1.5 };
+    a.socket.emit('office:op', { t: 'add', item: far });
+    await new Promise((r) => setTimeout(r, 100));
+    a.socket.emit('spotify:session', 'farbox', track, true);
+    await until(() => events.length === 3);
+    a.socket.emit('office:op', { t: 'settings', settings: { width: office.settings.width - 6 } });
+    await until(() => events.length === 4);
+    expect(events[3]).toEqual(['farbox', null]);
+    const late = await join(id, 'Cat');
+    expect(late.res.ok && late.res.spotify).toEqual([]);
   });
 
   it('tells others when someone leaves', async () => {
