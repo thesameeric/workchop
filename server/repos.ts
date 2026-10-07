@@ -83,6 +83,22 @@ export class FileRepo implements OfficeRepo {
 
 export type DatabaseSsl = 'require' | 'no-verify' | undefined;
 
+/**
+ * `sslrootcert=system` (libpq 16+, used in Neon/Supabase/Prisma Postgres URLs) means "trust the
+ * system's CAs", but node-postgres reads it as a file named "system" and fails to connect. Node
+ * already verifies against its bundled CAs, so dropping the parameter keeps the same behavior.
+ */
+export function withoutSystemRootCert(connectionString: string): string {
+  try {
+    const url = new URL(connectionString);
+    if (url.searchParams.get('sslrootcert') !== 'system') return connectionString;
+    url.searchParams.delete('sslrootcert');
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
 /** One row per office in Postgres, with the office itself stored as JSONB. */
 export class PostgresRepo implements OfficeRepo {
   readonly description: string;
@@ -90,7 +106,7 @@ export class PostgresRepo implements OfficeRepo {
 
   constructor(connectionString: string, ssl?: DatabaseSsl) {
     this.pool = new pg.Pool({
-      connectionString,
+      connectionString: withoutSystemRootCert(connectionString),
       max: 5,
       ssl: ssl === 'no-verify' ? { rejectUnauthorized: false } : ssl === 'require' ? true : undefined,
     });
