@@ -108,23 +108,22 @@ export async function startServer(opts: ServerOptions = {}) {
   // TURN credentials cost relay bandwidth, so each address gets a generous but finite number; past
   // that (or if Cloudflare is unreachable) calls still work for most people over STUN alone.
   const mayMintTurn = windowLimiter(120, 60 * 60 * 1000);
-  let turnWarnedAt = 0;
+  // After a failure, don't make every visitor wait on Cloudflare again for a while.
+  let turnFailedAt = 0;
   app.get('/api/config', async (req, res) => {
     let servers = iceServers;
     let iceTtl: number | undefined;
-    if (turn && mayMintTurn(clientIp(req))) {
+    if (turn && Date.now() - turnFailedAt > 30_000 && mayMintTurn(clientIp(req))) {
       try {
         servers = await mintCloudflareIceServers(turn);
         iceTtl = turn.ttl;
       } catch (err) {
-        if (Date.now() - turnWarnedAt > 60_000) {
-          turnWarnedAt = Date.now();
-          console.warn('[turn] could not get Cloudflare TURN credentials:', (err as Error).message);
-        }
+        turnFailedAt = Date.now();
+        console.warn('[turn] could not get Cloudflare TURN credentials:', (err as Error).message);
       }
     }
     res.set('Cache-Control', 'no-store');
-    res.json({ iceServers: servers, iceTtl, spotifyClientId: spotifyClientId || null });
+    res.json({ iceServers: servers, iceTtl, turn: !!turn, spotifyClientId: spotifyClientId || null });
   });
 
   // Very small per-IP limit on creating offices.

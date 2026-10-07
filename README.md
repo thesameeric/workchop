@@ -100,7 +100,7 @@ There are three ways, from the least change to the most:
 | **Cloudflare Containers** | Everything on Cloudflare: the app's Docker image runs as a Container, pages are served from Cloudflare's edge, offices live in a hosted Postgres | Ready in `cloudflare/` | $5 Workers Paid plan + about $2–7 of usage + Postgres (free tiers work) |
 | **Workers + Durable Objects** | One Durable Object per office, no container or database server | A rewrite of the realtime server (not done) | About $5 |
 
-You need a domain on Cloudflare for your own hostname. Free certificates cover `example.com` and `office.example.com`, but not deeper names like `office.team.example.com`.
+You need a domain on Cloudflare for your own hostname. With a Tunnel, the free certificate covers `example.com` and `office.example.com` but not deeper names like `office.team.example.com`. A custom domain on the Worker (Containers) gets its own certificate at any depth.
 
 #### Cloudflare Tunnel
 
@@ -108,10 +108,10 @@ Keep running the Compose stack on your server, but let Cloudflare handle HTTPS i
 
 1. In the Cloudflare dashboard, go to *Networking > Tunnels*, create a tunnel, and copy its token.
 2. Add a published application route from your hostname to `http://app:3001`.
-3. Put `CLOUDFLARE_TUNNEL_TOKEN=<token>` in `.env`.
-4. Start the stack with `docker compose -f docker-compose.yml -f deploy/cloudflare-tunnel.yml up -d --build`.
+3. In `.env`, add `CLOUDFLARE_TUNNEL_TOKEN=<token>` and `COMPOSE_FILE=docker-compose.yml:deploy/cloudflare-tunnel.yml`, and set `DOMAIN` to the tunnel's hostname. With `COMPOSE_FILE` set, every plain `docker compose` command, including updates, uses the tunnel setup.
+4. If the stack already runs with Caddy, stop it first with `docker compose down` before adding `COMPOSE_FILE`. Then start it with `docker compose up -d --build`.
 
-Caddy isn't started, and nothing needs to be reachable from the internet. Calls still go directly between people, so use [Cloudflare TURN](#cloudflare-turn-for-calls) for people behind strict firewalls.
+Caddy isn't started, so you can close ports 80 and 443: nothing needs to be reachable from the internet. Calls still go directly between people, so use [Cloudflare TURN](#cloudflare-turn-for-calls) for people behind strict firewalls.
 
 #### Cloudflare Containers
 
@@ -133,11 +133,11 @@ npm run deploy                              # builds the app and the image, then
 The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`.
 
 How it behaves:
-- **Starts on demand.** The first visit starts the container: a few seconds while the page shows "connecting". It stops 15 minutes after the last person closes Workchop, and an open browser tab keeps it running.
-- **Restarts.** Deploys, and now and then Cloudflare's host maintenance, restart the container. Everyone sees "Reconnecting…" for a few seconds, then carries on. Office edits are saved first.
-- **Placement.** Set `constraints.regions` and `LOCATION_HINT` in `cloudflare/wrangler.jsonc` to keep the server near your team and your database.
+- **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running.
+- **Restarts.** Deploys, changed secrets, and now and then Cloudflare's host maintenance briefly disconnect everyone. People see "Reconnecting…" for a few seconds, then carry on. Office edits are saved first. When you change a secret, the server restarts on the next visit so it picks up the new value.
+- **Placement.** Set `constraints.regions` in `cloudflare/wrangler.jsonc` to keep the container near your team and your database. Set `LOCATION_HINT` too, but **before the first visit**: Cloudflare places the coordinating Durable Object once and never moves it.
 - **Size.** It runs as a single container (live rooms are in memory), on `basic` (¼ vCPU, 1 GiB) by default. That's plenty for a few dozen people; use `standard-1` for more.
-- **Cost.** The $5 plan includes 25 GiB-hours of memory, 375 vCPU-minutes and 200 GB-hours of disk a month. On `basic`, Workchop uses about $1.50 beyond that if it runs only during office hours, or about $7 if someone always leaves a tab open. Container logs are kept with Cloudflare Observability (billed from 1 December 2026); turn `observability` off in `wrangler.jsonc` if you don't need them.
+- **Cost.** The $5 plan includes 25 GiB-hours of memory, 375 vCPU-minutes and 200 GB-hours of disk a month. On `basic`, Workchop uses about $1.50 beyond that if it runs only during office hours, or about $7 if someone always leaves a tab open. Container logs count toward Workers Logs (20 million events a month included) and move to Cloudflare Observability pricing on 1 December 2026; turn `observability` off in `wrangler.jsonc` if you don't need them.
 
 Local check: `npm run dev` in `cloudflare/` runs the Worker and the container on your machine (Docker required, with `DATABASE_URL` in `cloudflare/.dev.vars`).
 
@@ -151,7 +151,7 @@ Most calls connect directly between browsers. People behind strict corporate fir
 1. Create a TURN key in the Cloudflare dashboard (*Realtime > TURN*).
 2. Set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, in `.env` for Compose or as wrangler secrets for Containers.
 
-Workchop then hands each visitor short-lived credentials (24 hours by default, see `CLOUDFLARE_TURN_TTL`) and refreshes them for long sessions. The first 1,000 GB a month are free, then $0.05/GB. Only calls that actually need the relay use it.
+Workchop then hands each visitor short-lived credentials and refreshes them for long sessions. They last 24 hours by default (`CLOUDFLARE_TURN_TTL`), and a call relayed through TURN is cut when its credentials expire, so keep the TTL longer than your longest call. The first 1,000 GB a month are free, then $0.05/GB. Only calls that actually need the relay use it.
 
 ### What is stored
 
@@ -189,8 +189,8 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | – | Shortcut for adding one TURN server (comma-separate several URLs) |
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_KEY_API_TOKEN` | – | Use Cloudflare's TURN service, with short-lived credentials per visitor (replaces the static ICE servers above) |
-| `CLOUDFLARE_TURN_TTL` | `86400` | How long those credentials last, in seconds (at most 172800) |
-| `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` behind Caddy (set in Compose), `cf-connecting-ip` behind Cloudflare (set automatically on Containers). Leave unset when nothing sits in front, since visitors could fake it |
+| `CLOUDFLARE_TURN_TTL` | `86400` | How long those credentials last, in seconds (600 to 172800) |
+| `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` directly behind the bundled Caddy (set in Compose), `cf-connecting-ip` when every request comes through Cloudflare (set automatically on Containers and with the Tunnel). Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
 | `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.

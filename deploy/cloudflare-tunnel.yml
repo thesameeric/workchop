@@ -1,9 +1,13 @@
 # Serve Workchop through a Cloudflare Tunnel instead of Caddy: no open ports, and Cloudflare
-# provides HTTPS. Create the tunnel in the Cloudflare dashboard (Networking > Tunnels), add a
-# published application route from your hostname to http://app:3001, put its token in .env as
-# CLOUDFLARE_TUNNEL_TOKEN, then start with:
+# provides HTTPS. Create the tunnel in the Cloudflare dashboard (Networking > Tunnels) and add a
+# published application route from your hostname to http://app:3001. Then add to .env:
 #
-#   docker compose -f docker-compose.yml -f deploy/cloudflare-tunnel.yml up -d --build
+#   CLOUDFLARE_TUNNEL_TOKEN=<the tunnel's token>
+#   COMPOSE_FILE=docker-compose.yml:deploy/cloudflare-tunnel.yml
+#   DOMAIN=<your hostname>
+#
+# and use plain `docker compose up -d --build` (COMPOSE_FILE makes every compose command include
+# this file). If Caddy was running, `docker compose down` first, before setting COMPOSE_FILE.
 services:
   caddy:
     profiles: ["caddy"] # Not needed: the tunnel replaces it.

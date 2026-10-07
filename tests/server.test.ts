@@ -81,7 +81,7 @@ describe('REST API', () => {
 
   it('serves ICE configuration', async () => {
     const cfg = await (await fetch(`${base}/api/config`)).json();
-    expect(cfg).toEqual({ iceServers: [], spotifyClientId: null });
+    expect(cfg).toEqual({ iceServers: [], turn: false, spotifyClientId: null });
   });
 });
 

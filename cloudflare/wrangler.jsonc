@@ -33,7 +33,8 @@
 
   "vars": {
     // Where the server's Durable Object is created on first use: "weur", "eeur", "enam", "wnam",
-    // "sam", "apac", "oc", "afr" or "me". Empty: near whoever opens Workchop first.
+    // "sam", "apac", "oc", "afr" or "me". Empty: near whoever opens Workchop first. Set it before the
+    // first visit: Cloudflare places the object once and never moves it.
     "LOCATION_HINT": "",
     // "true" lets it run without DATABASE_URL, for a quick try: offices are lost whenever the
     // container stops (15 minutes after everyone leaves, on deploys and on host restarts).
