@@ -1,0 +1,122 @@
+import { create } from 'zustand';
+import type { AvatarConfig, ChatMessage, ChatScope, Office, PlayerState, Status } from '../../../shared/types';
+import { loadProfile } from '../lib/storage';
+
+export type Phase = 'landing' | 'lobby' | 'office';
+export type Panel = 'none' | 'chat' | 'people' | 'build';
+export type BuildTool = 'select' | 'place' | 'zone';
+export type Modal = 'none' | 'avatar' | 'devices';
+
+export type RemotePlayer = Omit<PlayerState, 'x' | 'z' | 'ry' | 'anim'>;
+
+export interface Toast {
+  id: number;
+  text: string;
+  kind: 'info' | 'error';
+}
+
+export interface ChatTarget {
+  scope: ChatScope;
+  to?: string;
+}
+
+interface State {
+  phase: Phase;
+  officeId: string | null;
+  connection: 'online' | 'reconnecting';
+
+  selfId: string | null;
+  isOwner: boolean;
+  office: Office | null;
+  players: Record<string, RemotePlayer>;
+
+  me: { name: string; avatar: AvatarConfig; status: Status };
+  media: { mic: boolean; cam: boolean; screen: boolean; version: number; error: string | null };
+
+  /** People we currently have a call link with. */
+  linked: Record<string, true>;
+  streams: Record<string, MediaStream>;
+  speaking: Record<string, boolean>;
+
+  chat: ChatMessage[];
+  unread: number;
+  chatTarget: ChatTarget;
+
+  emotes: Record<string, { emoji: string; at: number }>;
+
+  panel: Panel;
+  modal: Modal;
+  mode: 'play' | 'build';
+  build: {
+    tool: BuildTool;
+    placeType: string | null;
+    rot: number;
+    selectedId: string | null;
+    selectedZoneId: string | null;
+  };
+  spotlight: string | null;
+  toasts: Toast[];
+  /** Hint shown near the bottom of the screen (e.g. "Press E to sit"). */
+  hint: string | null;
+  /** Private area you're currently standing in. */
+  activeZoneId: string | null;
+}
+
+const profile = loadProfile();
+
+export const initialBuild: State['build'] = { tool: 'select', placeType: null, rot: 0, selectedId: null, selectedZoneId: null };
+
+export const useStore = create<State>()(() => ({
+  phase: 'landing',
+  officeId: null,
+  connection: 'online',
+  selfId: null,
+  isOwner: false,
+  office: null,
+  players: {},
+  me: { name: profile.name, avatar: profile.avatar, status: 'available' },
+  media: { mic: false, cam: false, screen: false, version: 0, error: null },
+  linked: {},
+  streams: {},
+  speaking: {},
+  chat: [],
+  unread: 0,
+  chatTarget: { scope: 'all' },
+  emotes: {},
+  panel: 'none',
+  modal: 'none',
+  mode: 'play',
+  build: initialBuild,
+  spotlight: null,
+  toasts: [],
+  hint: null,
+  activeZoneId: null,
+}));
+
+export const getState = useStore.getState;
+export const setState = useStore.setState;
+
+let toastId = 0;
+export function toast(text: string, kind: Toast['kind'] = 'info'): void {
+  const id = ++toastId;
+  setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind }] }));
+  setTimeout(() => setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), kind === 'error' ? 5000 : 3000);
+}
+
+export function canBuild(): boolean {
+  const { office, isOwner } = getState();
+  return !!office && (office.settings.buildPolicy === 'everyone' || isOwner);
+}
+
+export function setPanel(panel: Panel): void {
+  setState((s) => {
+    const next = s.panel === panel ? 'none' : panel;
+    const building = next === 'build' && canBuild();
+    return {
+      panel: next,
+      unread: next === 'chat' ? 0 : s.unread,
+      mode: building ? 'build' : 'play',
+      build: building ? s.build : initialBuild,
+    };
+  });
+}
