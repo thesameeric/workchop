@@ -38,7 +38,7 @@ function Spinner({ avatar }: { avatar: AvatarConfig }) {
 export function AvatarPreview({ avatar, height = 280 }: { avatar: AvatarConfig; height?: number }) {
   return (
     <div className="avatar-preview" style={{ height }}>
-      <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 1.3, 3.2], fov: 35 }}>
+      <Canvas shadows="percentage" dpr={[1, 2]} camera={{ position: [0, 1.3, 3.2], fov: 35 }}>
         <hemisphereLight args={['#ffffff', '#b9a99a', 1.3]} />
         <directionalLight position={[2, 4, 3]} intensity={1.6} castShadow />
         <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>

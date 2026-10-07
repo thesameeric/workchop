@@ -16,19 +16,23 @@ export function Lobby() {
   const [name, setName] = useState(me.name);
   const [avatar, setAvatar] = useState(me.avatar);
   const [info, setInfo] = useState<{ name: string; online: number } | null | undefined>(undefined);
+  const [unreachable, setUnreachable] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const m = useMediaState();
 
   useEffect(() => {
     let alive = true;
+    setUnreachable(false);
+    // null means the server answered "not found"; a thrown error means we couldn't ask it.
     fetchOfficeInfo(officeId)
       .then((i) => alive && setInfo(i))
-      .catch(() => alive && setInfo(null));
+      .catch(() => alive && setUnreachable(true));
     return () => {
       alive = false;
     };
-  }, [officeId]);
+  }, [officeId, attempt]);
 
   // Ask for camera/mic once, so people can check how they look before going in.
   useEffect(() => {
@@ -53,6 +57,20 @@ export function Lobby() {
       setJoining(false);
     }
   };
+
+  if (unreachable) {
+    return (
+      <div className="lobby centered">
+        <div className="card narrow">
+          <h2>Can’t reach the server</h2>
+          <p className="muted">The Workchop server isn’t responding. Check that it’s running, then try again.</p>
+          <button className="btn primary" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (info === null) {
     return (

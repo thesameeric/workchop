@@ -47,9 +47,22 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173, create an office, and share the invite link. To try it alone, open the link in a second browser window.
+Open http://localhost:5173, create an office, pick a name and join. Allow the camera and microphone when the browser asks.
 
-`npm run dev` starts the API and realtime server on port 3001 (reloading on change) and Vite on port 5173, which proxies `/api` and `/socket.io` to the server.
+`npm run dev` starts the API and realtime server on port 3001 (reloading on change) and Vite on port 5173, which proxies `/api` and `/socket.io` to the server. If port 3001 is taken, run it on another one, e.g. `PORT=4001 npm run dev` (the proxy follows `PORT`). Stop it with `Ctrl+C`.
+
+### Testing a call
+
+**On your own:** copy the invite link (link button in the top bar) and open it in a private/incognito window, which gets its own name and character. Walk the two characters toward each other: the video tiles appear at the top once you're within a few metres, and disappear when you walk apart. Use headphones or mute one window to avoid echo.
+
+**With other people or your phone:** browsers only allow the camera and microphone on HTTPS (or `localhost`). The `Network:` address Vite prints works on your Wi-Fi, but people joining that way can only watch and listen. For full two-way calls, run the production build behind any HTTPS tunnel and share the `https://…` address it prints:
+
+```bash
+npm run build && npm start              # serves the app on http://localhost:3001
+cloudflared tunnel --url http://localhost:3001   # or: ngrok http 3001
+```
+
+(Use the production build for this: Vite's dev server rejects unfamiliar host names such as tunnel addresses.)
 
 ### Production
 
@@ -71,7 +84,7 @@ Browsers only allow camera and microphone access on **HTTPS** (or `localhost`), 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `3001` | HTTP port |
+| `PORT` | `3001` | HTTP port of the server (in `npm run dev`, the API port Vite proxies to) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATA_DIR` | `./data/offices` | Where offices are saved (one JSON file each) |
 | `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |

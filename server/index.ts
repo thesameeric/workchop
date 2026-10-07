@@ -100,17 +100,35 @@ export async function startServer(opts: ServerOptions = {}) {
     res.status(404).json({ error: 'Not found' });
   });
 
-  if (opts.clientDir && existsSync(opts.clientDir)) {
-    const clientDir = opts.clientDir;
+  const servesClient = !!opts.clientDir && existsSync(opts.clientDir);
+  if (servesClient) {
+    const clientDir = opts.clientDir!;
     app.use(express.static(clientDir, { index: false, maxAge: '1h' }));
     app.get(/.*/, (_req, res) => {
       res.sendFile(path.join(clientDir, 'index.html'));
     });
+  } else {
+    // In development the page is served by Vite; point lost visitors there.
+    app.get(/.*/, (_req, res) => {
+      res.type('text').send('This is the Workchop API server. Open the app at the Vite URL instead (http://localhost:5173 by default).');
+    });
   }
 
-  await new Promise<void>((resolve) => httpServer.listen(opts.port ?? 0, opts.host ?? '0.0.0.0', resolve));
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(opts.port ?? 0, opts.host ?? '0.0.0.0', () => {
+      httpServer.off('error', reject);
+      resolve();
+    });
+  });
   const port = (httpServer.address() as AddressInfo).port;
-  if (!opts.quiet) console.log(`[workchop] server listening on http://localhost:${port}`);
+  if (!opts.quiet) {
+    console.log(
+      servesClient
+        ? `[workchop] open http://localhost:${port}`
+        : `[workchop] API server listening on port ${port} (the app itself is on the Vite URL)`,
+    );
+  }
 
   return {
     port,
@@ -128,11 +146,16 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv
 if (isMain) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const production = process.env.NODE_ENV === 'production' || here.endsWith(path.join('dist', 'server'));
+  const port = Number(process.env.PORT ?? 3001);
   const server = await startServer({
-    port: Number(process.env.PORT ?? 3001),
+    port,
     host: process.env.HOST,
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
     clientDir: production ? (process.env.CLIENT_DIR ?? path.resolve(here, '../client')) : null,
+  }).catch((err: NodeJS.ErrnoException) => {
+    if (err.code !== 'EADDRINUSE') throw err;
+    console.error(`[workchop] port ${port} is already in use. Stop the other process or choose another one, e.g. PORT=${port + 1}.`);
+    process.exit(1);
   });
   const shutdown = async () => {
     await server.close();

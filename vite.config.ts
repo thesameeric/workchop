@@ -1,14 +1,29 @@
 import { defineConfig } from 'vitest/config';
+import { createLogger } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const SERVER = process.env.WORKCHOP_SERVER ?? 'http://localhost:3001';
+// The dev proxy follows the API server's PORT, so `PORT=4000 npm run dev` works end to end.
+const SERVER = process.env.WORKCHOP_SERVER ?? `http://localhost:${process.env.PORT ?? 3001}`;
+
+// Closing a browser tab drops its socket mid-stream and the dev proxy logs that as an error with
+// a stack trace. It's expected and harmless, so keep it out of the terminal.
+const logger = createLogger();
+const logError = logger.error.bind(logger);
+logger.error = (msg, options) => {
+  const code = (options?.error as NodeJS.ErrnoException | undefined)?.code;
+  if (msg.includes('ws proxy') && (code === 'ECONNRESET' || code === 'EPIPE')) return;
+  logError(msg, options);
+};
 
 export default defineConfig({
   root: 'client',
   plugins: [react()],
+  customLogger: logger,
   server: {
     port: 5173,
     host: true,
+    // Only browser errors are echoed to the terminal (three.js prints deprecation warnings).
+    forwardConsole: { logLevels: ['error'], unhandledErrors: true },
     proxy: {
       '/api': SERVER,
       '/socket.io': { target: SERVER, ws: true },

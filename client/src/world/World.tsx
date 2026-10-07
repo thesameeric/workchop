@@ -89,7 +89,7 @@ export default function World() {
   return (
     <Canvas
       className="world-canvas"
-      shadows
+      shadows="percentage"
       dpr={[1, 2]}
       camera={{ fov: 45, near: 0.1, far: 300, position: [0, 10, 10] }}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
