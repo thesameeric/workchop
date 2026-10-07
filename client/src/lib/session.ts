@@ -48,19 +48,31 @@ export class OfficeSession {
   private spotifyClientId: string | null = null;
 
   constructor(readonly officeId: string) {
-    this.socket = io({ autoConnect: false });
+    // WebSocket first (the cheapest path through proxies such as Cloudflare), falling back to
+    // long-polling where WebSockets are blocked.
+    this.socket = io({ autoConnect: false, transports: ['websocket', 'polling'], tryAllTransports: true });
     this.audioRoot = document.createElement('div');
     this.audioRoot.hidden = true;
     document.body.appendChild(this.audioRoot);
   }
 
   async join(): Promise<void> {
-    const { iceServers, spotifyClientId } = await fetchConfig();
+    const { iceServers, iceTtl, spotifyClientId } = await fetchConfig();
     this.spotifyClientId = spotifyClientId;
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
     });
+    // Short-lived TURN credentials (Cloudflare TURN): fetch fresh ones well before they expire, as
+    // offices often stay open all day.
+    if (iceTtl) {
+      this.timers.push(
+        setInterval(async () => {
+          const cfg = await fetchConfig();
+          if (!this.closed && cfg.iceTtl) this.peers?.setIceServers(cfg.iceServers);
+        }, Math.max(60, iceTtl * 0.8) * 1000),
+      );
+    }
     this.wireSocket();
     this.unsubs.push(media.subscribe(() => this.onMediaChange()));
     this.onMediaChange();

@@ -11,6 +11,7 @@ import type { ClientToServerEvents, ServerToClientEvents } from '../shared/types
 import { OfficeStore } from './officeStore';
 import { attachRealtime } from './realtime';
 import { FileRepo, PostgresRepo, type DatabaseSsl } from './repos';
+import { cloudflareTurnFromEnv, mintCloudflareIceServers, type CloudflareTurn, type RTCIceServerLike } from './turn';
 
 export interface ServerOptions {
   port?: number;
@@ -25,13 +26,36 @@ export interface ServerOptions {
   iceServers?: RTCIceServerLike[];
   /** Spotify app client id for listen-along; defaults to SPOTIFY_CLIENT_ID. */
   spotifyClientId?: string | null;
+  /** Cloudflare Realtime TURN key for per-visitor TURN credentials; defaults to CLOUDFLARE_TURN_*. */
+  cloudflareTurn?: CloudflareTurn | null;
+  /**
+   * Request header with the visitor's IP when running behind a proxy (e.g. cf-connecting-ip, or
+   * x-forwarded-for behind Caddy); defaults to CLIENT_IP_HEADER. Only set it when every request
+   * comes through that proxy, since visitors could otherwise fake the header.
+   */
+  clientIpHeader?: string | null;
   quiet?: boolean;
 }
 
-interface RTCIceServerLike {
-  urls: string | string[];
-  username?: string;
-  credential?: string;
+/** Allows `limit` events per key within a sliding window; forgets keys that went quiet. */
+function windowLimiter(limit: number, windowMs: number) {
+  const hits = new Map<string, number[]>();
+  let lastSweep = Date.now();
+  return (key: string): boolean => {
+    const now = Date.now();
+    if (now - lastSweep > windowMs) {
+      lastSweep = now;
+      for (const [k, times] of hits) if (now - times[times.length - 1] >= windowMs) hits.delete(k);
+    }
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+    if (recent.length >= limit) {
+      hits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    return true;
+  };
 }
 
 export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceServerLike[] {
@@ -68,6 +92,12 @@ export async function startServer(opts: ServerOptions = {}) {
   });
   const realtime = attachRealtime(io, store);
   const iceServers = opts.iceServers ?? iceServersFromEnv();
+  const turn = opts.cloudflareTurn !== undefined ? opts.cloudflareTurn : cloudflareTurnFromEnv();
+  const ipHeader = (opts.clientIpHeader !== undefined ? opts.clientIpHeader : process.env.CLIENT_IP_HEADER)?.trim().toLowerCase() || null;
+  const clientIp = (req: express.Request): string => {
+    const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
+    return forwarded || req.ip || 'unknown';
+  };
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -75,21 +105,35 @@ export async function startServer(opts: ServerOptions = {}) {
 
   // Spotify listen-along is switched on by setting SPOTIFY_CLIENT_ID (a public PKCE client id).
   const spotifyClientId = opts.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? null;
-  app.get('/api/config', (_req, res) => {
-    res.json({ iceServers, spotifyClientId: spotifyClientId || null });
+  // TURN credentials cost relay bandwidth, so each address gets a generous but finite number; past
+  // that (or if Cloudflare is unreachable) calls still work for most people over STUN alone.
+  const mayMintTurn = windowLimiter(120, 60 * 60 * 1000);
+  let turnWarnedAt = 0;
+  app.get('/api/config', async (req, res) => {
+    let servers = iceServers;
+    let iceTtl: number | undefined;
+    if (turn && mayMintTurn(clientIp(req))) {
+      try {
+        servers = await mintCloudflareIceServers(turn);
+        iceTtl = turn.ttl;
+      } catch (err) {
+        if (Date.now() - turnWarnedAt > 60_000) {
+          turnWarnedAt = Date.now();
+          console.warn('[turn] could not get Cloudflare TURN credentials:', (err as Error).message);
+        }
+      }
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ iceServers: servers, iceTtl, spotifyClientId: spotifyClientId || null });
   });
 
   // Very small per-IP limit on creating offices.
-  const creations = new Map<string, number[]>();
+  const mayCreate = windowLimiter(30, 60 * 60 * 1000);
   app.post('/api/offices', async (req, res) => {
-    const ip = req.ip ?? 'unknown';
-    const now = Date.now();
-    const recent = (creations.get(ip) ?? []).filter((t) => now - t < 60 * 60 * 1000);
-    if (recent.length >= 30) {
+    if (!mayCreate(clientIp(req))) {
       res.status(429).json({ error: 'Too many offices created, try again later.' });
       return;
     }
-    creations.set(ip, [...recent, now]);
     const name = sanitizeName(req.body?.name, 48) || 'My Office';
     const template: TemplateId = req.body?.template === 'blank' ? 'blank' : 'startup';
     let stored;

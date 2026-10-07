@@ -30,7 +30,7 @@ export class PeerManager {
 
   constructor(
     private readonly media: MediaManager,
-    private readonly iceServers: RTCIceServer[],
+    private iceServers: RTCIceServer[],
     private readonly events: PeerEvents,
   ) {
     this.unsubscribe = media.subscribe(() => this.syncTracks());
@@ -38,6 +38,18 @@ export class PeerManager {
 
   has(id: string): boolean {
     return this.peers.has(id);
+  }
+
+  /** New (e.g. refreshed TURN) servers: used for new connections and the next ICE restart of current ones. */
+  setIceServers(servers: RTCIceServer[]): void {
+    this.iceServers = servers;
+    for (const peer of this.peers.values()) {
+      try {
+        peer.pc.setConfiguration({ ...peer.pc.getConfiguration(), iceServers: servers });
+      } catch {
+        // A closed connection; it'll be replaced anyway.
+      }
+    }
   }
 
   connect(id: string, sid: number, initiator: boolean): void {
