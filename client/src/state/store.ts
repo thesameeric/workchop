@@ -6,7 +6,7 @@ import { loadProfile } from '../lib/storage';
 export type Phase = 'landing' | 'lobby' | 'office';
 export type Panel = 'none' | 'chat' | 'people' | 'build' | 'music';
 export type BuildTool = 'select' | 'place' | 'zone';
-export type Modal = 'none' | 'avatar' | 'devices';
+export type Modal = 'none' | 'avatar' | 'settings';
 
 export type RemotePlayer = Omit<PlayerState, 'x' | 'z' | 'ry' | 'anim'>;
 

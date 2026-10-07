@@ -11,7 +11,7 @@ import {
 import type { OfficeItem } from '../../../shared/types';
 import { getSession } from '../lib/session';
 import { canBuild, setMusicPrefs, setState, useStore } from '../state/store';
-import { CloseIcon, LinkIcon } from './icons';
+import { CloseIcon, LinkIcon, MusicIcon, PeopleIcon, PlayIcon, VolumeIcon, VolumeLowIcon, VolumeOffIcon } from './icons';
 
 const KIND_LABEL: Record<MusicLink['kind'], string> = {
   track: 'Track',
@@ -41,7 +41,7 @@ export function VolumeControl() {
         onClick={() => setMusicPrefs({ muted: !muted })}
         aria-label={muted ? 'Unmute music' : 'Mute music'}
       >
-        {muted || volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
+        {muted || volume === 0 ? <VolumeOffIcon size={18} /> : volume < 0.5 ? <VolumeLowIcon size={18} /> : <VolumeIcon size={18} />}
       </button>
       <input
         type="range"
@@ -181,7 +181,13 @@ function ListenAlong({ item, session }: { item: OfficeItem; session: SpotifySess
       </div>
       {session ? (
         <div className="now-spotify">
-          {session.image ? <img src={session.image} alt="" /> : <div className="cover-placeholder">♫</div>}
+          {session.image ? (
+            <img src={session.image} alt="" />
+          ) : (
+            <div className="cover-placeholder">
+              <MusicIcon />
+            </div>
+          )}
           <div className="now-spotify-text">
             <strong>{session.name}</strong>
             <span>{session.artists}</span>
@@ -258,7 +264,7 @@ function SpotifySection({ item }: { item: OfficeItem }) {
         {data.links.length === 0 && <p className="muted small center">Nothing shared yet.</p>}
         {data.links.map((l) => (
           <div key={l.id} className="link-row">
-            {l.image ? <img src={l.image} alt="" /> : <div className="cover-placeholder">{l.kind === 'jam' ? '👥' : '♫'}</div>}
+            {l.image ? <img src={l.image} alt="" /> : <div className="cover-placeholder">{l.kind === 'jam' ? <PeopleIcon /> : <MusicIcon />}</div>}
             <div className="link-text">
               <strong>{l.title ?? KIND_LABEL[l.kind]}</strong>
               <span className="muted small">
@@ -269,7 +275,7 @@ function SpotifySection({ item }: { item: OfficeItem }) {
             <div className="link-actions">
               {status === 'ready' && l.uri && l.kind !== 'jam' && (
                 <button className="icon-btn" title="Play for everyone (listen along)" onClick={() => void play(l)}>
-                  ▶
+                  <PlayIcon size={15} />
                 </button>
               )}
               <a className="icon-btn" href={l.url} target="_blank" rel="noopener noreferrer" title={l.kind === 'jam' ? 'Join the Jam in Spotify' : 'Open in Spotify'}>
@@ -318,7 +324,7 @@ export function MusicPanel() {
         </div>
       )}
       <div className="music-where">
-        <span className="music-where-icon">🎵</span>
+        <MusicIcon size={16} />
         <span>{area.zone ? `Heard by everyone in ${area.zone.name}` : `Heard within ${area.radius} m of the jukebox`}</span>
       </div>
       <VolumeControl />
@@ -352,7 +358,7 @@ export function NowPlayingPill() {
         </button>
       ) : (
         <button className="icon-btn" onClick={() => setMusicPrefs({ muted: !muted })} title={muted ? 'Unmute music' : 'Mute music'}>
-          {muted ? '🔇' : '🔊'}
+          {muted ? <VolumeOffIcon size={16} /> : <VolumeIcon size={16} />}
         </button>
       )}
     </div>

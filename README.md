@@ -240,6 +240,8 @@ npm test          # unit tests for geometry/office rules + server integration te
 
 The storage tests also run against Postgres when `TEST_DATABASE_URL` points at a database they may write to, e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`.
 
+Icons come from the [Hugeicons](https://hugeicons.com) font in `client/public/hugeicons/`. The app ships only the glyphs it uses: to add one, put its name (from `icons.css`) in `client/src/ui/icon-names.json`, export a component for it in `client/src/ui/icons.tsx` and run `npm run icons`. That regenerates `client/src/ui/hugeicons.ts` and the cut-down font `hgi-subset.woff2`, and needs fontTools (`pip install fonttools brotli`).
+
 ## Limits
 
 - Calls are a mesh: each person sends their stream to every person they're near. That works well for conversations of up to about 8 people. Larger groups (stages, all-hands) would need an SFU such as LiveKit or mediasoup.

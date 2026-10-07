@@ -14,6 +14,7 @@ import {
   TOP_STYLES,
 } from '../../../shared/avatar';
 import type { AvatarConfig } from '../../../shared/types';
+import { useDarkTheme } from '../lib/theme';
 import { Avatar, BlobShadow, useMotion } from '../world/Avatar';
 import { ShuffleIcon } from './icons';
 
@@ -36,6 +37,7 @@ function Spinner({ avatar }: { avatar: AvatarConfig }) {
 }
 
 export function AvatarPreview({ avatar, height = 280 }: { avatar: AvatarConfig; height?: number }) {
+  const dark = useDarkTheme();
   return (
     <div className="avatar-preview" style={{ height }}>
       <Canvas shadows="percentage" dpr={[1, 2]} camera={{ position: [0, 1.3, 3.2], fov: 35 }}>
@@ -43,7 +45,7 @@ export function AvatarPreview({ avatar, height = 280 }: { avatar: AvatarConfig; 
         <directionalLight position={[2, 4, 3]} intensity={1.6} castShadow />
         <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
           <circleGeometry args={[1.1, 40]} />
-          <meshStandardMaterial color="#e7e9f5" />
+          <meshStandardMaterial color={dark ? '#4a5068' : '#e7e9f5'} />
         </mesh>
         <Spinner avatar={avatar} />
         <OrbitControls target={[0, 0.95, 0]} enablePan={false} enableZoom={false} autoRotate autoRotateSpeed={1.6} minPolarAngle={1} maxPolarAngle={1.6} />

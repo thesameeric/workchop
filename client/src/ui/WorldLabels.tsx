@@ -4,7 +4,7 @@ import type { Status, Zone } from '../../../shared/types';
 import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
-import { MicOffIcon } from './icons';
+import { LockIcon, MicOffIcon } from './icons';
 
 const TAG_Y = 2.12;
 const SIT_DROP = 0.22;
@@ -67,7 +67,7 @@ function ZoneLabel({ zone, active }: { zone: Zone; active: boolean }) {
   return (
     <div ref={ref} className="world-label under">
       <div className={`zone-label${active ? ' active' : ''}`} style={{ ['--zone' as string]: zone.color }}>
-        🔒 {zone.name}
+        <LockIcon size={12} /> {zone.name}
       </div>
     </div>
   );
@@ -100,7 +100,8 @@ export function ZoneIndicator() {
   if (!zone) return null;
   return (
     <div className="zone-indicator" style={{ ['--zone' as string]: zone.color }}>
-      🔒 <strong>{zone.name}</strong>
+      <LockIcon size={15} />
+      <strong>{zone.name}</strong>
       <span>Only people in this area can hear you</span>
     </div>
   );

@@ -126,7 +126,7 @@ export function Dock() {
         <button className="dock-btn hide-mobile" onClick={copyInvite} title="Copy invite link">
           <LinkIcon />
         </button>
-        <button className="dock-btn" onClick={() => setState({ modal: 'devices' })} title="Audio & video settings">
+        <button className="dock-btn" onClick={() => setState({ modal: 'settings' })} title="Settings">
           <SettingsIcon />
         </button>
         <button className="dock-btn danger" onClick={() => leaveOffice()} title="Leave office">

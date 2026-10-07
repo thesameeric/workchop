@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, type ComponentRef } from 'react';
 import * as THREE from 'three';
 import { local } from '../lib/positions';
 import { useStore } from '../state/store';
-import { BuildGrid, Floor, Lights, PerimeterWalls, Zones } from './Environment';
+import { BuildGrid, Floor, Lights, PerimeterWalls, useSceneColors, Zones } from './Environment';
 import { Ground } from './Ground';
 import { Items } from './Items';
 import { LocalPlayer, RemotePlayers } from './Players';
@@ -64,11 +64,12 @@ function CameraRig() {
 function Scene() {
   const settings = useStore((s) => s.office?.settings);
   const building = useStore((s) => s.mode === 'build');
+  const { sky } = useSceneColors();
   if (!settings) return null;
   return (
     <>
-      <color attach="background" args={['#d7deea']} />
-      <fog attach="fog" args={['#d7deea', 45, 110]} />
+      <color attach="background" args={[sky]} />
+      <fog attach="fog" args={[sky, 45, 110]} />
       <Lights settings={settings} />
       <Floor settings={settings} />
       {building && <BuildGrid settings={settings} />}

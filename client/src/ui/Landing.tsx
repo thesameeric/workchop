@@ -3,6 +3,7 @@ import { TEMPLATES, type TemplateId } from '../../../shared/templates';
 import { createOffice } from '../lib/api';
 import { navigate, officeIdFromPath } from '../lib/router';
 import { recentOffices, setOwnerKey } from '../lib/storage';
+import { HammerIcon, HeadphonesIcon, LockIcon, UserEditIcon } from './icons';
 
 function parseOfficeInput(raw: string): string | null {
   const text = raw.trim();
@@ -60,10 +61,18 @@ export function Landing() {
             your own character, and an office you can rebuild together.
           </p>
           <ul className="features">
-            <li>🎧 Spatial audio & video that fades with distance</li>
-            <li>🔒 Private areas for meetings</li>
-            <li>🧑‍🎨 Customisable characters</li>
-            <li>🛠️ Build mode to design your space</li>
+            <li>
+              <HeadphonesIcon /> Spatial audio & video that fades with distance
+            </li>
+            <li>
+              <LockIcon /> Private areas for meetings
+            </li>
+            <li>
+              <UserEditIcon /> Customisable characters
+            </li>
+            <li>
+              <HammerIcon /> Build mode to design your space
+            </li>
           </ul>
         </section>
         <section className="landing-cards">

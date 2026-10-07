@@ -6,9 +6,21 @@ import { zoneAt } from '../../../shared/geometry';
 import type { OfficeSettings, Zone } from '../../../shared/types';
 import { shade } from '../lib/color';
 import { local } from '../lib/positions';
+import { useDarkTheme } from '../lib/theme';
 import { useStore } from '../state/store';
 import { OpacityContext, Box } from './prims';
 import { floorTexture } from './textures';
+
+// The sky matches --scene in styles.css.
+const SCENE_COLORS = {
+  light: { sky: '#d7deea', ground: '#b9c4d6' },
+  dark: { sky: '#1b2030', ground: '#2e3444' },
+};
+
+/** Sky and the ground around the building, dimmed in dark mode (the office itself stays lit). */
+export function useSceneColors() {
+  return SCENE_COLORS[useDarkTheme() ? 'dark' : 'light'];
+}
 
 export function Lights({ settings }: { settings: OfficeSettings }) {
   const { width, depth } = settings;
@@ -46,6 +58,7 @@ export function Lights({ settings }: { settings: OfficeSettings }) {
 
 export const Floor = memo(function Floor({ settings }: { settings: OfficeSettings }) {
   const { width, depth, floor, floorColor } = settings;
+  const { ground } = useSceneColors();
   const map = useMemo(() => {
     const t = floorTexture(floor, floorColor);
     t.repeat.set(width / 2, depth / 2);
@@ -57,7 +70,7 @@ export const Floor = memo(function Floor({ settings }: { settings: OfficeSetting
       {/* Ground around the building. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[width / 2, -0.02, depth / 2]} receiveShadow>
         <planeGeometry args={[width + 60, depth + 60]} />
-        <meshStandardMaterial color="#b9c4d6" roughness={1} />
+        <meshStandardMaterial color={ground} roughness={1} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[width / 2, 0, depth / 2]} receiveShadow>
         <planeGeometry args={[width, depth]} />

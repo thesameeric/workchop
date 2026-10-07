@@ -8,7 +8,7 @@ import { toggleSit } from '../world/movement';
 import { BuildPanel } from './BuildPanel';
 import { ChatPanel } from './ChatPanel';
 import { Dock, copyInvite } from './Dock';
-import { CloseIcon, LinkIcon } from './icons';
+import { CloseIcon, HelpIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
 import { MusicPanel, NowPlayingPill } from './MusicPanel';
 import { PeoplePanel } from './PeoplePanel';
@@ -78,7 +78,7 @@ function Help() {
   if (!open) {
     return (
       <button className="help-toggle" onClick={() => setOpen(true)} title="Controls">
-        ?
+        <HelpIcon size={18} />
       </button>
     );
   }
