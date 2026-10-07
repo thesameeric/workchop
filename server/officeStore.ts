@@ -128,8 +128,9 @@ export class OfficeStore {
     return tracked;
   }
 
+  /** Write pending changes now and wait for every save, including ones already in progress. */
   async flush(id?: string): Promise<void> {
-    const ids = id ? [id] : [...this.timers.keys()];
+    const ids = id ? [id] : [...new Set([...this.timers.keys(), ...this.writes.keys()])];
     await Promise.all(
       ids.map((key) => {
         const timer = this.timers.get(key);

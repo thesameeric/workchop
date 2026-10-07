@@ -8,7 +8,7 @@ async function json<T>(res: Response): Promise<T> {
 
 export async function fetchConfig(): Promise<{ iceServers: RTCIceServer[] }> {
   try {
-    return await json(await fetch('/api/config'));
+    return await json(await fetch('/api/config', { signal: AbortSignal.timeout(8000) }));
   } catch {
     return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
   }

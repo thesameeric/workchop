@@ -23,13 +23,23 @@ if (!free) {
   process.exit(1);
 }
 
-// Spawn the tools' entry points with Node directly (no npx or shell in between),
-// so stopping this script stops them too, on every platform.
+// On macOS/Linux the children get their own process group, so a Ctrl+C (or any signal sent to this
+// script's group) reaches only this script, which passes exactly one signal on. A second signal
+// would make tsx force-kill the API server before it finishes saving. On Windows, Ctrl+C reaches
+// every process in the console by itself.
+const posix = process.platform !== 'win32';
+
+// Spawn the tools' entry points with Node directly (no npx or shell in between).
 const procs = [
   ['server', [bin('tsx/dist/cli.mjs'), 'watch', 'server/index.ts'], '\x1b[34m'],
   ['client', [bin('vite/bin/vite.js')], '\x1b[32m'],
 ].map(([name, args, color]) => {
-  const child = spawn(process.execPath, args, { cwd: fileURLToPath(root), stdio: ['inherit', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, args, {
+    cwd: fileURLToPath(root),
+    // A child in its own group must not read the terminal (it would be stopped by SIGTTIN).
+    stdio: [posix ? 'ignore' : 'inherit', 'pipe', 'pipe'],
+    detached: posix,
+  });
   const prefix = `${color}[${name}]\x1b[0m `;
   const pipe = (stream, out) => {
     let buffer = '';
@@ -58,11 +68,7 @@ const running = () => procs.filter((p) => p.exitCode === null && p.signalCode ==
 let stopping = false;
 let exitCode = 0;
 
-/**
- * Stop everything, then exit once both children are gone. `forward` is the signal to pass on;
- * on Ctrl+C the terminal has already sent SIGINT to the children, and signalling them a second
- * time makes tsx force-kill the API server before it finishes saving.
- */
+/** Stop everything (passing `forward` on to the children), then exit once both are gone. */
 function stop(code = exitCode, forward = null) {
   if (!stopping) {
     stopping = true;
@@ -78,5 +84,10 @@ function stop(code = exitCode, forward = null) {
   if (procs.every((p) => p.exitCode !== null || p.signalCode !== null)) process.exit(exitCode);
 }
 
-process.on('SIGINT', () => stop(0));
-process.on('SIGTERM', () => stop(0, 'SIGTERM'));
+const onSignal = (signal) => stop(0, posix ? signal : null);
+process.on('SIGINT', () => onSignal('SIGINT'));
+process.on('SIGTERM', () => onSignal('SIGTERM'));
+// Closing the terminal window: shut down gracefully rather than leaving the servers running.
+process.on('SIGHUP', () => onSignal('SIGTERM'));
+// Never leave the children behind, whatever makes this script exit.
+process.on('exit', () => running().forEach((p) => p.kill('SIGTERM')));

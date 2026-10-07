@@ -15,7 +15,9 @@ logger.error = (msg, options) => {
   const code = (options?.error as NodeJS.ErrnoException | undefined)?.code;
   if (msg.includes('ws proxy') && (code === 'ECONNRESET' || code === 'EPIPE')) return;
   if (msg.includes('proxy error') && code === 'ECONNREFUSED') {
-    if (Date.now() - lastRefused > 5000) logger.warn(`Can't reach the API server at ${SERVER}. Is it running?`, { timestamp: true });
+    if (Date.now() - lastRefused > 5000) {
+      logger.warn(`The API server at ${SERVER} isn't answering (restarting after a change, or stopped?)`, { timestamp: true });
+    }
     lastRefused = Date.now();
     return;
   }
