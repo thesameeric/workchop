@@ -39,9 +39,9 @@ const entries: CatalogEntry[] = [
   { type: 'printer', label: 'Printer', icon: '🖨️', category: 'Work', w: 1, d: 0.8, h: 1, solid: true },
 
   // Lounge
-  { type: 'sofa', label: 'Sofa', icon: '🛋️', category: 'Lounge', w: 2, d: 1, h: 0.9, solid: true, seats: [{ x: -0.5, z: 0.05 }, { x: 0.5, z: 0.05 }], colorable: true, defaultColor: '#2a9d8f' },
-  { type: 'armchair', label: 'Armchair', icon: '💺', category: 'Lounge', w: 1, d: 1, h: 0.9, solid: true, seats: [{ x: 0, z: 0.05 }], colorable: true, defaultColor: '#4cc9f0' },
-  { type: 'beanbag', label: 'Beanbag', icon: '🫘', category: 'Lounge', w: 1, d: 1, h: 0.6, solid: false, seats: [{ x: 0, z: 0 }], colorable: true, defaultColor: '#ef476f' },
+  { type: 'sofa', label: 'Sofa', icon: '🛋️', category: 'Lounge', w: 2, d: 1, h: 0.9, solid: true, seats: [{ x: -0.5, z: -0.05 }, { x: 0.5, z: -0.05 }], colorable: true, defaultColor: '#2a9d8f' },
+  { type: 'armchair', label: 'Armchair', icon: '💺', category: 'Lounge', w: 1, d: 1, h: 0.9, solid: true, seats: [{ x: 0, z: -0.05 }], colorable: true, defaultColor: '#4cc9f0' },
+  { type: 'beanbag', label: 'Beanbag', icon: '🫘', category: 'Lounge', w: 1, d: 1, h: 0.6, solid: false, seats: [{ x: 0, z: 0.14 }], colorable: true, defaultColor: '#ef476f' },
   { type: 'stool', label: 'Stool', icon: '🍄', category: 'Lounge', w: 1, d: 1, h: 0.7, solid: false, seats: [{ x: 0, z: 0 }], colorable: true, defaultColor: '#e9c46a' },
   { type: 'coffee-table', label: 'Coffee table', icon: '🟤', category: 'Lounge', w: 2, d: 1, h: 0.4, solid: true, colorable: true, defaultColor: '#d4a373' },
   { type: 'round-table', label: 'Café table', icon: '⚪', category: 'Lounge', w: 1, d: 1, h: 0.75, solid: true, box: { w: 0.8, d: 0.8 }, colorable: true, defaultColor: '#f2f2f2' },

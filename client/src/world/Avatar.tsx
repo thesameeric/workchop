@@ -304,7 +304,8 @@ export const Avatar = memo(function Avatar({ config, motion }: { config: AvatarC
 
     if (body.current) {
       body.current.position.y += (hipY - HIP_Y + bob - body.current.position.y) * k;
-      body.current.position.z += ((m.anim === 'sit' ? -0.12 : 0) - body.current.position.z) * k;
+      // Sitting keeps the torso in front of the seat's backrest (seats are placed so the back just touches it).
+      body.current.position.z += (0 - body.current.position.z) * k;
       body.current.rotation.x += (lean - body.current.rotation.x) * k;
     }
     lerp(legL.current, 'x', thigh + legSwing);

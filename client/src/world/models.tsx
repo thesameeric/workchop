@@ -54,18 +54,19 @@ function Stool({ c }: { c: string }) {
 function Armchair({ c, width = 1 }: { c: string; width?: number }) {
   const inner = width - 0.3;
   const cushions = width > 1 ? [-inner / 4, inner / 4] : [0];
+  // The seat is shallow enough for a seated character's legs to hang over the front edge.
   return (
     <group>
-      <Box p={[0, 0.17, 0]} s={[width - 0.05, 0.24, 0.85]} c={shade(c, -0.12)} rounded />
+      <Box p={[0, 0.17, -0.1]} s={[width - 0.05, 0.24, 0.65]} c={shade(c, -0.12)} rounded />
       {cushions.map((x) => (
-        <Box key={x} p={[x, 0.34, 0.06]} s={[inner / cushions.length - 0.02, 0.12, 0.66]} c={c} rounded />
+        <Box key={x} p={[x, 0.34, 0]} s={[inner / cushions.length - 0.02, 0.12, 0.44]} c={c} rounded />
       ))}
       <Box p={[0, 0.55, -0.32]} s={[width - 0.05, 0.6, 0.2]} c={c} rounded />
       {[-1, 1].map((sx) => (
-        <Box key={sx} p={[sx * (width / 2 - 0.1), 0.38, 0]} s={[0.17, 0.42, 0.85]} c={shade(c, -0.05)} rounded />
+        <Box key={sx} p={[sx * (width / 2 - 0.1), 0.38, -0.1]} s={[0.17, 0.42, 0.65]} c={shade(c, -0.05)} rounded />
       ))}
       {[-1, 1].flatMap((sx) =>
-        [-1, 1].map((sz) => <Box key={`${sx}${sz}`} p={[sx * (width / 2 - 0.12), 0.03, sz * 0.33]} s={[0.06, 0.06, 0.06]} c={DARK} />),
+        [-1, 1].map((sz) => <Box key={`${sx}${sz}`} p={[sx * (width / 2 - 0.12), 0.03, -0.1 + sz * 0.25]} s={[0.06, 0.06, 0.06]} c={DARK} />),
       )}
     </group>
   );
