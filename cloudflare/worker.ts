@@ -140,6 +140,14 @@ export class WorkchopServer extends DurableObject<Env> {
     }
     await container.setInactivityTimeout(IDLE_MS);
 
+    // Settles when the server exits; used to report why if it stops while starting.
+    const exited = container.monitor().then(
+      () => 'it exited normally',
+      (err: unknown) => {
+        const code = (err as { exitCode?: number })?.exitCode;
+        return code !== undefined ? `it exited with code ${code} (see the container's logs for the server's error)` : String(err);
+      },
+    );
     const port = container.getTcpPort(PORT);
     const deadline = Date.now() + STARTUP_MS;
     let lastError: unknown;
@@ -152,7 +160,7 @@ export class WorkchopServer extends DurableObject<Env> {
       } catch (err) {
         lastError = err;
       }
-      if (!container.running) throw new Error('the container stopped while starting', { cause: lastError });
+      if (!container.running) throw new Error(`the container stopped while starting: ${await exited}`, { cause: lastError });
       await scheduler.wait(500);
     }
     throw new Error('the server did not answer its health check in time', { cause: lastError });
