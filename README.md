@@ -40,7 +40,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 ## Getting started
 
-Requires Node.js 20 or later.
+Requires Node.js 22.12 or newer (Node 20.19+ can run the app, but the test runner needs 22.12+). Check with `node --version`.
 
 ```bash
 npm install
