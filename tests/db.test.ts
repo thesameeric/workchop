@@ -64,7 +64,7 @@ describe(`migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
     await user('none', null, 5);
     await identity('none', 'dev', null, false, 5);
 
-    expect(await migrate(db)).toEqual(['4 email_sign_in']);
+    expect(await migrate(db, coreMigrations.filter((m) => m.id < 5))).toEqual(['4 email_sign_in']);
     const { rows } = await db.query<{ id: string; email: string | null; verified_days: number | null }>(
       `SELECT id, email, round(extract(epoch FROM now() - email_verified_at) / 86400)::int AS verified_days FROM users ORDER BY id`,
     );
@@ -84,6 +84,63 @@ describe(`migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
     await expect(db.query("INSERT INTO email_tokens (token_hash, purpose, email, expires_at) VALUES ('h2', 'other', 'x@example.com', now())")).rejects.toThrow();
     const columns = await db.query<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_name = 'auth_tx' AND table_schema = current_schema() AND column_name = 'link_user_id'");
     expect(columns.rowCount).toBe(1);
+  });
+
+  it('keep offices from before workspaces open, and leave each office one owner', { timeout: 60_000 }, async () => {
+    const db = await freshDb();
+    await migrate(db, coreMigrations.filter((m) => m.id < 5));
+    const office = (id: string) =>
+      db.query('INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb)', [id, `key-${id}`, JSON.stringify(createFromTemplate('blank', id, id))]);
+    const member = (userId: string, officeId: string, role: string, days: number) =>
+      db.query(`INSERT INTO memberships (user_id, office_id, role, joined_at) VALUES ($1, $2, $3, now() - $4::int * interval '1 day')`, [userId, officeId, role, days]);
+    for (const id of ['shared1', 'solo1', 'nobody1']) await office(id);
+    for (const id of ['first', 'second', 'third', 'visitor']) await db.query('INSERT INTO users (id, name) VALUES ($1, $1)', [id]);
+    // Everyone who opened it with the owner key became an owner; signed-in visitors, members.
+    await member('second', 'shared1', 'owner', 10);
+    await member('first', 'shared1', 'owner', 20);
+    await member('third', 'shared1', 'owner', 5);
+    await member('visitor', 'shared1', 'member', 30);
+    await member('first', 'solo1', 'owner', 1);
+
+    expect(await migrate(db)).toEqual(['5 workspaces']);
+    const { rows } = await db.query('SELECT office_id, user_id, role FROM memberships ORDER BY office_id, user_id');
+    expect(rows).toEqual([
+      // The earliest owner keeps the office; the others become admins.
+      { office_id: 'shared1', user_id: 'first', role: 'owner' },
+      { office_id: 'shared1', user_id: 'second', role: 'admin' },
+      { office_id: 'shared1', user_id: 'third', role: 'admin' },
+      { office_id: 'shared1', user_id: 'visitor', role: 'member' },
+      { office_id: 'solo1', user_id: 'first', role: 'owner' },
+    ]);
+    const offices = await db.query('SELECT id, kind, guest_access, guest_token FROM offices ORDER BY id');
+    expect(offices.rows).toEqual(['nobody1', 'shared1', 'solo1'].map((id) => ({ id, kind: 'team', guest_access: 'open', guest_token: null })));
+
+    // Existing members have been there; new ones haven't, until they come in.
+    expect((await db.query('SELECT 1 FROM memberships WHERE last_visit_at IS NULL')).rowCount).toBe(0);
+    await member('visitor', 'solo1', 'member', 0);
+    expect((await db.query("SELECT last_visit_at FROM memberships WHERE user_id = 'visitor' AND office_id = 'solo1'")).rows).toEqual([{ last_visit_at: null }]);
+
+    // New offices let in members only; one owner each; only the known roles, kinds and access.
+    await office('new1');
+    expect((await db.query("SELECT kind, guest_access FROM offices WHERE id = 'new1'")).rows).toEqual([{ kind: 'team', guest_access: 'off' }]);
+    await expect(db.query("UPDATE memberships SET role = 'owner' WHERE user_id = 'second'")).rejects.toThrow(/memberships_one_owner_idx/);
+    await expect(member('visitor', 'nobody1', 'guest', 0)).rejects.toThrow(/memberships_role_check/);
+    await expect(db.query("UPDATE offices SET kind = 'shop' WHERE id = 'new1'")).rejects.toThrow(/offices_kind_check/);
+    await expect(db.query("UPDATE offices SET guest_access = 'everyone' WHERE id = 'new1'")).rejects.toThrow(/offices_guest_access_check/);
+
+    // Invitations: one per address and office, in lower case, gone with their office.
+    const invite = (id: string, email: string, tokenHash: string) =>
+      db.query(
+        `INSERT INTO office_invites (id, office_id, email, role, invited_by, token_hash, expires_at)
+         VALUES ($1, 'new1', $2, 'member', 'first', $3, now() + interval '14 days')`,
+        [id, email, tokenHash],
+      );
+    await invite('i1', 'pat@example.com', 'h1');
+    await expect(invite('i2', 'pat@example.com', 'h2')).rejects.toThrow(/office_invites_office_id_email_key/);
+    await expect(invite('i3', 'Sam@Example.com', 'h3')).rejects.toThrow(/office_invites_email_check/);
+    await expect(invite('i4', 'sam@example.com', 'h1')).rejects.toThrow(/office_invites_token_hash_key/);
+    await db.query("DELETE FROM offices WHERE id = 'new1'");
+    expect((await db.query('SELECT 1 FROM office_invites')).rowCount).toBe(0);
   });
 
   it('warn about edited migrations and apply new feature migrations in id order', async () => {
@@ -184,13 +241,14 @@ describe('importing office JSON files from earlier versions', () => {
     expect(log.mock.calls.flat().join(' ')).toMatch(/imported 2 of 3 office files/);
     expect(warn.mock.calls.flat().join(' ')).toMatch(/broken\.json/);
 
-    const { rows } = await db.query<{ id: string; owner_key: string; name: string }>(
-      "SELECT id, owner_key, data->'settings'->>'name' AS name FROM offices ORDER BY id",
+    const { rows } = await db.query<{ id: string; owner_key: string; name: string; guest_access: string }>(
+      "SELECT id, owner_key, data->'settings'->>'name' AS name, guest_access FROM offices ORDER BY id",
     );
+    // Imported offices, made before workspaces, are open to anyone with the address.
     expect(rows).toEqual([
-      { id: 'existing1', owner_key: 'db-key', name: 'From DB' },
-      { id: 'nested1', owner_key: 'key-nested1', name: 'Nested' },
-      { id: 'toplevel1', owner_key: 'key-toplevel1', name: 'Top' },
+      { id: 'existing1', owner_key: 'db-key', name: 'From DB', guest_access: 'off' },
+      { id: 'nested1', owner_key: 'key-nested1', name: 'Nested', guest_access: 'open' },
+      { id: 'toplevel1', owner_key: 'key-toplevel1', name: 'Top', guest_access: 'open' },
     ]);
     expect(existsSync(path.join(dataDir, 'offices'))).toBe(false);
     expect(readdirSync(path.join(dataDir, 'offices.imported')).sort()).toEqual(['broken.json', 'existing1.json', 'nested1.json', 'toplevel1.json']);

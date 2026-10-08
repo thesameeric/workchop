@@ -14,6 +14,8 @@ export function pairKey(a: string, b: string): string {
 /** Live state for one office: who is in it and which pairs have an open call. */
 export class Room {
   readonly players = new Map<string, PlayerState>();
+  /** The players (socket ids) who are here as guests, which caps how many there may be. */
+  readonly guests = new Set<string>();
   /** Pair key -> session id of that pair's current WebRTC connection. */
   readonly links = new Map<string, number>();
   /** Spotify listen-along sessions by jukebox id. */
@@ -69,6 +71,7 @@ export class Room {
 
   removePlayer(id: string): LinkChanges {
     this.players.delete(id);
+    this.guests.delete(id);
     const changes: LinkChanges = { added: [], removed: [] };
     for (const peer of this.linkedPeers(id)) {
       this.links.delete(pairKey(id, peer));

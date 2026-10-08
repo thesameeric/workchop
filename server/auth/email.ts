@@ -436,6 +436,8 @@ export function emailRoutes(router: express.Router, deps: EmailDeps) {
   return {
     /** The server can email links (sign-up, resets, email changes). */
     emailLinks,
+    /** Hashes a new password (with the hashing kept for links and changes); may throw PasswordsBusy. */
+    hashPassword: (password: string) => passwords.hash(password),
     /** People can sign in with a password: the server can email links, or someone has a password. */
     async password(): Promise<boolean> {
       if (emailLinks) return true;

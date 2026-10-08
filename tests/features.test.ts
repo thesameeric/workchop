@@ -99,8 +99,8 @@ describe('features', () => {
   it('handle socket events with the connection context and reach offices and users', async () => {
     const jar = new Jar();
     const pat = ((await (await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Pat', email: 'pat@example.com' }))).json()) as { user: AccountUser }).user;
-    const { id, ownerKey } = await createOffice(base);
-    const a = await join(base, id, 'Pat', { jar, ownerKey });
+    const { id } = await createOffice(base, jar);
+    const a = await join(base, id, 'Pat', { jar });
     const b = await join(base, id, 'Bea');
     // Pat also has a tab open elsewhere (named as the account is, whatever the page sends).
     const other = (await createOffice(base)).id;

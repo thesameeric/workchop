@@ -1,52 +1,34 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_AVATAR } from '../shared/avatar';
 import { jukeboxData, type SpotifySession } from '../shared/music';
-import type { ClientToServerEvents, JoinResponse, ServerToClientEvents } from '../shared/types';
+import type { ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
-
-type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
+import { createOffice as newOffice, disconnectAll, Jar, join as joinAs, json, member, type Client } from './helpers/http';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let dataDir: string;
 let base: string;
-const clients: Client[] = [];
 
 beforeAll(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-test-'));
-  server = await startServer({ port: 0, host: '127.0.0.1', dataDir, db: await createTestDb(), quiet: true, iceServers: [] });
+  server = await startServer({ port: 0, host: '127.0.0.1', dataDir, db: await createTestDb(), quiet: true, iceServers: [], auth: { google: null, apple: null, devLogin: true } });
   base = `http://127.0.0.1:${server.port}`;
 }, 60_000);
 
 afterAll(async () => {
-  for (const c of clients) c.disconnect();
+  disconnectAll();
   await server.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-async function createOffice(template = 'blank') {
-  const res = await fetch(`${base}/api/offices`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Test HQ', template }),
-  });
-  expect(res.status).toBe(201);
-  return (await res.json()) as { id: string; ownerKey: string };
-}
+/** An office owned by `owner` (an account of that name), with its guest link on. */
+const createOffice = (template = 'blank', owner = 'Owner') => newOffice(base, owner, 'Test HQ', template);
 
-async function join(officeId: string, name: string, ownerKey?: string) {
-  const socket: Client = connect(base, { transports: ['websocket'], forceNew: true });
-  clients.push(socket);
-  const res = await new Promise<JoinResponse>((resolve) => {
-    socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey }, resolve));
-  });
-  if (!res.ok) throw new Error(res.error);
-  return { socket, res };
-}
+/** Joins as a guest, or with a browser (the owner's, a member's). */
+const join = (officeId: string, name: string, jar?: Jar) => joinAs(base, officeId, name, { jar });
 
 /** The office as saved in the database. */
 async function saved(id: string) {
@@ -80,26 +62,32 @@ function nothing<E extends keyof ServerToClientEvents>(socket: Client, event: E,
 
 describe('REST API', () => {
   it('creates offices and reports them', async () => {
-    const { id, ownerKey } = await createOffice();
+    const { id, owner, guest } = await createOffice();
     expect(id).toMatch(/^[a-z0-9]{10}$/);
-    expect(ownerKey.length).toBeGreaterThan(16);
-    const info = await (await fetch(`${base}/api/offices/${id}`)).json();
-    expect(info).toMatchObject({ id, name: 'Test HQ', online: 0 });
+    const info = await (await owner.fetch(`${base}/api/offices/${id}`)).json();
+    expect(info).toEqual({ id, name: 'Test HQ', kind: 'team', role: 'owner', online: 0 });
+    const asGuest = await fetch(`${base}/api/offices/${id}`, { headers: { 'X-Workchop-Guest': guest } });
+    expect(await asGuest.json()).toEqual({ id, name: 'Test HQ', kind: 'team', role: 'guest', online: 0 });
     expect((await fetch(`${base}/api/offices/does-not-exist`)).status).toBe(404);
     expect((await fetch(`${base}/api/offices/..%2F..%2Fetc`)).status).toBe(404);
+    // Only people signed in make offices, and no owner key comes back.
+    expect((await fetch(`${base}/api/offices`, json({ name: 'Nope' }))).status).toBe(401);
+    const made = await owner.fetch(`${base}/api/offices`, json({ name: 'Two', kind: 'team', template: 'startup' }));
+    expect(made.status).toBe(201);
+    expect(Object.keys(await made.json())).toEqual(['id']);
+    for (const body of [{ template: 'castle' }, { kind: 'support' }, { kind: 'shop' }, { kind: 'support', template: 'blank' }]) {
+      expect((await owner.fetch(`${base}/api/offices`, json(body))).status).toBe(400);
+    }
   });
 
   it('saves names cut in the middle of an emoji', async () => {
     // Names are cut at a length limit; half an emoji left at the end can't be stored as JSON in Postgres.
-    const res = await fetch(`${base}/api/offices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'a'.repeat(47) + '😀 party' }),
-    });
+    const { owner: jar } = await createOffice();
+    const res = await jar.fetch(`${base}/api/offices`, json({ name: 'a'.repeat(47) + '😀 party' }));
     expect(res.status).toBe(201);
-    const { id, ownerKey } = (await res.json()) as { id: string; ownerKey: string };
-    expect(((await (await fetch(`${base}/api/offices/${id}`)).json()) as { name: string }).name).toBe('a'.repeat(47));
-    const owner = await join(id, 'Owner', ownerKey);
+    const { id } = (await res.json()) as { id: string };
+    expect(((await (await jar.fetch(`${base}/api/offices/${id}`)).json()) as { name: string }).name).toBe('a'.repeat(47));
+    const owner = await join(id, 'Owner', jar);
     const renamed = next(owner.socket, 'office:op');
     owner.socket.emit('office:op', { t: 'settings', settings: { name: 'b'.repeat(47) + '🎉 x' } });
     await renamed;
@@ -196,8 +184,8 @@ describe('realtime', () => {
   });
 
   it('private zones only link the people inside them', async () => {
-    const { id, ownerKey } = await createOffice();
-    const a = await join(id, 'Ann', ownerKey);
+    const { id, owner } = await createOffice();
+    const a = await join(id, 'Ann', owner);
     const b = await join(id, 'Bob');
     const c = await join(id, 'Cat');
     // Spread everybody out, then draw a room around Ann and Bob.
@@ -217,63 +205,78 @@ describe('realtime', () => {
     expect(await noLink).toBe(true);
   });
 
-  it('broadcasts and persists office edits, and enforces owner-only building', async () => {
-    const { id, ownerKey } = await createOffice();
-    const owner = await join(id, 'Owner', ownerKey);
+  it('broadcasts and persists office edits, and enforces who may build', async () => {
+    const { id, owner: ownerJar } = await createOffice();
+    const owner = await join(id, 'Owner', ownerJar);
+    const builder = await join(id, 'Mo', await member(base, server.db, id, 'Mo'));
+    const admin = await join(id, 'Ada', await member(base, server.db, id, 'Ada', 'admin'));
     const guest = await join(id, 'Guest');
-    expect(owner.res.ok && owner.res.isOwner).toBe(true);
-    expect(guest.res.ok && guest.res.isOwner).toBe(false);
+    expect(owner.res.ok && [owner.res.isOwner, owner.res.role]).toEqual([true, 'owner']);
+    expect(builder.res.ok && [builder.res.isOwner, builder.res.role]).toEqual([false, 'member']);
+    expect(guest.res.ok && [guest.res.isOwner, guest.res.role, guest.res.kind, guest.res.guests]).toEqual([false, 'guest', 'team', 'link']);
 
-    // Guests can build by default; edits are normalised (snapped) and echoed to everybody.
+    // Members build by default; edits are normalised (snapped) and echoed to everybody.
     const seen = next(owner.socket, 'office:op');
-    guest.socket.emit('office:op', { t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5.2, z: 5.1, rot: 0 } });
+    builder.socket.emit('office:op', { t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5.2, z: 5.1, rot: 0 } });
     const [op, by] = await seen;
     expect(op).toEqual({ t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5, z: 5, rot: 0 } });
-    expect(by).toBe(guest.res.ok && guest.res.selfId);
+    expect(by).toBe(builder.res.ok && builder.res.selfId);
 
-    // Guests can't change the build policy.
-    const refused = next(guest.socket, 'office:sync');
-    guest.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
+    // Guests with the guest link don't build.
+    const notGuests = next(guest.socket, 'office:sync');
+    guest.socket.emit('office:op', { t: 'remove', id: 'sofa1' });
+    expect((await notGuests)[1]).toMatch(/only members/i);
+
+    // Members can't change the build policy.
+    const refused = next(builder.socket, 'office:sync');
+    builder.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
     expect((await refused)[1]).toMatch(/owner/i);
 
-    // The owner can, after which guest edits bounce.
-    const policy = next(guest.socket, 'office:op');
+    // The owner can, after which members' edits bounce, and admins still build.
+    const policy = next(builder.socket, 'office:op');
     owner.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
     expect((await policy)[0]).toMatchObject({ t: 'settings', settings: { buildPolicy: 'owner' } });
-    const bounced = next(guest.socket, 'office:sync');
-    guest.socket.emit('office:op', { t: 'remove', id: 'sofa1' });
+    const bounced = next(builder.socket, 'office:sync');
+    builder.socket.emit('office:op', { t: 'remove', id: 'sofa1' });
     const [office, reason] = await bounced;
     expect(reason).toMatch(/only the owner/i);
     expect(office.items.some((i) => i.id === 'sofa1')).toBe(true);
+    const byAdmin = next(owner.socket, 'office:op');
+    admin.socket.emit('office:op', { t: 'add', item: { id: 'lamp1', type: 'floor-lamp', x: 7, z: 7, rot: 0 } });
+    expect((await byAdmin)[0]).toMatchObject({ t: 'add', item: { id: 'lamp1' } });
 
     // Invalid edits are rejected with a resync rather than corrupting state.
     const invalid = next(owner.socket, 'office:sync');
     owner.socket.emit('office:op', { t: 'add', item: { id: 'x', type: 'death-star', x: 1, z: 1, rot: 0 } });
     expect((await invalid)[1]).toMatch(/invalid/i);
 
-    // Everything is saved, and the owner key is never sent to clients.
+    // Everything is saved, and the owner key and guest token are never sent to clients.
     await server.store.flush();
     const stored = await saved(id);
     expect(stored.office.items.some((i) => i.id === 'sofa1')).toBe(true);
     expect(stored.office.settings.buildPolicy).toBe('owner');
-    expect(JSON.stringify(guest.res)).not.toContain(ownerKey);
+    const secrets = server.store.peek(id)!;
+    for (const res of [owner.res, guest.res]) {
+      expect(JSON.stringify(res)).not.toContain(secrets.ownerKey);
+      expect(JSON.stringify(res)).not.toContain(secrets.guestToken);
+    }
   });
 
   it('jukebox changes are shared, saved, and protected from build edits', async () => {
-    const { id, ownerKey } = await createOffice('startup');
-    const owner = await join(id, 'Owner', ownerKey);
-    const guest = await join(id, 'Guest');
+    const { id, owner: ownerJar } = await createOffice('startup');
+    const owner = await join(id, 'Owner', ownerJar);
+    const guest = await join(id, 'Guest', await member(base, server.db, id, 'Guest'));
     const office = owner.res.ok ? owner.res.office : null;
     const jukebox = office!.items.find((i) => i.type === 'jukebox')!;
     expect(jukeboxData(jukebox).station).toBe('lofi');
 
-    // Any guest can change the station; everyone gets the update.
+    // Anyone can change the station; everyone gets the update.
     const seen = next(owner.socket, 'office:op');
     guest.socket.emit('music', { t: 'station', itemId: jukebox.id, station: 'ambient' });
     const [op] = await seen;
     expect(op).toMatchObject({ t: 'update', item: { id: jukebox.id, data: { station: 'ambient' } } });
 
-    // Guests can't set up a custom stream when only the owner may edit.
+    // Members can't set up a custom stream when only the owner may edit.
     owner.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
     await next(guest.socket, 'office:op');
     const refused = next(guest.socket, 'notice');
@@ -306,8 +309,8 @@ describe('realtime', () => {
   });
 
   it('runs Spotify listen-along sessions: start, take over, stop, and end when the DJ leaves', async () => {
-    const { id, ownerKey } = await createOffice('startup');
-    const a = await join(id, 'Ann', ownerKey);
+    const { id, owner } = await createOffice('startup', 'Ann');
+    const a = await join(id, 'Ann', owner);
     const b = await join(id, 'Bob');
     const jukebox = (a.res.ok ? a.res.office : null)!.items.find((i) => i.type === 'jukebox')!;
     const track = (n: number) => ({ uri: `spotify:track:4uLU6hMCjMI75M1A2tKUQ${n}`, name: `Song ${n}`, artists: 'Band', durationMs: 180_000, positionMs: 0, paused: false });
@@ -371,8 +374,8 @@ describe('realtime', () => {
   });
 
   it('ends listen-along sessions whose jukebox is re-typed or cut off by a smaller floor', async () => {
-    const { id, ownerKey } = await createOffice('startup');
-    const a = await join(id, 'Ann', ownerKey);
+    const { id, owner } = await createOffice('startup', 'Ann');
+    const a = await join(id, 'Ann', owner);
     const b = await join(id, 'Bob');
     const office = (a.res.ok ? a.res.office : null)!;
     const jukebox = office.items.find((i) => i.type === 'jukebox')!;
@@ -422,8 +425,8 @@ describe('realtime', () => {
   });
 
   it('keeps item data through moves, and drops it when an item is re-typed', async () => {
-    const { id, ownerKey } = await createOffice('startup');
-    const owner = await join(id, 'Olive', ownerKey);
+    const { id, owner: jar } = await createOffice('startup');
+    const owner = await join(id, 'Olive', jar);
     const office = owner.res.ok ? owner.res.office : null;
     const jukebox = office!.items.find((i) => i.type === 'jukebox')!;
     const moved = next(owner.socket, 'office:op');

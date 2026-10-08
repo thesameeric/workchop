@@ -1,6 +1,7 @@
 import { PLANTS } from '../../../../shared/plants';
 import type { OfficeItem } from '../../../../shared/types';
 import { deskOwner, isLightOn, isLightSwitch, LAMP_TYPES, SWITCH_TYPE, type DeskNote, type StickySummary } from '../../../../shared/world';
+import { may } from '../../../../shared/workspace';
 import { onSession } from '../../lib/session';
 import { dismissToast, getState, setPanel, toast, useStore } from '../../state/store';
 import { StickyNoteIcon } from '../../ui/icons';
@@ -62,7 +63,7 @@ registerNearbyAction('world-lights', (office, x, z) => {
   return { distance: best.d, hint: `${how} to turn ${what} ${on ? 'off' : 'on'}`, run: () => toggleLight(item) };
 });
 
-// "My desk" in the dock, for signed-in people (guests can't have a desk).
+// "My desk" in the dock, for members (guests can't have a desk).
 const deskPanel: PanelDef = {
   id: 'desk',
   title: 'My desk',
@@ -77,9 +78,9 @@ const deskPanel: PanelDef = {
 };
 let removePanel: (() => void) | null = null;
 const syncPanel = () => {
-  const signedIn = !!getState().account;
-  if (signedIn && !removePanel) removePanel = registerPanel(deskPanel);
-  else if (!signedIn && removePanel) {
+  const member = may(getState().role, 'see-members');
+  if (member && !removePanel) removePanel = registerPanel(deskPanel);
+  else if (!member && removePanel) {
     removePanel();
     removePanel = null;
   }

@@ -18,21 +18,22 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Walking animation, sitting on chairs, sofas and stools, and 10 reactions everyone sees (`1`–`9`, `0`): 👋 waves, ❤️ sends hearts floating up, 😂, 👍, 🎉 pops 3D confetti (and showers your own screen a little), ✋ raises a hand, 💃 dances for a few seconds (until you walk off), 👏 claps, 🔥 lights little flames and 🙌 throws both arms up.
 - Your look and name are saved in the browser and can be changed at any time, even inside an office.
 
-**Accounts (optional)**
-- Sign up with your email address and a password, or with Google, Apple or GitHub (see [Accounts and sign-in](#accounts-and-sign-in)): you choose your name and character once, change them in *Profile*, and keep them with your status, theme and weather settings on every device. The offices you visit are under *Your spaces*. Anyone with an office link can still join as a guest.
+**Accounts and workspaces**
+- Sign up with your email address and a password, or with Google, Apple or GitHub (see [Accounts and sign-in](#accounts-and-sign-in)): you choose your name and character once, change them in *Profile*, and keep them with your status, theme and weather settings on every device.
+- **Workspaces** (see [Workspaces](#workspaces)): each office has an owner, admins and members. Making one needs an account. New workspaces let in their members only; turn on a **guest link** to let others in without an account. Owners and admins add people by email: someone with an account joins at once, anyone else gets an invitation. Signed in, Workchop opens your most recent workspace; the others are on the home page and in the menu on the office's name.
 - Light and dark themes, or follow the device (*Settings > Appearance*).
 
 **The office**
 - Two starting templates: a furnished startup office with desk pods, a glass meeting room, a lounge, a kitchen and ping pong, or a blank floor.
 - **Build mode** (hammer button or `B`): 45 pieces of furniture, structure and plants in 7 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
-- Office settings: name, floor size, floor style and colour, wall colour, and spawn point. The owner can lock building to themselves.
+- Office settings: name, floor size, floor style and colour, wall colour, and spawn point. Members build by default; the owner can leave building to themselves and the admins.
 - Every edit is synced live to everyone in the office and saved on the server.
 
 **Little things in the world**
 - **Desk monitors** are off until someone sits at the desk: then the screen wakes up (a glow and a logo) and shows the app they're working in, when they share it, or a calm wallpaper with their name and the time. Everyone sees it, and it goes dark a second after they get up.
 - **Lights:** click a floor lamp or desk lamp to switch it on or off for everyone. A **light switch** (Build → Structure; put it against a wall) works the ceiling lights of the private area in front of it, or of the open office: switched off, that area goes dark for everyone, while its lamps and lit monitors keep glowing. Walk up to one and press `E`, or click it.
 - **Plants:** 13 species (Build → Plants), from a monstera and a bird of paradise to a bonsai and a barrel cactus. Small ones stand on desks, tables and shelves. Click one to see what it is: where it comes from, how much light and water it needs, whether it's safe for pets (per the ASPCA where it lists the plant), and a fun fact.
-- **Your desk:** signed-in people click a free desk and choose *Make this my desk* (one per office; claiming another moves you). Your name goes on a name plate. Anyone, guests included, can click your desk and leave you a sticky note (up to 500 characters, in four colours); notes from guests are marked *guest*, since anyone with the link can join under any name, and a desk takes at most 10 unread ones from guests, so there's always room for your coworkers'. The notes stack up on the desk for everyone to see, but only you read them: you get a toast when one arrives, or a reminder when you come in, and *My desk* in the dock (in its More menu on phones) lists them to mark as read or throw away. Whoever wrote a note can take it back. Owners and people who can edit the office can free a desk.
+- **Your desk:** members click a free desk and choose *Make this my desk* (one per office; claiming another moves you). Your name goes on a name plate. Anyone, guests included, can click your desk and leave you a sticky note (up to 500 characters, in four colours); notes from guests are marked *guest*, since anyone with a guest link can join under any name, and a desk takes at most 10 unread ones from guests, so there's always room for your coworkers'. The notes stack up on the desk for everyone to see, but only you read them: you get a toast when one arrives, or a reminder when you come in, and *My desk* in the dock (in its More menu on phones) lists them to mark as read or throw away. Whoever wrote a note can take it back. Owners and people who can edit the office can free a desk.
 
 **GitHub notifications**
 - People who sign in can connect their GitHub account (optional, needs a GitHub OAuth App, see [GitHub](#github)). The GitHub panel sorts their unread notifications into Mentions, Reviews, Actions and Activity, with a badge for unread mentions, review requests and failed runs. Click one to open it on GitHub. Marking items read or done in the panel does the same on GitHub.
@@ -45,7 +46,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Spotify listen-along** (optional, needs `SPOTIFY_CLIENT_ID`, see below): people connect their own Spotify Premium account, someone presses ▶ "Play for everyone", and everyone connected at that jukebox hears the same track at the same position on their own account. Workchop only syncs what's playing; it never streams audio from one person to another.
 
 **Chat**
-- **Channels** for the whole office: every office starts with #general, anyone can add more (with a topic), and the owner and signed-in people who may edit the office rename and archive them.
+- **Channels** for the whole office: every office starts with #general, anyone can add more (with a topic), and the owner and admins rename and archive them.
 - **Direct messages**, saved when both people are signed in (they wait for whoever is away: start one with **+** next to Direct messages). With guests they're live: they last while you're both in the office, and what a guest sent you stays until you've read it. **Nearby** is a live chat with the people you're talking with.
 - **Threads** (reply to any message, optionally also in the channel), **@mentions** of people here or away and `@here` for everyone online, **reactions**, editing and deleting your messages, and light formatting: `**bold**`, `_italic_`, `` `code` ``, code blocks and links.
 - **Files:** attach, drag in or paste up to 5 per message. Images show as previews that open full size; other files as cards to download.
@@ -87,7 +88,7 @@ npm install
 npm run dev
 ```
 
-Open the `Local:` address it prints (normally http://localhost:5173), create an office, pick a name and join. Allow the camera and microphone when the browser asks.
+Open the `Local:` address it prints (normally http://localhost:5173), sign up (without `RESEND_API_KEY` the email's link is printed in the terminal; `DEV_LOGIN=true npm run dev` adds a sign-in with just a name), create a workspace and go in. Allow the camera and microphone when the browser asks.
 
 Data is kept in `./data`: an embedded Postgres ([PGlite](https://pglite.dev), no setup) in `data/db` and uploaded files in `data/uploads`. Only one server can use a data folder at a time.
 
@@ -95,7 +96,7 @@ Data is kept in `./data`: an embedded Postgres ([PGlite](https://pglite.dev), no
 
 ### Testing a call
 
-**On your own:** copy the invite link (link button in the top bar) and open it in a private/incognito window, which gets its own name and character. New arrivals start next to each other, so the video tiles at the top show up straight away. Walk apart (WASD, or click the floor) and they disappear; walk back and they return. Use headphones or mute one window to avoid echo.
+**On your own:** turn on the guest link (*Invite people* in the dock), copy it and open it in a private/incognito window, which comes in as a guest with its own name and character. New arrivals start next to each other, so the video tiles at the top show up straight away. Walk apart (WASD, or click the floor) and they disappear; walk back and they return. Use headphones or mute one window to avoid echo.
 
 **With other people or your phone:** browsers only allow the camera and microphone on HTTPS (or `localhost`). The `Network:` address Vite prints works on your Wi-Fi, but people joining that way can only watch and listen. For full two-way calls, run the production build behind any HTTPS tunnel and share the `https://…` address it prints:
 
@@ -124,7 +125,7 @@ docker compose up -d --build
 Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose up -d --build`. To try the stack on your own machine, set `DOMAIN=localhost` and accept the browser's warning about Caddy's local certificate.
 
 - **Where the data lives:** in the `db-data` Docker volume (offices, accounts and, unless you set up a bucket, uploaded files), and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
-- **Sign-in (optional):** see [Accounts and sign-in](#accounts-and-sign-in). Compose sets `PUBLIC_URL` to `https://<DOMAIN>`.
+- **Sign-in:** making a workspace needs an account, so set up at least one way to sign in: see [Accounts and sign-in](#accounts-and-sign-in). Compose sets `PUBLIC_URL` to `https://<DOMAIN>`.
 - **GitHub sign-in and notifications (optional):** set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env` for sign-in, and `TOKEN_ENCRYPTION_KEY` as well for notifications, see [GitHub](#github).
 - **TURN (optional):** people behind strict corporate firewalls may need a relay for calls to connect. The simplest is [Cloudflare's TURN service](#cloudflare-turn-for-calls). To run your own instead, set `TURN_URL=turn:<DOMAIN>:3478`, `TURN_USERNAME` and `TURN_CREDENTIAL` in `.env`, open TCP/UDP 3478 and UDP 49160–49200, and start with `docker compose --profile turn up -d --build`.
 
@@ -195,14 +196,15 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 
 | Data | Where |
 | --- | --- |
-| Offices: layout, furniture, private areas, settings, owner key | The database: Postgres when `DATABASE_URL` is set, otherwise PGlite in `DATA_DIR/db` |
-| Accounts (people who signed in): name, email and whether it's verified, character and settings, sign-in methods, sessions, which offices they belong to | The database. Passwords are stored as a scrypt hash, sessions as a SHA-256 of the cookie's token |
+| Offices: layout, furniture, private areas, settings, kind, who besides members may come in, the guest link's token, the owner key of offices made before accounts | The database: Postgres when `DATABASE_URL` is set, otherwise PGlite in `DATA_DIR/db` |
+| Accounts (people who signed in): name, email and whether it's verified, character and settings, sign-in methods, sessions, which offices they belong to and their role there | The database. Passwords are stored as a scrypt hash, sessions as a SHA-256 of the cookie's token |
+| Invitations to a workspace: the address, the role, who sent it, when it expires | The database, as a SHA-256 of the link's token. Each works once, for 14 days; a clean-up every hour deletes expired ones |
 | Emailed links (signing up, setting or resetting a password, changing the email address): the address, the account, when the link expires | The database, as a SHA-256 of the link's token. Each works once, for 24 hours (1 hour for password links); a clean-up every hour deletes expired ones |
 | Emails in development (the dev outbox, without `RESEND_API_KEY`) | In memory (the last 50) and the server's log, which shows their links |
 | GitHub connections: the GitHub account's id and login, access and refresh tokens, their scopes and expiry | The database, with the tokens encrypted (AES-256-GCM, `TOKEN_ENCRYPTION_KEY`). Tokens never reach browsers. The notifications are kept in memory only, while their owner is in an office and for 10 minutes after they leave |
 | GitHub connections being made: who started them, the PKCE verifier, the page to go back to, a SHA-256 of the `state` | The database. Each can be used once, within 10 minutes; a clean-up every hour deletes unfinished ones |
 | Uploaded files | An S3/R2 bucket when `S3_*` is set, otherwise the database with Postgres, or `DATA_DIR/uploads` with PGlite (`UPLOADS_STORAGE` picks one) |
-| Names and characters of guests | Each person's browser (local storage) |
+| Names and characters of guests, guest links opened | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
 | Lamps and light switches (on or off), who has claimed which desk | With the office (part of each item) |
 | Notes left on desks: text, colour, author, when, read or not | The database (`desk_notes`), until the desk's owner or the author throws them away. Each owner keeps at most 50 per office; the oldest read ones make room |
@@ -235,7 +237,7 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 
 Everything is set with environment variables: in `.env` for Docker Compose (see `.env.example`), and on Cloudflare Containers as wrangler secrets (`npx wrangler secret put NAME`) or, for the ones that aren't secret, under `vars` in `cloudflare/wrangler.jsonc`. Keep the ones marked secret out of the repository and of logs.
 
-**Deploy checklist.** Required: a database (`DATABASE_URL`; Compose runs its own Postgres, and needs `DOMAIN` and `POSTGRES_PASSWORD` in `.env`) and `PUBLIC_URL`, the HTTPS address people use (Compose sets it from `DOMAIN`). Then, as needed: email through Resend (for signing up with an email address and password), sign-in with Google, Apple and/or GitHub, a bucket for uploaded files (R2 on Cloudflare), TURN for people behind strict firewalls, GitHub notifications, Spotify listen-along, an Open-Meteo key for commercial use, and how long to keep chat. Everything else has a sensible default.
+**Deploy checklist.** Required: a database (`DATABASE_URL`; Compose runs its own Postgres, and needs `DOMAIN` and `POSTGRES_PASSWORD` in `.env`) and `PUBLIC_URL`, the HTTPS address people use (Compose sets it from `DOMAIN`). Making workspaces needs an account, so set up at least one way to sign in: email through Resend (signing up with an email address and password) or Google, Apple or GitHub; without one, the home page only offers joining with a link. Then, as needed: a bucket for uploaded files (R2 on Cloudflare), TURN for people behind strict firewalls, GitHub notifications, Spotify listen-along, an Open-Meteo key for commercial use, and how long to keep chat. Everything else has a sensible default.
 
 | Variable | Needed? | Secret? | Default | What it's for, and where to get it |
 | --- | --- | --- | --- | --- |
@@ -272,7 +274,7 @@ STUN alone is enough on most home and office networks. People behind strict corp
 
 ### Accounts and sign-in
 
-Signing in is optional: anyone with an office link can still join as a guest. People with an account choose their name and character once, when they sign up, and change them in *Profile*; offices show them as their account has them (the lobby doesn't ask again). They keep their status, theme and weather settings across devices, and the home page lists the offices they visit under *Your spaces* (with who's in them right now), the ones they created (or opened with the owner key) as their own. The sign-in options (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
+Making a workspace needs an account; coming into one with its guest link doesn't (see [Workspaces](#workspaces)). People with an account choose their name and character once, when they sign up, and change them in *Profile*; offices show them as their account has them (the lobby doesn't ask again). They keep their status, theme and weather settings across devices, and the home page lists the workspaces they belong to (with who's in them right now), most recently used first. The sign-in options (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
 
 - **Email and password** (needs [email](#email)): people enter their address and get a link that works for 24 hours, where they choose their name, character and password (at least 10 characters, not the email address, no other rules). They then sign in with the address and password. *Forgot password?* mails a link that works for an hour, and using it signs the account out everywhere else (setting a first password this way signs no one out); changing the password in *Profile* signs out its other devices. Changing the email address in *Profile* asks for the password (when the account has one) and mails a link to the new address, which must be opened while signed in to the account that asked; only the newest such link works. Once confirmed, the old address gets a note about it and the account's other devices are signed out. Answers never tell whether an address has an account: signing up with an address that has one sends an email saying so, with a link to set a password, and asking for an address another account has sends nothing. Passwords are hashed with scrypt.
 - **Google:** in the Google Cloud console (Google Auth Platform), set up the branding, set the audience to *External* and publish it to *In production* (for just name, email and profile no review is needed). Create a *Web application* client with the redirect URI `https://<your host>/api/auth/google/callback` (and `http://localhost:5173/api/auth/google/callback` for development), copy the secret right away (it's shown once), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Google deletes clients that go unused for six months.
@@ -286,19 +288,37 @@ Sessions last 30 days from the last visit, in an HttpOnly cookie (`__Host-wc_ses
 
 #### Email
 
-Workchop emails sign-up links, password resets and email-change confirmations through [Resend](https://resend.com):
+Workchop emails sign-up links, password resets, email-change confirmations and workspace invitations through [Resend](https://resend.com):
 
 1. Add a domain you own in Resend (a subdomain such as `mail.example.com` works) and create the DNS records it lists (SPF and DKIM). A `workers.dev` address can't send email.
 2. Create an API key with sending access and set it as `RESEND_API_KEY` (a secret), and set `EMAIL_FROM` to the sender, e.g. `Workchop <noreply@mail.example.com>`. With a key but no valid `EMAIL_FROM`, the server doesn't start; the log says what's wrong. The links in the emails point at `PUBLIC_URL`.
 
 Without a key, `npm run dev` keeps the emails in a dev outbox and prints their links to the server's log, so signing up works locally. In production without a key, email is off: signing up with email and password resets aren't offered (people who have a password can still sign in with it), and the log says so. The server never logs the key or whole addresses. Resend's free plan has a daily sending limit (see its pricing page). Apple's private relay addresses only get email from domains registered with Apple (*Sign in with Apple for Email Communication* in the Apple Developer portal).
 
+### Workspaces
+
+Each office is a workspace with one **owner**, and **admins** and **members** who signed in. Its kind (a team office, for now) is fixed when it's made.
+
+| Who | Can |
+| --- | --- |
+| Owner | Everything: add and remove admins and members, change roles, hand the workspace to another member (becoming an admin), the guest link, who may build |
+| Admin | Add and remove members, the guest link, always build |
+| Member | Build (unless the owner left building to the admins), leave |
+| Guest | Come in with the guest link; build only in offices made before workspaces |
+
+- **Coming in.** After their first visit on a browser, members go straight in, skipping the lobby: the microphone and camera come on only if the browser already allows them (otherwise a toast says to press `M`), and when the browser blocks sound until a click, a pill says so. Leaving takes you home, and that tab stays there (no going back in by itself). Guest links (`#guest=`) are kept per office in the browser and taken out of the address. The dock has *Invite people* for owners and admins and *Copy link* for members.
+- **Who comes in.** Members always. New workspaces let in nobody else until an owner or admin turns on the **guest link** (*Settings > Workspace*): `/o/<id>#guest=<token>`. Anyone with it comes in as a guest, without an account; a new link stops the old one working (guests already in stay until they leave or reconnect), and turning it off takes the guests out. Signing in never makes someone a member: they're added. Guests take at most 90 of an office's 100 places. Owners and admins moderate chat (rename and archive channels, delete messages).
+- **Adding people.** Owners and admins (with a confirmed email address) add people by email. An account that has confirmed that address joins at once and gets an email saying so; anyone else gets an invitation to `/invite#t=…` that works once, for 14 days. That page shows the workspace and makes their account (or accepts it signed in with that address) and takes them in; signing up or confirming that address later joins them too. Answers say whether an address has an account, so adding people is limited (30 an hour per person, 100 a day per workspace).
+- **Offices made before workspaces** stay open to anyone with the address until their owner turns the guest link on or off (it can't be opened up again). People who had signed in there stay members, and owners stay owners; where an office had several, the earliest keeps it and the others are admins. Offices made without an account belong to whoever kept the owner key: signed in, they add them to their account from the home page (or by coming in), and until then the key still lets them edit. **When updating a server from before workspaces:** existing offices stay open, and in one nobody owns yet nobody can be added as a member until someone signs in with the creator's browser and claims it.
+
+The members API, for owners and admins (members can list members and leave): `GET /api/offices/<id>/members`, `POST …/members {email, role}` (201 added, 202 invited), `PATCH …/members/<userId> {role}`, `DELETE …/members/<userId>`, `POST …/owner {userId}`, `DELETE …/invites/<id>`, `POST …/invites/<id>/resend`, `PUT …/access {guests: "off" | "link"}` and `POST …/access/reset`. People who aren't members get 403 without the workspace's name.
+
 ### Chat
 
 Chat works out of the box; it keeps its messages in the database and attached files with the other uploads (`UPLOAD_MAX_BYTES` per file, `UPLOADS_QUOTA_MB` per office). Who may do what:
 
 - Everyone in an office, guests included, can read and write in its channels, create channels, set a channel's topic, and edit or delete their own messages. Guests are known by their connection, so after a reload they can no longer edit what they wrote before.
-- The owner, and signed-in people who may edit the office (everyone, unless the owner locked building to themselves), can also rename and archive channels and delete anyone's channel messages. Guests can't, even where they may build. #general can't be renamed or archived. Archived channels keep their history and can be unarchived.
+- The owner and admins can also rename and archive channels and delete anyone's channel messages; members and guests can't. #general can't be renamed or archived. Archived channels keep their history and can be unarchived.
 - Direct messages are only ever sent to, and readable by, the two people in them.
 
 Deleting a message deletes its files too. Set `CHAT_RETENTION_DAYS` to have messages deleted automatically, with their threads and files, once nobody has written in them (or in their thread) for that many days; files sent in live messages go after that long too. The server checks at most hourly, when someone comes in.
@@ -449,7 +469,8 @@ server/   Express + Socket.IO
   repos.ts     Offices in SQL (one jsonb row each)
   db/          The database (Postgres or PGlite), migrations, import of old JSON offices
   auth/        Sign-in with email and password, Google, Apple, GitHub or the dev login; cookie sessions
-  accounts.ts  Users, sign-in identities and passwords, one account per verified email, office memberships
+  accounts.ts  Users, sign-in identities and passwords, one account per verified email
+  workspaces.ts  Members, roles, invitations, guest links: who may come into an office
   mail.ts      Sending email through Resend, or the dev outbox (templates in mailTemplates.ts)
   uploads.ts   File uploads and downloads (database, disk or S3/R2)
   features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
@@ -488,7 +509,7 @@ npm test          # unit tests for geometry/office rules + server integration te
 
 Tests use an in-memory PGlite. They run against real Postgres instead when `TEST_DATABASE_URL` points at a database they may write to (each test file gets its own schema), e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`. Run both before changing SQL: production may run Postgres 16 while PGlite is Postgres 18.
 
-**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register(ctx)` gets: `app`, an Express router mounted at `/api` (after `express.json`, before the API's 404; a guard already refuses cross-site `POST`/`PATCH`/`DELETE`); `io`; `db`, the database; `store`, the office store; `auth.userFromRequest(req)` and the `auth.requireUser` middleware (401 for guests, else the user in `res.locals.user`); `uploads` (e.g. `uploads.remove(ids)` deletes stored files); `publicOrigin` (`PUBLIC_URL`'s origin, or null); `clientIp(req)` (the visitor's IP address, from `CLIENT_IP_HEADER` behind a proxy, for per-visitor limits) and `socketIp(socket)` (the same for a connection, which stays put when a guest reconnects); `quiet` (true in tests: leave out messages that only say things are working); `onClose(fn)` (runs when the server closes, before the database does: stop timers there); and `realtime`: `onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `playersOfUser`, `updatePlayer` (changes a player and tells the office), `contextOf(socketId)`, `onlineCount`, `linkedPeers`. Each connection's context (`s`) has `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `isOwner()`, `mayEdit()` and `limiter(rate, burst)`. Socket ids are visible to everyone in the office, so an HTTP route shouldn't trust an `X-Workchop-Socket` header alone: also limit by `clientIp(req)`, or check a secret only that socket has (like the upload key). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
+**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register(ctx)` gets: `app`, an Express router mounted at `/api` (after `express.json`, before the API's 404; a guard already refuses cross-site `POST`/`PATCH`/`DELETE`); `io`; `db`, the database; `store`, the office store; `auth.userFromRequest(req)` and the `auth.requireUser` middleware (401 for guests, else the user in `res.locals.user`); `uploads` (e.g. `uploads.remove(ids)` deletes stored files); `publicOrigin` (`PUBLIC_URL`'s origin, or null); `clientIp(req)` (the visitor's IP address, from `CLIENT_IP_HEADER` behind a proxy, for per-visitor limits) and `socketIp(socket)` (the same for a connection, which stays put when a guest reconnects); `quiet` (true in tests: leave out messages that only say things are working); `onClose(fn)` (runs when the server closes, before the database does: stop timers there); and `realtime`: `onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `playersOfUser`, `updatePlayer` (changes a player and tells the office), `contextOf(socketId)`, `onlineCount`, `linkedPeers`. Each connection's context (`s`) has `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (`owner`, `admin`, `member` or `guest`; check permissions with `may()` from `shared/workspace.ts`), `isOwner()`, `mayEdit()` and `limiter(rate, burst)`. Socket ids are visible to everyone in the office, so an HTTP route shouldn't trust an `X-Workchop-Socket` header alone: also limit by `clientIp(req)`, or check a secret only that socket has (like the upload key). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
 
 **Adding a client feature:** create `client/src/features/<name>/index.ts` (or `.tsx`); every such file is loaded at startup, so nothing else needs editing. From there:
 
@@ -513,7 +534,8 @@ Coins are off (see [Coins](#coins-off-for-now)): `COINS=on npm run dev` brings b
 ## Limits
 
 - Calls are a mesh: each person sends their stream to every person they're near. That works well for conversations of up to about 8 people. Larger groups (stages, all-hands) would need an SFU such as LiveKit or mediasoup.
-- Anyone with an office link can join it. The owner key, stored in the creator's browser, only controls who may edit.
+- A guest link is a shared secret: anyone it's passed on to comes in until it's reset or turned off. Offices made before workspaces are open to anyone with their address until their owner changes that. An office takes 100 people, at most 90 of them guests.
+- Workspaces: each account makes up to 10 an hour (and each visitor 30), adds or invites up to 30 people an hour, and a workspace takes 100 new people or invitations a day.
 - Sign-in: each visitor (an IPv4 address, or an IPv6 /64) can make 60 sign-in requests (signing in or up, emailed links, password and email changes) per 15 minutes. An address can be tried with 10 wrong passwords per 15 minutes from each visitor and 100 from everyone, so strangers can't easily lock someone out. Each address gets at most 5 emails an hour, plus a password reset every 15 minutes whatever else was sent, and each visitor can have 20 emails sent an hour. Checking a password takes scrypt about 100 ms and 32 MB: the server checks one sign-in at a time, keeps a second slot for sign-up links, resets and changes, and lets up to 16 wait for each; past that, people are asked to try again in a moment. Sign-ins for addresses without a password and wrong passwords share a budget of 600 checks per 15 minutes; past it, addresses without a password only wait as long as a check would take.
 - Chat: each person can send about one message a second (bursts of 6) and create a channel every 20 seconds (bursts of 3); an office has up to 200 open channels. Messages are up to 4,000 characters with up to 5 files, and history loads 50 messages at a time.
 - Uploads: each office keeps up to `UPLOADS_QUOTA_MB` of files. Each visitor (IP address) can send 3 files at once and 60 per 10 minutes, and the server holds at most 4 files of the maximum size in memory at a time.

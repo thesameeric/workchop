@@ -430,8 +430,6 @@ function ThreadView({ id, conv }: { id: string; conv: ConvKey }) {
 /** Creating a channel, or renaming one / setting its topic. */
 function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClose: () => void }) {
   const canManage = useMayModerate();
-  const guestEditor = useStore((s) => !s.account && s.office?.settings.buildPolicy === 'everyone');
-  const signInOffered = useStore(canSignIn);
   const canRename = !channel || (canManage && !channel.isDefault);
   const [name, setName] = useState(channel?.name ?? '');
   const [topic, setTopic] = useState(channel?.topic ?? '');
@@ -486,15 +484,7 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
           <input value={topic} autoFocus={!canRename} maxLength={MAX_TOPIC} placeholder="What’s it about?" onChange={(e) => setTopic(e.target.value)} />
         </label>
         {channel && !canRename && (
-          <p className="muted small">
-            {channel.isDefault
-              ? '#general keeps its name.'
-              : !guestEditor
-                ? 'Only people who can edit this office can rename channels.'
-                : signInOffered
-                  ? 'Sign in to rename channels.'
-                  : 'Only the owner can rename channels here.'}
-          </p>
+          <p className="muted small">{channel.isDefault ? '#general keeps its name.' : 'Only the owner and admins can rename channels.'}</p>
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="chat-dialog-actions">

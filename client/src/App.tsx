@@ -12,8 +12,10 @@ import { Welcome } from './ui/Welcome';
 
 function Page() {
   const phase = useStore((s) => s.phase);
+  const officeId = useStore((s) => s.officeId);
   if (phase === 'office') return <OfficeView />;
-  if (phase === 'lobby') return <Lobby />;
+  // Another office's lobby starts afresh.
+  if (phase === 'lobby') return <Lobby key={officeId} />;
   if (phase === 'auth') return <AuthPage />;
   if (phase === 'profile') return <ProfilePage />;
   if (phase === 'welcome') return <Welcome />;

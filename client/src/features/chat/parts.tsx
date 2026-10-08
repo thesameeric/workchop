@@ -16,11 +16,8 @@ import {
 } from '../../ui/icons';
 import { mentionsMe } from './state';
 
-/**
- * You may rename and archive channels and delete others' messages (the server's mayModerate): as
- * the owner, or signed in where everyone may edit the office.
- */
-export const useMayModerate = () => useStore((s) => !!s.office && (s.isOwner || (!!s.account && s.office.settings.buildPolicy === 'everyone')));
+/** You may rename and archive channels and delete others' messages (the server's mayModerate): the owner and admins. */
+export const useMayModerate = () => useStore((s) => !!s.office && (s.isOwner || s.role === 'admin'));
 
 export function Avatar({ name, size = 32, className }: { name: string; size?: number; className?: string }) {
   return (

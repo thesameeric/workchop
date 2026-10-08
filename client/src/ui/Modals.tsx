@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
 import { signOut } from '../lib/account';
 import { getSession } from '../lib/session';
-import { setState, useStore } from '../state/store';
+import { getState, setState, useStore } from '../state/store';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { CloseIcon } from './icons';
 import { ProfileSections } from './Profile';
@@ -29,7 +29,7 @@ function Modal({ title, children, onClose, className }: { title: string; childre
   );
 }
 
-const close = () => setState({ modal: 'none' });
+const close = () => setState({ modal: 'none', settingsSection: null });
 
 /** A guest's name and character (signed-in people edit theirs in the profile). */
 function AvatarModal() {
@@ -64,7 +64,7 @@ function AvatarModal() {
 
 function SettingsModal() {
   const sections = useSettingsSections();
-  const [id, setId] = useState<string | null>(null);
+  const [id, setId] = useState(() => getState().settingsSection);
   const section = sections.find((s) => s.id === id) ?? sections[0];
   return (
     <Modal title="Settings" onClose={close} className="settings">

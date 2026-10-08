@@ -1,6 +1,7 @@
 import type { AccountUser, SignInMethod, SignInMethods, SignInProviders, Space, UserProfile } from '../../../shared/account';
-import type { AvatarConfig } from '../../../shared/types';
 import type { TemplateId } from '../../../shared/templates';
+import type { AvatarConfig } from '../../../shared/types';
+import type { AccessDenied, GuestAccess, Invite, Member, MemberRole, MembersAnswer, OfficeInfo, OfficeKind } from '../../../shared/workspace';
 
 /**
  * How long to wait for the server. Generous, because a server that was asleep (Cloudflare
@@ -59,21 +60,104 @@ export async function fetchConfig(): Promise<ClientConfig> {
   }
 }
 
-export async function createOffice(name: string, template: TemplateId): Promise<{ id: string; ownerKey: string }> {
-  return json(
-    await fetch('/api/offices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, template }),
-    }),
-  );
+// Workspaces (see the README's "Workspaces").
+
+/** Creates a workspace you own (signed in only). */
+export async function createOffice(name: string, kind: OfficeKind, template: TemplateId): Promise<{ id: string }> {
+  return send('/api/offices', { name, kind, template });
 }
 
-export async function fetchOfficeInfo(id: string): Promise<{ id: string; name: string; online: number } | null> {
+/** An office as you'd come in, why you can't ('sign-in', 'members-only', 'link'), or null when there's none. */
+export type OfficeLookup = OfficeInfo | { denied: AccessDenied } | null;
+
+/** Looks an office up, with the guest link's token if you have one. */
+export async function fetchOfficeInfo(id: string, guest?: string): Promise<OfficeLookup> {
   // A server that accepts the connection but never answers counts as unreachable.
-  const res = await fetch(`/api/offices/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS) });
+  const res = await fetch(`/api/offices/${encodeURIComponent(id)}`, {
+    headers: guest ? { 'X-Workchop-Guest': guest } : {},
+    signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
+    cache: 'no-store',
+  });
   if (res.status === 404) return null;
+  if (res.status === 403) {
+    const { reason } = (await res.json().catch(() => ({}))) as { reason?: AccessDenied };
+    return { denied: reason ?? 'members-only' };
+  }
   return json(res);
+}
+
+/** Adds offices made on this browser before accounts to yours; answers the ones it added. */
+export async function claimOffices(offices: { id: string; ownerKey: string }[]): Promise<string[]> {
+  return (await send<{ claimed: string[] }>('/api/offices/claim', { offices })).claimed;
+}
+
+const officeApi = (id: string, path = '') => `/api/offices/${encodeURIComponent(id)}${path}`;
+
+export async function fetchMembers(officeId: string): Promise<MembersAnswer> {
+  return json(await fetch(officeApi(officeId, '/members'), { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS), cache: 'no-store' }));
+}
+
+/** Adds someone by email: at once when they have an account with that address, otherwise an invitation. */
+export async function addMember(officeId: string, email: string, role: 'admin' | 'member'): Promise<{ member: Member } | { invite: Invite }> {
+  return send(officeApi(officeId, '/members'), { email, role });
+}
+
+export async function changeRole(officeId: string, userId: string, role: MemberRole): Promise<Member> {
+  return (await send<{ member: Member }>(officeApi(officeId, `/members/${encodeURIComponent(userId)}`), { role }, 'PATCH')).member;
+}
+
+/** Removes someone (or yourself: leaving the workspace). */
+export async function removeMember(officeId: string, userId: string): Promise<void> {
+  await send(officeApi(officeId, `/members/${encodeURIComponent(userId)}`), undefined, 'DELETE');
+}
+
+/** Makes another member the owner; you become an admin. */
+export async function transferOwnership(officeId: string, userId: string): Promise<void> {
+  await send(officeApi(officeId, '/owner'), { userId });
+}
+
+export async function revokeInvite(officeId: string, inviteId: string): Promise<void> {
+  await send(officeApi(officeId, `/invites/${encodeURIComponent(inviteId)}`), undefined, 'DELETE');
+}
+
+export async function resendInvite(officeId: string, inviteId: string): Promise<void> {
+  await send(officeApi(officeId, `/invites/${encodeURIComponent(inviteId)}/resend`));
+}
+
+export type GuestLink = { guests: GuestAccess; link: string | null };
+
+/** Turns the guest link on or off. */
+export async function setGuestAccess(officeId: string, guests: 'off' | 'link'): Promise<GuestLink> {
+  return send(officeApi(officeId, '/access'), { guests }, 'PUT');
+}
+
+/** A new guest link; the old one stops working (people already in stay). */
+export async function resetGuestLink(officeId: string): Promise<GuestLink> {
+  return send(officeApi(officeId, '/access/reset'));
+}
+
+export interface InvitePreview {
+  officeName: string;
+  email: string;
+  role: 'admin' | 'member';
+  /** An account already has that address: sign in with it to accept. */
+  hasAccount: boolean;
+}
+
+/** What an emailed invitation is for, without using it up. */
+export async function previewInvite(token: string): Promise<InvitePreview> {
+  return send('/api/invites/preview', { token });
+}
+
+/**
+ * Accepts an invitation: signed in with its address, or creating that account (name, password and
+ * character) and signing in.
+ */
+export async function acceptInviteRequest(
+  token: string,
+  account?: { name: string; password: string; avatar: AvatarConfig },
+): Promise<{ user: AccountUser; officeId: string }> {
+  return send('/api/invites/accept', { token, ...account });
 }
 
 // Accounts (see the README's "Accounts and sign-in").
@@ -175,7 +259,7 @@ export async function removeSignInMethod(method: Pick<SignInMethod, 'provider' |
   return send(`/api/me/sign-in/${method.provider}/${encodeURIComponent(method.subject)}`, undefined, 'DELETE');
 }
 
-/** The offices the signed-in person belongs to, most recently visited first. */
+/** The workspaces the signed-in person belongs to, most recently visited first (the first is their default). */
 export async function fetchSpaces(): Promise<Space[]> {
-  return json(await fetch('/api/me/spaces', { cache: 'no-store' }));
+  return json(await fetch('/api/me/spaces', { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS), cache: 'no-store' }));
 }

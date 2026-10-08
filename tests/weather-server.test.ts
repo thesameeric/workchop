@@ -60,7 +60,7 @@ beforeAll(async () => {
       quiet: true,
       iceServers: [],
       features: [feature],
-      auth: { google: null, apple: null, devLogin: false },
+      auth: { google: null, apple: null, devLogin: true },
       // So tests can come from different addresses.
       clientIpHeader: 'x-test-ip',
     });
@@ -81,8 +81,8 @@ const as = (socket: Client) => ({ 'X-Workchop-Socket': socket.id! });
 
 /** Someone in a new office on the main server. */
 async function inOffice(name = 'Ana') {
-  const { id } = await createOffice(base);
-  return { officeId: id, ...(await join(base, id, name)) };
+  const { id, guest } = await createOffice(base);
+  return { officeId: id, guest, ...(await join(base, id, name)) };
 }
 
 /** A connection that hasn't joined an office. */
@@ -276,7 +276,8 @@ describe('weather:share', () => {
     expect(updates[1]).toEqual([ana.id, { weather: null }]);
   });
 
-  it('is limited per connection: the latest weather held back is shared once the limit allows', async () => {
+  // Waits out the limit in real time (a few seconds).
+  it('is limited per connection: the latest weather held back is shared once the limit allows', { timeout: 15_000 }, async () => {
     const { officeId, socket: ana } = await inOffice('Ana');
     const { socket: ben } = await join(base, officeId, 'Ben');
     const temps: (number | null)[] = [];
@@ -298,7 +299,7 @@ describe('weather:share', () => {
   });
 
   it('is ignored outside an office, also from someone who just left one', async () => {
-    const { officeId, socket: ana } = await inOffice('Ana');
+    const { officeId, guest, socket: ana } = await inOffice('Ana');
     const { socket: ben } = await join(base, officeId, 'Ben');
     const shared: [string, number | null][] = [];
     ben.on('player:updated', (id, patch) => {
@@ -315,7 +316,7 @@ describe('weather:share', () => {
     await lobby.emitWithAck('time');
 
     // Joining later doesn't bring them along either.
-    const joined = await lobby.emitWithAck('join', { officeId, name: 'Cy', avatar: DEFAULT_AVATAR });
+    const joined = await lobby.emitWithAck('join', { officeId, name: 'Cy', avatar: DEFAULT_AVATAR, guest });
     expect(joined.ok && joined.players.find((p) => p.id === lobby.id)).toMatchObject({ name: 'Cy' });
     expect(joined.ok && joined.players.find((p) => p.id === lobby.id)?.weather).toBeUndefined();
     // Ben gets updates in order: the first is this one.

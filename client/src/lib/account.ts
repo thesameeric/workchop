@@ -1,9 +1,9 @@
 import type { AccountUser, AuthProvider, UserProfile } from '../../../shared/account';
 import type { AvatarConfig, Status } from '../../../shared/types';
 import { getState, setState, toast } from '../state/store';
-import { ApiError, devSignIn, fetchMe, fetchProviders, finishSignUpRequest, passwordSignIn, resetPasswordRequest, signOutRequest, updateMe } from './api';
-import { navigate, withNext } from './router';
-import { getSession, leaveOffice } from './session';
+import { acceptInviteRequest, ApiError, devSignIn, fetchMe, fetchProviders, finishSignUpRequest, passwordSignIn, resetPasswordRequest, signOutRequest, updateMe } from './api';
+import { navigate, wantDefault, withNext } from './router';
+import { backToLobby, getSession } from './session';
 import { loadProfile, saveProfile } from './storage';
 import { getTheme, isTheme, setTheme } from './theme';
 
@@ -134,6 +134,17 @@ export async function resetPassword(token: string, password: string): Promise<vo
 }
 
 /**
+ * Accepts an emailed invitation (creating the account first when `account` is given, which signs
+ * you in); answers the workspace's id.
+ */
+export async function acceptInvite(token: string, account?: { name: string; password: string; avatar: AvatarConfig }): Promise<string> {
+  const { user, officeId } = await acceptInviteRequest(token, account);
+  if (getState().account?.id !== user.id) signedIn(user);
+  else accountUpdated(user);
+  return officeId;
+}
+
+/**
  * Where to go once signed in: first the welcome (to set up a character) if you have none yet, then
  * `next`. Inside an office you stay; the welcome waits until you leave (see welcomeIfNeeded).
  */
@@ -141,6 +152,8 @@ export function afterSignIn(next: string): void {
   const { account, phase } = getState();
   if (phase === 'office') return;
   navigate(account && !account.profile.avatar ? withNext('/welcome', next) : next, { replace: true });
+  // Signed in from home: on to your default workspace.
+  if (next === '/') wantDefault();
 }
 
 /** Signed in without a character yet (say, the first time with GitHub): set one up before going on. */
@@ -167,10 +180,7 @@ export async function signOut(): Promise<void> {
   const { phase, officeId } = getState();
   // The lobby waits until we're signed out, so it doesn't show the account's name first.
   setState({ accountReady: false });
-  if (phase === 'office' && officeId) {
-    leaveOffice();
-    setState({ phase: 'lobby', officeId });
-  }
+  if (phase === 'office' && officeId) backToLobby();
   try {
     await signOutRequest();
     applyAccount(null);

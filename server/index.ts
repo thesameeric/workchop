@@ -1,17 +1,15 @@
 import express from 'express';
-import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Server } from 'socket.io';
-import type { AccountUser, Space } from '../shared/account';
-import { sanitizeName } from '../shared/avatar';
-import type { TemplateId } from '../shared/templates';
+import type { AccountUser } from '../shared/account';
 import type { PlayerPatch } from '../shared/types';
 import { Accounts } from './accounts';
 import { authOptionsFromEnv, createAuth, type AuthOptions } from './auth';
+import { sameSecret } from './auth/sessions';
 import { openDb, type DatabaseSsl, type Db } from './db';
 import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
@@ -24,6 +22,7 @@ import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
 import { SqlOfficeRepo } from './repos';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers, type CloudflareTurn, type RTCIceServerLike } from './turn';
 import { createUploads, S3_MISSING, uploadOptionsFromEnv, type UploadOptions } from './uploads';
+import { workspaceRoutes, Workspaces } from './workspaces';
 
 export interface ServerOptions {
   port?: number;
@@ -80,14 +79,6 @@ export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceS
   return servers;
 }
 
-/** Compares secrets in constant time. */
-function sameSecret(given: string, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 /** PUBLIC_URL's origin, or null when unknown. */
 function originOf(publicUrl: string | null): string | null {
   if (!publicUrl) return null;
@@ -127,7 +118,11 @@ export async function startServer(opts: ServerOptions = {}) {
     console.warn('[workchop] PUBLIC_URL is not set: sign-in and GitHub are off, and requests from other sites are let through. Set it to the address people open Workchop at.');
   }
 
-  const accounts = new Accounts(db);
+  // Someone an invitation just made a member who is in that office as a guest is a member at once.
+  const accounts = new Accounts(db, (userId, joined) => {
+    for (const { officeId, role } of joined) realtime.setRole(officeId, userId, role);
+  });
+  const workspaces = new Workspaces(db);
 
   const app = express();
   app.disable('x-powered-by');
@@ -174,7 +169,7 @@ export async function startServer(opts: ServerOptions = {}) {
     quiet: opts.quiet,
   });
   io.use(auth.socketMiddleware);
-  const realtime = attachRealtime(io, store, { accounts });
+  const realtime = attachRealtime(io, store, { accounts, workspaces });
   const socketIp: ServerContext['socketIp'] = ({ handshake }) => {
     const header = ipHeader ? handshake.headers[ipHeader] : undefined;
     const forwarded = (Array.isArray(header) ? header[0] : header)?.split(',')[0]?.trim();
@@ -241,49 +236,6 @@ export async function startServer(opts: ServerOptions = {}) {
     res.json({ iceServers: servers, iceTtl, turn: !!turn, spotifyClientId: spotifyClientId || null, uploadMaxBytes: uploadOptions.maxBytes });
   });
 
-  // Very small per-IP limit on creating offices.
-  const mayCreate = windowLimiter(30, 60 * 60 * 1000);
-  app.post('/api/offices', async (req, res) => {
-    if (!mayCreate(clientIp(req))) {
-      res.status(429).json({ error: 'Too many offices created, try again later.' });
-      return;
-    }
-    const name = sanitizeName(req.body?.name, 48) || 'My Office';
-    const template: TemplateId = req.body?.template === 'blank' ? 'blank' : 'startup';
-    let stored;
-    try {
-      stored = await store.create(name, template);
-    } catch (err) {
-      console.error('[store] could not create office:', err);
-      res.status(503).json({ error: 'Could not save the new office. Please try again.' });
-      return;
-    }
-    // Signed in: the office is listed among their spaces, with them as its owner.
-    const user = await auth.userFromRequest(req);
-    if (user) await accounts.visit(user.id, stored.office.id, true).catch((err) => console.error('[accounts] could not add the owner:', err));
-    res.status(201).json({ id: stored.office.id, ownerKey: stored.ownerKey });
-  });
-
-  app.get('/api/offices/:id', async (req, res) => {
-    let stored;
-    try {
-      stored = await store.get(req.params.id);
-    } catch (err) {
-      console.error('[store] could not load office:', err);
-      res.status(503).json({ error: 'Storage is unavailable right now.' });
-      return;
-    }
-    if (!stored) {
-      res.status(404).json({ error: 'Office not found' });
-      return;
-    }
-    res.json({
-      id: stored.office.id,
-      name: stored.office.settings.name,
-      online: realtime.onlineCount(stored.office.id),
-    });
-  });
-
   app.get('/api/uploads/:id{/:name}', uploads.download);
 
   // Each sign-in attempt stores a little state or checks a password, so limit them like office creation.
@@ -298,23 +250,27 @@ export async function startServer(opts: ServerOptions = {}) {
     '/api/auth/link/peek',
     '/api/me/password',
     '/api/me/email',
+    // Accepting an invitation can make an account.
+    '/api/invites',
   ];
   app.use(signInRoutes, (req, res, next) => {
     if (maySignIn(addressKey(clientIp(req)))) return next();
     res.status(429).json({ error: 'Too many sign-in attempts, try again later.' });
   });
   app.use('/api', auth.router);
-  app.get('/api/me/spaces', auth.requireUser, async (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    const user = res.locals.user as AccountUser;
-    const spaces: Space[] = (await accounts.spaces(user.id)).map((s) => ({
-      ...s,
-      // Offices open right now may have been renamed moments ago.
-      name: store.peek(s.id)?.office.settings.name ?? s.name,
-      online: realtime.onlineCount(s.id),
-    }));
-    res.json(spaces);
-  });
+  app.use(
+    '/api',
+    workspaceRoutes({
+      store,
+      workspaces,
+      accounts,
+      realtime,
+      mailer,
+      publicOrigin,
+      clientIp,
+      auth,
+    }),
+  );
 
   const featureRoutes = express.Router();
   app.use('/api', featureRoutes);

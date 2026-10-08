@@ -72,7 +72,7 @@ export function menuKeys(e: KeyboardEvent<HTMLElement>, close: (refocus?: boolea
 }
 
 /** The account's picture (from Google or GitHub), or its initials. */
-export function UserAvatar({ user, size = 32 }: { user: AccountUser; size?: number }) {
+export function UserAvatar({ user, size = 32 }: { user: Pick<AccountUser, 'name' | 'avatarUrl'>; size?: number }) {
   const [broken, setBroken] = useState(false);
   if (user.avatarUrl && !broken) {
     return <img className="user-avatar" src={user.avatarUrl} alt="" width={size} height={size} referrerPolicy="no-referrer" onError={() => setBroken(true)} />;

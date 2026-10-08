@@ -1,11 +1,13 @@
 import { defaultSettings, sanitizeItem, sanitizeZone } from './office';
 import type { Office, OfficeItem, OfficeSettings, Zone } from './types';
+import type { OfficeKind } from './workspace';
 
 export type TemplateId = 'startup' | 'blank';
 
-export const TEMPLATES: { id: TemplateId; label: string; description: string }[] = [
-  { id: 'startup', label: 'Startup office', description: 'Desk pods, a glass meeting room, lounge, kitchen and a ping pong table.' },
-  { id: 'blank', label: 'Blank floor', description: 'An empty room to build from scratch.' },
+/** The layouts a new workspace can start from, for each kind of workspace. */
+export const TEMPLATES: { id: TemplateId; kind: OfficeKind; label: string; description: string }[] = [
+  { id: 'startup', kind: 'team', label: 'Startup office', description: 'Desk pods, a glass meeting room, lounge, kitchen and a ping pong table.' },
+  { id: 'blank', kind: 'team', label: 'Blank floor', description: 'An empty room to build from scratch.' },
 ];
 
 type Spec = [type: string, x: number, z: number, rot?: number, color?: string];

@@ -8,6 +8,7 @@ import { OfficeStore } from '../server/officeStore';
 import { SqlOfficeRepo, type OfficeRepo } from '../server/repos';
 import { startServer } from '../server/index';
 import { createTestDb, TEST_DATABASE_URL } from './helpers/db';
+import { createOffice } from './helpers/http';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -82,20 +83,17 @@ describe('server storage', () => {
   // PGlite on disk in a data directory, or the Postgres test database.
   const options = () => (TEST_DATABASE_URL ? { databaseUrl: TEST_DATABASE_URL } : { dataDir: tempDir() });
 
-  it('keeps offices across restarts', { timeout: 60_000 }, async () => {
-    const storage = options();
-    const first = await startServer({ port: 0, host: '127.0.0.1', ...storage, quiet: true, iceServers: [] });
-    const res = await fetch(`http://127.0.0.1:${first.port}/api/offices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Persistent HQ', template: 'startup' }),
-    });
-    const { id } = (await res.json()) as { id: string };
+  it('keeps offices, their owner and guest link across restarts', { timeout: 60_000 }, async () => {
+    const storage = { ...options(), quiet: true, iceServers: [], auth: { google: null, apple: null, devLogin: true } };
+    const first = await startServer({ port: 0, host: '127.0.0.1', ...storage });
+    const office = await createOffice(`http://127.0.0.1:${first.port}`, 'Pat', 'Persistent HQ', 'startup');
     await first.close();
 
-    const second = await startServer({ port: 0, host: '127.0.0.1', ...storage, quiet: true, iceServers: [] });
-    const info = await (await fetch(`http://127.0.0.1:${second.port}/api/offices/${id}`)).json();
-    expect(info).toMatchObject({ id, name: 'Persistent HQ' });
+    const second = await startServer({ port: 0, host: '127.0.0.1', ...storage });
+    const at = `http://127.0.0.1:${second.port}/api/offices/${office.id}`;
+    expect(await (await office.owner.fetch(at)).json()).toEqual({ id: office.id, name: 'Persistent HQ', kind: 'team', role: 'owner', online: 0 });
+    expect(await (await fetch(at, { headers: { 'X-Workchop-Guest': office.guest } })).json()).toMatchObject({ role: 'guest' });
+    expect((await fetch(at)).status).toBe(403);
     await second.close();
   });
 

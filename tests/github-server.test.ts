@@ -13,7 +13,7 @@ import type { Schedule } from '../server/features/github/poller';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
 import { startMockGithub, type MockGithub } from './helpers/github';
-import { createOffice, Jar, json, until, type Client } from './helpers/http';
+import { createOffice, Jar, json, until, type Client, type TestOffice } from './helpers/http';
 
 type Server = Awaited<ReturnType<typeof startServer>>;
 
@@ -127,7 +127,8 @@ async function connectGithub(jar: Jar, ghId: number, query?: string) {
 }
 
 /** A socket (with the jar's session) that has joined an office, recording every event from the start. */
-async function joinOffice(jar: Jar | null, officeId: string, name = 'Dev', at = base) {
+/** Joins an office createOffice made, with its guest link. */
+async function joinOffice(jar: Jar | null, office: TestOffice, name = 'Dev', at = base) {
   const cookie = jar?.header();
   const socket: Client = connect(at, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
   sockets.push(socket);
@@ -135,7 +136,7 @@ async function joinOffice(jar: Jar | null, officeId: string, name = 'Dev', at = 
   socket.onAny((event: string, ...args: unknown[]) => events.push([event, ...args]));
   const res = await new Promise<JoinResponse>((resolve, reject) => {
     socket.on('connect_error', reject);
-    socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR }, resolve));
+    socket.on('connect', () => socket.emit('join', { officeId: office.id, name, avatar: DEFAULT_AVATAR, guest: office.guest }, resolve));
   });
   if (!res.ok) throw new Error(res.error);
   const github = () => events.filter(([e]) => e.startsWith('github:'));
@@ -521,8 +522,8 @@ describe('GitHub in the office', () => {
     const review = mock.addThread(ghId, { reason: 'review_requested', title: 'Review me', repo: 'octo/app', number: 2 });
     const run = mock.addThread(ghId, { reason: 'ci_activity', type: 'CheckSuite', title: 'CI workflow run failed for main branch', repo: 'octo/app', noUrl: true });
     await connectGithub(jar, ghId);
-    const { id: officeId } = await createOffice(base);
-    const tab = await joinOffice(jar, officeId);
+    const office = await createOffice(base);
+    const tab = await joinOffice(jar, office);
     await until(() => tab.github().length > 0);
     const [[event, inbox]] = tab.github() as [[string, GithubInbox]];
     expect(event).toBe('github:inbox');
@@ -533,7 +534,7 @@ describe('GitHub in the office', () => {
     ]);
 
     // Another tab gets it at once; the first isn't sent it again.
-    const second = await joinOffice(jar, (await createOffice(base)).id);
+    const second = await joinOffice(jar, await createOffice(base));
     await until(() => second.github().length > 0);
     expect(second.github()).toEqual([['github:inbox', inbox]]);
 
@@ -563,12 +564,12 @@ describe('GitHub in the office', () => {
   });
 
   it('answers false to guests and to people without GitHub', async () => {
-    const { id: officeId } = await createOffice(base);
-    const guest = await joinOffice(null, officeId, 'Guest');
+    const office = await createOffice(base);
+    const guest = await joinOffice(null, office, 'Guest');
     expect(await guest.socket.timeout(2000).emitWithAck('github:read', '123')).toBe(false);
     expect(await guest.socket.timeout(2000).emitWithAck('github:readAll')).toBe(false);
     const { jar } = await person();
-    const plain = await joinOffice(jar, officeId);
+    const plain = await joinOffice(jar, office);
     expect(await plain.socket.timeout(2000).emitWithAck('github:done', '123')).toBe(false);
     await new Promise((r) => setTimeout(r, 100));
     expect(plain.github()).toEqual([]);
@@ -580,7 +581,7 @@ describe('GitHub in the office', () => {
     await connectGithub(jar, ghId);
     const token = (await tokenOf(user.id))!;
     const polls = () => mock.calls('/api/notifications').filter((r) => r.headers.authorization === `Bearer ${token}`).length;
-    const tab = await joinOffice(jar, (await createOffice(base)).id);
+    const tab = await joinOffice(jar, await createOffice(base));
     await until(() => tab.github().length > 0);
     expect(polls()).toBe(1);
     runTimers();
@@ -595,7 +596,7 @@ describe('GitHub in the office', () => {
   it('tells you when you connect, and when you must reconnect', async () => {
     const { jar, user, ghId } = await person();
     mock.addThread(ghId, { title: 'Hello' });
-    const tab = await joinOffice(jar, (await createOffice(base)).id);
+    const tab = await joinOffice(jar, await createOffice(base));
     await connectGithub(jar, ghId);
     await until(() => tab.github().length === 2);
     expect(tab.github()[0]).toEqual(['github:status', expect.objectContaining({ connected: true, needsReconnect: false })]);
@@ -655,7 +656,7 @@ describe('closing the server', () => {
       refreshExpiresAt: null,
       scopes: 'notifications',
     });
-    const tab = await joinOffice(jar, (await createOffice(at)).id, 'Closing', at);
+    const tab = await joinOffice(jar, await createOffice(at), 'Closing', at);
     await until(() => tab.github().length > 0);
     expect(own.some((t) => !t.cancelled)).toBe(true);
 

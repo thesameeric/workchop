@@ -92,9 +92,42 @@ const adoptVerifiedEmail = (tx: Tx, userId: string, email: string | null) =>
       )
     : null;
 
-/** Users, their sign-in identities and passwords, and the offices they belong to. */
+/** Offices someone was just made a member of, with their role there. */
+export type Joined = { officeId: string; role: 'admin' | 'member' }[];
+
+/**
+ * Turns invitations to this verified address into memberships. Runs whenever an account may have
+ * got a verified address: signing up or in, confirming a new address.
+ */
+export async function applyInvites(tx: Tx, userId: string, email: string): Promise<Joined> {
+  const res = await tx.query<{ office_id: string; role: 'admin' | 'member' }>(
+    `WITH taken AS (DELETE FROM office_invites WHERE email = $2 AND expires_at > now() RETURNING office_id, role)
+     INSERT INTO memberships (user_id, office_id, role) SELECT $1::text, office_id, role FROM taken
+     ON CONFLICT (user_id, office_id) DO NOTHING RETURNING office_id, role`,
+    [userId, email],
+  );
+  return res.rows.map((r) => ({ officeId: r.office_id, role: r.role }));
+}
+
+/** The account, and the offices invitations to its address (once verified) just made it a member of. */
+const withInvites = async (tx: Tx, row: UserRow): Promise<{ user: AccountUser; joined: Joined }> => ({
+  user: toAccountUser(row),
+  joined: row.email && row.email_verified ? await applyInvites(tx, row.id, row.email) : [],
+});
+
+/** Users, their sign-in identities and passwords. */
 export class Accounts {
-  constructor(private readonly db: Db) {}
+  /** `onJoined`: after invitations made someone a member of offices (to tell them there, live). */
+  constructor(
+    private readonly db: Db,
+    private readonly onJoined?: (userId: string, joined: Joined) => void,
+  ) {}
+
+  /** The account, once whoever wants to know heard about the offices it just joined. */
+  private told(result: { user: AccountUser; joined: Joined }): AccountUser {
+    if (result.joined.length) this.onJoined?.(result.user.id, result.joined);
+    return result.user;
+  }
 
   /**
    * Runs `fn` in a transaction, again when it lost a race to someone doing the same at the same
@@ -118,7 +151,7 @@ export class Accounts {
    */
   async signIn(identity: Identity): Promise<AccountUser> {
     const verified = identity.emailVerified && identity.provider !== 'dev' ? identity.email : null;
-    return this.retrying(async (tx) => {
+    const result = await this.retrying(async (tx) => {
       const found = await tx.query<{ user_id: string }>('SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2', [
         identity.provider,
         identity.subject,
@@ -139,7 +172,7 @@ export class Accounts {
           `UPDATE users SET last_seen_at = now(), avatar_url = COALESCE($2, avatar_url) WHERE id = $1 RETURNING ${userColumns()}`,
           [owner, identity.avatarUrl],
         );
-        return toAccountUser(user.rows[0]);
+        return withInvites(tx, user.rows[0]);
       }
       const user = await tx.query<UserRow>(
         `INSERT INTO users (id, name, email, avatar_url, email_verified_at) VALUES ($1, $2, $3, $4, CASE WHEN $5::boolean THEN now() END)
@@ -147,8 +180,9 @@ export class Accounts {
         [randomId(16), identity.name, identity.email, identity.avatarUrl, !!verified],
       );
       if (!(await insertIdentity(tx, user.rows[0].id, identity)).rowCount) throw new LostRace();
-      return toAccountUser(user.rows[0]);
+      return withInvites(tx, user.rows[0]);
     });
+    return this.told(result);
   }
 
   /**
@@ -157,7 +191,7 @@ export class Accounts {
    * the same one unconfirmed, and no other account verified it.
    */
   async link(userId: string, identity: Identity): Promise<AccountUser | null> {
-    return this.retrying(async (tx) => {
+    const result = await this.retrying(async (tx) => {
       const found = await tx.query<{ user_id: string }>('SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2', [
         identity.provider,
         identity.subject,
@@ -170,8 +204,9 @@ export class Accounts {
         userId,
         identity.avatarUrl,
       ]);
-      return user.rowCount ? toAccountUser(user.rows[0]) : null;
+      return user.rowCount ? withInvites(tx, user.rows[0]) : null;
     });
+    return result && this.told(result);
   }
 
   async get(id: string): Promise<AccountUser | null> {
@@ -200,29 +235,27 @@ export class Accounts {
   /**
    * A new account with a verified address and a password, from a sign-up link. When an account has
    * verified the address meanwhile, sets that one's password instead (`existing`, and `replaced`
-   * when it had one).
+   * when it had one). `alsoDo` runs in the same transaction, first thing after (throw to undo it all).
    */
-  async createWithPassword(fields: {
-    email: string;
-    name: string;
-    passwordHash: string;
-    avatar?: AvatarConfig;
-  }): Promise<{ user: AccountUser; existing: boolean; replaced: boolean }> {
-    return this.retrying(async (tx) => {
+  async createWithPassword(
+    fields: { email: string; name: string; passwordHash: string; avatar?: AvatarConfig },
+    alsoDo?: (tx: Tx, userId: string) => Promise<void>,
+  ): Promise<{ user: AccountUser; existing: boolean; replaced: boolean }> {
+    const result = await this.retrying(async (tx) => {
       const owner = await tx.query<{ id: string; replaced: boolean }>(
         'SELECT id, password_hash IS NOT NULL AS replaced FROM users WHERE email = $1 AND email_verified_at IS NOT NULL FOR UPDATE',
         [fields.email],
       );
-      if (owner.rowCount) {
-        const user = await tx.query<UserRow>(`UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING ${userColumns()}`, [owner.rows[0].id, fields.passwordHash]);
-        return { user: toAccountUser(user.rows[0]), existing: true, replaced: owner.rows[0].replaced };
-      }
-      const user = await tx.query<UserRow>(
-        `INSERT INTO users (id, name, email, email_verified_at, password_hash, profile) VALUES ($1, $2, $3, now(), $4, $5::jsonb) RETURNING ${userColumns()}`,
-        [randomId(16), fields.name, fields.email, fields.passwordHash, jsonb(fields.avatar ? { avatar: fields.avatar } : {})],
-      );
-      return { user: toAccountUser(user.rows[0]), existing: false, replaced: false };
+      const user = owner.rowCount
+        ? await tx.query<UserRow>(`UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING ${userColumns()}`, [owner.rows[0].id, fields.passwordHash])
+        : await tx.query<UserRow>(
+            `INSERT INTO users (id, name, email, email_verified_at, password_hash, profile) VALUES ($1, $2, $3, now(), $4, $5::jsonb) RETURNING ${userColumns()}`,
+            [randomId(16), fields.name, fields.email, fields.passwordHash, jsonb(fields.avatar ? { avatar: fields.avatar } : {})],
+          );
+      await alsoDo?.(tx, user.rows[0].id);
+      return { ...(await withInvites(tx, user.rows[0])), existing: !!owner.rowCount, replaced: !!owner.rows[0]?.replaced };
     });
+    return { user: this.told(result), existing: result.existing, replaced: result.replaced };
   }
 
   /** Sets the password; with `email`, only while that is still the account's verified address. */
@@ -236,15 +269,16 @@ export class Accounts {
 
   /** Makes `email` the account's verified address. Throws EmailTaken when another account verified it. */
   async confirmEmail(id: string, email: string): Promise<AccountUser | null> {
-    return this.retrying(async (tx) => {
+    const result = await this.retrying(async (tx) => {
       const owner = await tx.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND email_verified_at IS NOT NULL', [email]);
       if (owner.rowCount && owner.rows[0].id !== id) throw new EmailTaken();
       const res = await tx.query<UserRow>(
         `UPDATE users SET email = $2, email_verified_at = COALESCE(CASE WHEN email = $2 THEN email_verified_at END, now()) WHERE id = $1 RETURNING ${userColumns()}`,
         [id, email],
       );
-      return res.rowCount ? toAccountUser(res.rows[0]) : null;
+      return res.rowCount ? withInvites(tx, res.rows[0]) : null;
     });
+    return result && this.told(result);
   }
 
   async signInMethods(id: string): Promise<SignInMethods> {
@@ -304,33 +338,5 @@ export class Accounts {
       );
       return toAccountUser(res.rows[0]);
     });
-  }
-
-  /** Records a visit and returns the person's role there; `owner` makes (or keeps) them an owner. */
-  async visit(userId: string, officeId: string, owner: boolean): Promise<'owner' | 'member'> {
-    const res = await this.db.query<{ role: 'owner' | 'member' }>(
-      `INSERT INTO memberships (user_id, office_id, role) VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, office_id) DO UPDATE SET last_visit_at = now(),
-         role = CASE WHEN EXCLUDED.role = 'owner' THEN 'owner' ELSE memberships.role END
-       RETURNING role`,
-      [userId, officeId, owner ? 'owner' : 'member'],
-    );
-    return res.rows[0].role;
-  }
-
-  async role(userId: string, officeId: string): Promise<'owner' | 'member' | null> {
-    const res = await this.db.query<{ role: 'owner' | 'member' }>('SELECT role FROM memberships WHERE user_id = $1 AND office_id = $2', [userId, officeId]);
-    return res.rows[0]?.role ?? null;
-  }
-
-  /** Offices this person belongs to, most recently visited first. */
-  async spaces(userId: string): Promise<{ id: string; name: string; role: 'owner' | 'member'; lastVisitAt: number }[]> {
-    const res = await this.db.query<{ id: string; name: string | null; role: 'owner' | 'member'; last_visit_at: Date }>(
-      `SELECT m.office_id AS id, o.data->'settings'->>'name' AS name, m.role, m.last_visit_at
-       FROM memberships m JOIN offices o ON o.id = m.office_id
-       WHERE m.user_id = $1 ORDER BY m.last_visit_at DESC LIMIT 200`,
-      [userId],
-    );
-    return res.rows.map((r) => ({ id: r.id, name: r.name ?? '', role: r.role, lastVisitAt: new Date(r.last_visit_at).getTime() }));
   }
 }

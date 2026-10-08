@@ -65,7 +65,8 @@ export async function importLegacyOffices(db: Db, dataDir: string): Promise<stri
   // One at a time, so an office the database refuses doesn't stop the others (or the server).
   for (const o of all) {
     try {
-      const res = await db.query('INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb) ON CONFLICT (id) DO NOTHING', [
+      // Like every office made before workspaces, open to anyone with the address.
+      const res = await db.query("INSERT INTO offices (id, owner_key, data, guest_access) VALUES ($1, $2, $3::jsonb, 'open') ON CONFLICT (id) DO NOTHING", [
         o.id,
         o.ownerKey,
         jsonb(o.office),
