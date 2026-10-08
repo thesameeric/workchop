@@ -2,7 +2,7 @@ import { PLANTS } from '../../../../shared/plants';
 import type { OfficeItem } from '../../../../shared/types';
 import { deskOwner, isLightOn, isLightSwitch, LAMP_TYPES, SWITCH_TYPE, type DeskNote, type StickySummary } from '../../../../shared/world';
 import { onSession } from '../../lib/session';
-import { getState, setPanel, toast, useStore } from '../../state/store';
+import { dismissToast, getState, setPanel, toast, useStore } from '../../state/store';
 import { StickyNoteIcon } from '../../ui/icons';
 import { registerOverlay } from '../../ui/overlays';
 import { registerPanel, type PanelDef } from '../../ui/panels';
@@ -121,12 +121,17 @@ onSession('world', (session) => {
     welcome = false;
     if (unread > 0) toast(`${unread} new note${unread === 1 ? '' : 's'} on your desk`, { icon: StickyNoteIcon, action: { label: 'Read', run: openNotes } });
   };
+  // Notes arriving close together share one toast.
+  let last: { id: number; officeId: string; count: number; at: number } | null = null;
   const onNote = (note: DeskNote, officeId: string, officeName: string) => {
-    if (officeId === session.officeId) {
-      toast(`${note.authorName} left a note on your desk`, { icon: StickyNoteIcon, action: { label: 'Read', run: openNotes } });
-    } else {
-      toast(`${note.authorName} left a note on your desk in ${officeName || 'another office'}`, { icon: StickyNoteIcon });
-    }
+    const here = officeId === session.officeId;
+    const grouped = last && last.officeId === officeId && Date.now() - last.at < 6000 ? last : null;
+    if (grouped) dismissToast(grouped.id);
+    const count = (grouped?.count ?? 0) + 1;
+    const what = count > 1 ? `${count} new notes on your desk` : `${note.authorName}${note.byGuest ? ' (guest)' : ''} left a note on your desk`;
+    const text = here ? what : `${what} in ${officeName || 'another office'}`;
+    const id = toast(text, here ? { icon: StickyNoteIcon, action: { label: 'Read', run: openNotes } } : { icon: StickyNoteIcon });
+    last = { id, officeId, count, at: Date.now() };
   };
 
   socket.on('desk:stickies', onStickies);

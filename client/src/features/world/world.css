@@ -430,12 +430,26 @@
 }
 
 .desk-note-by {
-  flex: 1;
   min-width: 0;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.desk-note-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(35, 38, 47, 0.1);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.desk-note footer time {
+  margin-left: auto;
 }
 
 .note-btn {

@@ -46,9 +46,9 @@ export async function createOffice(base: string, jar?: Jar, name = 'Test HQ', te
 const sockets: Client[] = [];
 
 /** Connects (with the jar's cookies, if any) and joins an office. */
-export async function join(base: string, officeId: string, name: string, opts: { jar?: Jar; ownerKey?: string } = {}) {
+export async function join(base: string, officeId: string, name: string, opts: { jar?: Jar; ownerKey?: string; headers?: Record<string, string> } = {}) {
   const cookie = opts.jar?.header();
-  const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
+  const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { ...opts.headers, ...(cookie ? { cookie } : {}) } });
   sockets.push(socket);
   const res = await new Promise<JoinResponse>((resolve, reject) => {
     socket.on('connect_error', reject);

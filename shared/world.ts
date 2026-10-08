@@ -245,6 +245,8 @@ export const NOTE_COLORS = ['#ffe066', '#ffa8c5', '#a3e4a8', '#9fd4ff'];
 export const MAX_NOTE_LENGTH = 500;
 /** Notes a desk owner can have in an office; past it, the oldest read ones make room. */
 export const MAX_NOTES_PER_DESK = 50;
+/** Unread notes from guests a desk takes (anyone with the link is a guest), leaving room for coworkers'. */
+export const MAX_GUEST_NOTES_PER_DESK = 10;
 /** A guest's secret for deleting the notes they left (kept in their browser). */
 export const GUEST_KEY = /^[A-Za-z0-9_-]{20,64}$/;
 
@@ -253,6 +255,8 @@ export interface DeskNote {
   id: string;
   ownerUserId: string;
   authorName: string;
+  /** Left by a guest: anyone with the office's link, under any name. */
+  byGuest: boolean;
   text: string;
   color: string;
   createdAt: number;

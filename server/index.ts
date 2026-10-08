@@ -149,6 +149,11 @@ export async function startServer(opts: ServerOptions = {}) {
     const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
     return forwarded || req.ip || 'unknown';
   };
+  const socketIp: ServerContext['socketIp'] = ({ handshake }) => {
+    const header = ipHeader ? handshake.headers[ipHeader] : undefined;
+    const forwarded = (Array.isArray(header) ? header[0] : header)?.split(',')[0]?.trim();
+    return forwarded || handshake.address || 'unknown';
+  };
 
   const uploads = createUploads({
     db,
@@ -297,6 +302,7 @@ export async function startServer(opts: ServerOptions = {}) {
     uploads,
     publicOrigin,
     clientIp,
+    socketIp,
     quiet: !!opts.quiet,
     onClose: (fn) => void closers.push(fn),
   };

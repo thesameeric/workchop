@@ -91,6 +91,11 @@ export function DeskPanel() {
             <p className="desk-note-text">{n.text}</p>
             <footer>
               <span className="desk-note-by">— {n.authorName}</span>
+              {n.byGuest && (
+                <span className="desk-note-tag" title="Anyone with the office’s link can leave a note as a guest, under any name">
+                  guest
+                </span>
+              )}
               <time dateTime={new Date(n.createdAt).toISOString()} title={new Date(n.createdAt).toLocaleString()}>
                 {ago(n.createdAt)}
               </time>

@@ -49,7 +49,8 @@ where the hooks below allow it, to keep merges easy.
 - ServerContext (ctx): `app` (router at /api, after express.json, before the API 404; a guard rejects
   cross-site POST/PATCH/DELETE), `io`, `db`, `store`, `uploads`, `publicOrigin`,
   `auth.userFromRequest(req)`, `auth.requireUser` (401 or res.locals.user), `realtime`,
-  `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy), `quiet` (true in tests:
+  `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy), `socketIp(socket)` (the same
+  for a connection; guests get a new socket each time they reconnect), `quiet` (true in tests:
   skip "it works" log lines) and `onClose(fn)` (runs when the server closes, before the database: stop
   timers there). `uploads.remove(ids)` deletes stored files. Socket ids are visible to everyone in an
   office, so an HTTP route that takes X-Workchop-Socket should also limit by `clientIp`.

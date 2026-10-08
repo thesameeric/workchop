@@ -4,6 +4,7 @@ import {
   claimDesk,
   deskOwner,
   GUEST_KEY,
+  MAX_GUEST_NOTES_PER_DESK,
   MAX_NOTES_PER_DESK,
   mayDeleteNote,
   releaseDesk,
@@ -20,6 +21,7 @@ import {
   type WorldResult,
 } from '../../shared/world';
 import type { Feature, SocketContext } from '../features';
+import { windowLimiter } from '../limits';
 import { randomId } from '../officeStore';
 
 // World micro-interactions: lamps and light switches anyone can flip, desks signed-in people claim,
@@ -30,19 +32,21 @@ interface NoteRow {
   id: string;
   owner_user_id: string;
   author_name: string;
+  by_guest: boolean;
   text: string;
   color: string;
   created_at: Date | string;
   read_at: Date | string | null;
 }
 
-const NOTE_COLUMNS = 'id, owner_user_id, author_name, text, color, created_at, read_at';
+const NOTE_COLUMNS = 'id, owner_user_id, author_name, author_user_id IS NULL AS by_guest, text, color, created_at, read_at';
 
 function toNote(r: NoteRow): DeskNote {
   return {
     id: r.id,
     ownerUserId: r.owner_user_id,
     authorName: r.author_name,
+    byGuest: r.by_guest,
     text: r.text,
     color: r.color,
     createdAt: new Date(r.created_at).getTime(),
@@ -55,6 +59,8 @@ function hashKey(key: unknown): string | null {
 }
 
 const NOTE_ID = /^[a-z0-9]{8,32}$/;
+/** Notes guests from one address may leave in an office per 10 minutes (a new connection is a new guest). */
+export const GUEST_NOTES_PER_ADDRESS = 6;
 
 export const feature: Feature = {
   name: 'world',
@@ -83,6 +89,7 @@ export const feature: Feature = {
   ],
   register(ctx) {
     const { db, store, realtime } = ctx;
+    const guestNotes = windowLimiter(GUEST_NOTES_PER_ADDRESS, 10 * 60_000);
 
     /** Saves an office change made through a world op and tells everyone in the office. */
     const commit = (officeId: string, change: { office: Office; items: OfficeItem[] }, by: string) => {
@@ -185,19 +192,25 @@ export const feature: Feature = {
         const text = sanitizeNoteText(note?.text);
         if (!text) return ack({ ok: false, error: 'Write something first.' });
         const color = sanitizeNoteColor(note?.color);
-        let saved: DeskNote | null;
+        const guest = !s.user;
+        if (guest && !guestNotes(`${room.officeId}:${ctx.socketIp(socket)}`)) {
+          return ack({ ok: false, error: 'You’re leaving notes very quickly. Try again in a few minutes.' });
+        }
+        let saved: DeskNote | 'full' | 'guests';
         try {
           saved = await db.transaction(async (tx) => {
             // One note at a time per desk owner, so notes sent at once can't overshoot the limit.
             await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`desk-notes:${room.officeId}:${owner.ownerUserId}`]);
             // A full desk makes room by dropping its oldest read notes; unread ones are never dropped.
-            const { rows } = await tx.query<{ total: number; read: number }>(
-              `SELECT count(*)::int AS total, (count(*) FILTER (WHERE read_at IS NOT NULL))::int AS read
+            const { rows } = await tx.query<{ total: number; read: number; guests: number }>(
+              `SELECT count(*)::int AS total, (count(*) FILTER (WHERE read_at IS NOT NULL))::int AS read,
+                      (count(*) FILTER (WHERE read_at IS NULL AND author_user_id IS NULL))::int AS guests
                FROM desk_notes WHERE office_id = $1 AND owner_user_id = $2`,
               [room.officeId, owner.ownerUserId],
             );
             const extra = rows[0].total - MAX_NOTES_PER_DESK + 1;
-            if (extra > rows[0].read) return null;
+            if (extra > rows[0].read) return 'full';
+            if (guest && rows[0].guests >= MAX_GUEST_NOTES_PER_DESK) return 'guests';
             if (extra > 0) {
               await tx.query(
                 `DELETE FROM desk_notes WHERE id IN (
@@ -216,7 +229,8 @@ export const feature: Feature = {
         } catch (err) {
           return ack(failed('save a desk note', err));
         }
-        if (!saved) return ack({ ok: false, error: `${owner.ownerName}’s desk is covered in unread notes. Try again later.` });
+        if (saved === 'full') return ack({ ok: false, error: `${owner.ownerName}’s desk is covered in unread notes. Try again later.` });
+        if (saved === 'guests') return ack({ ok: false, error: `${owner.ownerName}’s desk has plenty of unread notes from guests. Try again later.` });
         ack({ ok: true, note: saved });
         const officeName = store.peek(room.officeId)?.office.settings.name ?? '';
         realtime.emitToUser(owner.ownerUserId, 'desk:note:new', saved, room.officeId, officeName);

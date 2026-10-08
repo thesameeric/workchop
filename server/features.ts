@@ -1,4 +1,5 @@
 import type express from 'express';
+import type { IncomingHttpHeaders } from 'node:http';
 import type { AccountUser } from '../shared/account';
 import type { Db } from './db';
 import type { Migration } from './db/migrations';
@@ -31,6 +32,8 @@ export interface ServerContext {
    * that is set (behind a proxy), otherwise the connection's.
    */
   clientIp(req: express.Request): string;
+  /** The same for a socket, from its handshake (a guest's address stays put when they reconnect). */
+  socketIp(socket: { handshake: { headers: IncomingHttpHeaders; address: string } }): string;
   /** Leave out messages that only say things are working (tests). */
   quiet: boolean;
   /** Runs `fn` when the server closes, before the database does (to stop timers, say). */

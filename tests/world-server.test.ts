@@ -6,8 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_AVATAR } from '../shared/avatar';
 import type { AccountUser } from '../shared/account';
 import type { OfficeItem, OfficeOp } from '../shared/types';
-import { deskOwner, isLightOn, MAX_NOTES_PER_DESK, type DeskNote, type StickySummary } from '../shared/world';
-import { feature as world } from '../server/features/world';
+import { deskOwner, isLightOn, MAX_GUEST_NOTES_PER_DESK, MAX_NOTES_PER_DESK, type DeskNote, type StickySummary } from '../shared/world';
+import { feature as world, GUEST_NOTES_PER_ADDRESS } from '../server/features/world';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
 import { createOffice, disconnectAll, Jar, join, json, until, type Client } from './helpers/http';
@@ -27,6 +27,7 @@ beforeAll(async () => {
     iceServers: [],
     features: [world],
     auth: { google: null, apple: null, devLogin: true },
+    clientIpHeader: 'x-test-ip',
   });
   base = `http://127.0.0.1:${server.port}`;
 }, 60_000);
@@ -172,13 +173,13 @@ describe('desk notes', () => {
     expect(await b.socket.emitWithAck('desk:note', 'd1', { text: '   ', color: '#ffe066' })).toEqual({ ok: false, error: 'Write something first.' });
 
     const sent = await b.socket.emitWithAck('desk:note', 'd1', { text: 'Lunch at 12?', color: '#9fd4ff' });
-    expect(sent).toMatchObject({ ok: true, note: { authorName: 'Ben', text: 'Lunch at 12?', color: '#9fd4ff', readAt: null } });
+    expect(sent).toMatchObject({ ok: true, note: { authorName: 'Ben', byGuest: false, text: 'Lunch at 12?', color: '#9fd4ff', readAt: null } });
     const fromGuest = await guest.socket.emitWithAck('desk:note', 'd1', { text: 'Welcome!', color: 'nope', guestKey });
-    expect(fromGuest).toMatchObject({ ok: true, note: { authorName: 'Gus', color: '#ffe066' } });
+    expect(fromGuest).toMatchObject({ ok: true, note: { authorName: 'Gus', byGuest: true, color: '#ffe066' } });
 
     // Ana hears about each note; everyone gets the sticky colours, never the text.
     await until(() => anaHeard.notes.length === 2 && anaHeard.inbox.at(-1) === 2 && bHeard.stickies.at(-1)?.[ana.user.id]?.count === 2);
-    expect(anaHeard.notes.map((n) => n.text)).toEqual(['Lunch at 12?', 'Welcome!']);
+    expect(anaHeard.notes.map((n) => [n.text, n.byGuest])).toEqual([['Lunch at 12?', false], ['Welcome!', true]]);
     expect(bHeard.stickies.at(-1)).toEqual({ [ana.user.id]: { count: 2, colors: ['#9fd4ff', '#ffe066'] } });
     expect(JSON.stringify(bHeard.stickies)).not.toContain('Lunch');
 
@@ -247,11 +248,12 @@ describe('desk notes', () => {
     await a.socket.emitWithAck('desk:claim', 'd1');
     // Fill the desk straight in the database (the socket would rate-limit this).
     const ownerId = ana.user.id;
+    const bot = await signIn('Bot');
     for (let i = 0; i < MAX_NOTES_PER_DESK; i++) {
       await server.db.query(
-        `INSERT INTO desk_notes (id, office_id, item_id, owner_user_id, author_name, text, color, created_at)
-         VALUES ($1, $2, 'd1', $3, 'Bot', $4, '#ffe066', now() - make_interval(mins => $5))`,
-        [`filler${i}abc`, id, ownerId, `n${i}`, MAX_NOTES_PER_DESK - i],
+        `INSERT INTO desk_notes (id, office_id, item_id, owner_user_id, author_user_id, author_name, text, color, created_at)
+         VALUES ($1, $2, 'd1', $3, $4, 'Bot', $5, '#ffe066', now() - make_interval(mins => $6))`,
+        [`filler${i}abc`, id, ownerId, bot.user.id, `n${i}`, MAX_NOTES_PER_DESK - i],
       );
     }
     const guest = await join(base, id, 'Gus');
@@ -272,10 +274,11 @@ describe('desk notes', () => {
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     // Room for two more.
+    const bot = await signIn('Bot');
     await server.db.query(
-      `INSERT INTO desk_notes (id, office_id, item_id, owner_user_id, author_name, text, color)
-       SELECT 'rush' || i || 'abcd', $1, 'd1', $2, 'Bot', 'n' || i, '#ffe066' FROM generate_series(1, $3::int) AS i`,
-      [id, ana.user.id, MAX_NOTES_PER_DESK - 2],
+      `INSERT INTO desk_notes (id, office_id, item_id, owner_user_id, author_user_id, author_name, text, color)
+       SELECT 'rush' || i || 'abcd', $1, 'd1', $2, $4, 'Bot', 'n' || i, '#ffe066' FROM generate_series(1, $3::int) AS i`,
+      [id, ana.user.id, MAX_NOTES_PER_DESK - 2, bot.user.id],
     );
     const guests = await Promise.all(['Gus', 'Hal', 'Ida', 'Jo'].map((name) => join(base, id, name)));
     const results = await Promise.all(
@@ -284,5 +287,38 @@ describe('desk notes', () => {
     expect(results.filter((r) => r.ok)).toHaveLength(2);
     const { rows } = await server.db.query<{ n: number }>('SELECT count(*)::int AS n FROM desk_notes WHERE office_id = $1', [id]);
     expect(rows[0].n).toBe(MAX_NOTES_PER_DESK);
+  });
+
+  it('from guests: limited by address, not by connection, and never crowding out coworkers', async () => {
+    const ana = await signIn('Ana');
+    const ben = await signIn('Ben');
+    const { id } = await setUp();
+    const a = await join(base, id, 'Ana', { jar: ana.jar });
+    await a.socket.emitWithAck('desk:claim', 'd1');
+    const send = (g: { socket: Client }, n: number) => g.socket.emitWithAck('desk:note', 'd1', { text: `Note ${n}`, color: '#ffe066' });
+
+    // Reconnecting doesn't reset the limit: four connections from one address, signing as Ana.
+    const fromOne = await Promise.all([1, 2, 3, 4].map(() => join(base, id, 'Ana', { headers: { 'x-test-ip': '203.0.113.7' } })));
+    const first = [];
+    for (const g of fromOne) for (const n of [1, 2, 3]) first.push(await send(g, n));
+    expect(first.filter((r) => r.ok)).toHaveLength(GUEST_NOTES_PER_ADDRESS);
+    expect(first.at(-1)).toEqual({ ok: false, error: 'You’re leaving notes very quickly. Try again in a few minutes.' });
+    // Ana sees they're from a guest.
+    const list = await a.socket.emitWithAck('desk:notes');
+    expect(list.ok && list.notes.every((n) => n.authorName === 'Ana' && n.byGuest)).toBe(true);
+
+    // Guests from many addresses fill only their share of the desk…
+    const many = await Promise.all([1, 2, 3, 4, 5].map((i) => join(base, id, 'Gus', { headers: { 'x-test-ip': `198.51.100.${i}` } })));
+    const more = [];
+    for (const g of many) for (const n of [1, 2, 3]) more.push(await send(g, n));
+    expect(more.filter((r) => r.ok)).toHaveLength(MAX_GUEST_NOTES_PER_DESK - GUEST_NOTES_PER_ADDRESS);
+    expect(more.at(-1)).toEqual({ ok: false, error: 'Ana’s desk has plenty of unread notes from guests. Try again later.' });
+    // …and coworkers can still leave theirs.
+    const b = await join(base, id, 'Ben', { jar: ben.jar });
+    expect(await send(b, 1)).toMatchObject({ ok: true, note: { authorName: 'Ben', byGuest: false } });
+    // Once Ana has read them, guests may leave notes again.
+    await a.socket.emitWithAck('desk:note:read', 'all');
+    const later = await join(base, id, 'Gus', { headers: { 'x-test-ip': '198.51.100.9' } });
+    expect(await send(later, 1)).toMatchObject({ ok: true, note: { byGuest: true } });
   });
 });
