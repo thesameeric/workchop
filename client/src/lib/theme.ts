@@ -27,6 +27,12 @@ function apply(): void {
 
 apply();
 prefersDark.addEventListener('change', () => theme === 'system' && apply());
+// Follow a change made in another tab.
+window.addEventListener('storage', (e) => {
+  if (e.key !== KEY) return;
+  theme = saved();
+  apply();
+});
 
 export function setTheme(next: Theme): void {
   theme = next;

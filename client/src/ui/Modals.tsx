@@ -119,13 +119,12 @@ function AppearanceSection() {
   return (
     <div className="field">
       <span id="theme-label">Theme</span>
-      <div className="theme-options" role="radiogroup" aria-labelledby="theme-label">
+      <div className="theme-options" role="group" aria-labelledby="theme-label">
         {THEMES.map(({ id, label, Icon }) => (
           <button
             key={id}
             type="button"
-            role="radio"
-            aria-checked={theme === id}
+            aria-pressed={theme === id}
             className={`theme-option${theme === id ? ' active' : ''}`}
             onClick={() => setTheme(id)}
           >

@@ -1,7 +1,8 @@
-/* Hugeicons (stroke rounded), cut down to the icons we use by `npm run icons`. */
+/* Hugeicons (stroke rounded), cut down to the icons we use by `npm run icons`. It's imported from
+   src/assets so each build gives it a new file name and browsers never use a stale copy. */
 @font-face {
   font-family: 'hugeicons';
-  src: url('/hugeicons/hgi-subset.woff2') format('woff2');
+  src: url('./assets/hgi-subset.woff2') format('woff2');
   font-display: block;
 }
 
