@@ -40,7 +40,7 @@
     // container stops (15 minutes after everyone leaves, on deploys and on host restarts).
     "EPHEMERAL_STORAGE": "false",
     // The address people open Workchop at, e.g. "https://office.example.com" (sign-in needs it).
-    "PUBLIC_URL": "",
+    "PUBLIC_URL": "https://workchop.osivwiokiti.workers.dev",
     // Uploaded files: "s3" for an R2 bucket (set the S3_* secrets; recommended), or "db" to keep
     // them in Postgres (uses up a small free database quickly). Empty: s3 when S3_BUCKET is set, else db.
     "UPLOADS_STORAGE": "",
