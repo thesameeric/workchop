@@ -12,7 +12,7 @@ interface CoinsState {
   error: string | null;
   /** Coins are on in the office you're in. */
   enabled: boolean;
-  /** Who the Send form is set to (a player id), e.g. from the People panel. */
+  /** Who the Send form is set to (an account id), e.g. from the People panel. */
   sendTo: string | null;
   /** Celebrations over people who just got coins, and "+5" floats over you. */
   bursts: { id: number; playerId: string; amount: number; from: string | null; note: string }[];
@@ -64,24 +64,31 @@ export async function loadWallet(): Promise<void> {
   }
 }
 
+// Bumped when the wallet is reset (leaving, another account), so late answers are dropped.
+let generation = 0;
+
 export async function loadMore(): Promise<void> {
   const { entries, loadingMore } = get();
   const last = entries[entries.length - 1];
   if (!last || loadingMore) return;
+  const gen = generation;
   set({ loadingMore: true });
   try {
     const page = await getJson<WalletHistoryResponse>(`/api/me/wallet/history?before=${last.id}`);
+    if (gen !== generation) return;
     set((s) => ({ entries: [...s.entries, ...page.entries.filter((e) => e.id < last.id)], more: page.more }));
   } catch (err) {
-    set({ error: (err as Error).message });
+    if (gen === generation) set({ error: (err as Error).message });
   } finally {
-    set({ loadingMore: false });
+    if (gen === generation) set({ loadingMore: false });
   }
 }
 
 let refresh: ReturnType<typeof setTimeout> | undefined;
 /** Your balance changed: show it now, and fetch the new history rows soon after. */
 export function balanceChanged(balance: number): void {
+  // A load already on its way may be older than this.
+  loads++;
   set({ balance });
   clearTimeout(refresh);
   refresh = setTimeout(() => void loadWallet(), 400);
@@ -90,7 +97,8 @@ export function balanceChanged(balance: number): void {
 export function resetWallet(): void {
   clearTimeout(refresh);
   loads++;
-  set({ balance: null, entries: [], more: false, error: null, sendTo: null, bursts: [] });
+  generation++;
+  set({ balance: null, entries: [], more: false, loadingMore: false, error: null, sendTo: null, bursts: [] });
 }
 
 let burstId = 0;
@@ -101,7 +109,7 @@ export function addBurst(playerId: string, amount: number, from: string | null, 
 }
 
 /** A random uuid (crypto.randomUUID needs https, which a LAN address doesn't have). */
-function uuid(): string {
+export function uuid(): string {
   const b = crypto.getRandomValues(new Uint8Array(16));
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
@@ -109,18 +117,29 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-/** Sends a tip, retrying once with the same key if the answer doesn't come (it's sent at most once). */
-export async function sendTip(toPlayerId: string, amount: number, note: string): Promise<TipAnswer> {
+/**
+ * Sends a tip, retrying once with the same key if the answer doesn't come (the server makes a tip
+ * at most once per key). `uncertain`: it may have gone through, so send again only with this key.
+ */
+export async function sendTip(toUserId: string, amount: number, note: string, key: string): Promise<TipAnswer & { uncertain?: boolean }> {
   const session = getSession();
   if (!session) return { ok: false, error: 'Not in an office' };
-  const req = { toPlayerId, amount, note, key: uuid() };
+  const req = { toUserId, amount, note, key };
+  let timedOut = false;
   for (let attempt = 1; ; attempt++) {
     try {
       const res = await session.socket.timeout(8000).emitWithAck('coins:tip', req);
-      if (res.ok) set({ balance: res.balance });
+      if (res.ok) {
+        loads++;
+        set({ balance: res.balance });
+        return res;
+      }
+      // After a lost answer, an error now (e.g. while reconnecting) doesn't mean the first try failed.
+      if (timedOut) return { ok: false, uncertain: true, error: 'Not sure this tip went through. Press Send again: it won’t be sent twice.' };
       return res;
     } catch {
-      if (attempt >= 2) return { ok: false, error: 'No answer from the server. Check your balance before trying again.' };
+      timedOut = true;
+      if (attempt >= 2) return { ok: false, uncertain: true, error: 'No answer from the server. Press Send again: it won’t be sent twice.' };
     }
   }
 }

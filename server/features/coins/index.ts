@@ -15,6 +15,8 @@ export interface CoinsOptions {
 }
 
 const HISTORY_PAGE = 20;
+/** Presence time not yet paid out is kept this long after someone leaves (a reload, a short drop). */
+const PRESENCE_GRACE_MS = 5 * 60_000;
 
 /** The coins wallet: welcome bonus, daily check-in, presence coins and tips between members. */
 export function createCoins(opts: CoinsOptions = {}): Feature {
@@ -36,7 +38,8 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
         const cached = enabled.get(officeId);
         if (cached !== undefined) return cached;
         const on = await wallets.officeEnabled(officeId);
-        enabled.set(officeId, on);
+        // Cached only while someone is there (the cache is dropped when the office empties).
+        if (realtime.onlineCount(officeId)) enabled.set(officeId, on);
         return on;
       };
 
@@ -72,16 +75,14 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
       // Signed-in people in offices, by socket id, and when each last did something.
       const present = new Map<string, SocketContext>();
       const lastActive = new Map<string, number>();
-      // Active time not yet paid out, per account (several tabs count once).
-      const earned = new Map<string, number>();
+      // Active time not yet paid out, per account (several tabs count once), and when it last grew.
+      const earned = new Map<string, { ms: number; at: number }>();
       const paying = new Set<string>();
-      const tipLimits = new Map<string, () => boolean>();
+      // Per account, kept for a minute after the last tip so leaving and coming back doesn't reset it.
+      const tipLimits = new Map<string, { take: () => boolean; at: number }>();
 
-      const party = (p: PlayerState | undefined, userId: string, fallback: string): TipParty => ({
-        userId,
-        name: p?.name ?? fallback,
-        playerId: p?.id ?? null,
-      });
+      // The account name, which people can't change from inside an office.
+      const party = (p: PlayerState, userId: string, name: string): TipParty => ({ userId, name: name || p.name, playerId: p.id });
 
       realtime.onSocket((s) => {
         const touch = () => {
@@ -101,14 +102,17 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
             if (!parsed.ok) return answer(parsed);
             const { tip } = parsed;
             if (!(await officeEnabled(room.officeId))) return answer({ ok: false, error: 'Coins are off in this office' });
+            // The sender may have moved to another office meanwhile.
+            if (s.room() !== room || s.me() !== me) return answer({ ok: false, error: 'Join an office first' });
             const players = [...room.players.values()];
             const target = tip.toPlayerId ? room.players.get(tip.toPlayerId) : players.find((p) => p.userId === tip.toUserId);
             if (!target) return answer({ ok: false, error: 'They’re not in this office' });
             if (!target.userId) return answer({ ok: false, error: 'They need to sign in to get coins' });
             if (target.userId === s.user.id) return answer({ ok: false, error: 'You can’t send coins to yourself' });
-            let canTip = tipLimits.get(s.user.id);
-            if (!canTip) tipLimits.set(s.user.id, (canTip = s.limiter(TIPS_PER_MINUTE / 60, TIPS_PER_MINUTE)));
-            if (!canTip()) return answer({ ok: false, error: 'That’s a lot of tips. Try again in a minute.' });
+            let limit = tipLimits.get(s.user.id);
+            if (!limit) tipLimits.set(s.user.id, (limit = { take: s.limiter(TIPS_PER_MINUTE / 60, TIPS_PER_MINUTE), at: 0 }));
+            limit.at = now();
+            if (!limit.take()) return answer({ ok: false, error: 'That’s a lot of tips. Try again in a minute.' });
 
             const result = await wallets.tip({ from: s.user.id, to: target.userId, amount: tip.amount, note: tip.note, key: tip.key, officeId: room.officeId });
             answer({ ok: true, balance: result.fromBalance });
@@ -116,8 +120,8 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
             realtime.emitToUser(s.user.id, 'coins:balance', { balance: result.fromBalance, delta: -tip.amount, kind: 'tip_out' });
             realtime.emitToUser(target.userId, 'coins:balance', { balance: result.toBalance, delta: tip.amount, kind: 'tip_in' });
             realtime.emitToOffice(room.officeId, 'coins:tipped', {
-              from: party(me, s.user.id, s.user.name),
-              to: party(target, target.userId, target.name),
+              from: party(me, s.user.id, result.fromName),
+              to: party(target, target.userId, result.toName),
               amount: tip.amount,
               note: tip.note,
             });
@@ -150,11 +154,15 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
       realtime.onJoin(async (s) => {
         const room = s.room();
         if (!room) return;
+        // Before any await, so that leaving meanwhile (onLeave) removes it again.
+        if (s.user) {
+          present.set(s.socket.id, s);
+          lastActive.set(s.socket.id, now());
+        }
         const on = await officeEnabled(room.officeId);
+        if (s.room() !== room) return;
         s.socket.emit('coins:office', { enabled: on });
         if (!s.user) return;
-        present.set(s.socket.id, s);
-        lastActive.set(s.socket.id, now());
         const userId = s.user.id;
         push(userId, await wallets.ensure(userId));
         // The daily bonus comes with the first visit of the day to an office where coins are on.
@@ -164,10 +172,6 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
       realtime.onLeave((s, { officeId }) => {
         present.delete(s.socket.id);
         lastActive.delete(s.socket.id);
-        if (s.user && !realtime.playersOfUser(s.user.id).length) {
-          earned.delete(s.user.id);
-          tipLimits.delete(s.user.id);
-        }
         if (!realtime.onlineCount(officeId)) enabled.delete(officeId);
       });
 
@@ -182,13 +186,15 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
           const idle = t - (lastActive.get(socketId) ?? 0) > idleMs && !p.mic && !p.cam && !p.screen;
           if (!idle) active.set(s.user.id, room.officeId);
         }
+        for (const [userId, e] of earned) if (!active.has(userId) && t - e.at > PRESENCE_GRACE_MS) earned.delete(userId);
+        for (const [userId, l] of tipLimits) if (t - l.at > 60_000) tipLimits.delete(userId);
         for (const [userId, officeId] of active) {
-          const total = (earned.get(userId) ?? 0) + tickMs;
+          const total = (earned.get(userId)?.ms ?? 0) + tickMs;
           if (total < presenceMs || paying.has(userId)) {
-            earned.set(userId, Math.min(total, presenceMs));
+            earned.set(userId, { ms: Math.min(total, presenceMs), at: t });
             continue;
           }
-          earned.set(userId, total - presenceMs);
+          earned.set(userId, { ms: total - presenceMs, at: t });
           paying.add(userId);
           wallets
             .presence(userId, officeId)
@@ -198,7 +204,7 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
         }
       };
       setInterval(() => {
-        if (present.size) tick();
+        if (present.size || earned.size || tipLimits.size) tick();
       }, tickMs).unref();
     },
   };

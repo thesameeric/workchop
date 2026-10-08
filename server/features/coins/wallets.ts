@@ -85,6 +85,9 @@ export interface Award {
 export interface TipResult {
   fromBalance: number;
   toBalance: number;
+  /** Account names, for the shout-out. */
+  fromName: string;
+  toName: string;
   /** The same tip (same key) was already made; nothing changed. */
   duplicate: boolean;
 }
@@ -194,16 +197,26 @@ export class Wallets {
       for (const id of order) balances.set(id, await this.lock(tx, id));
       const from = balances.get(t.from)!;
       const to = balances.get(t.to)!;
+      const names = await tx.query<{ id: string; name: string }>('SELECT id, name FROM users WHERE id = ANY($1)', [order]);
+      const nameOf = (id: string) => names.rows.find((r) => r.id === id)?.name ?? '';
+      const result = { fromBalance: from, toBalance: to, fromName: nameOf(t.from), toName: nameOf(t.to), duplicate: true };
       const outKey = `tip:${t.from}:${t.key}`;
       // Checked after locking the sender: a concurrent retry of the same tip waits here, then sees it.
-      const seen = await tx.query('SELECT 1 FROM coin_ledger WHERE idempotency_key = $1', [outKey]);
-      if (seen.rows.length) return { fromBalance: from, toBalance: to, duplicate: true };
+      const seen = await tx.query<{ delta: number; counterparty_user_id: string | null }>(
+        'SELECT delta, counterparty_user_id FROM coin_ledger WHERE idempotency_key = $1',
+        [outKey],
+      );
+      if (seen.rows.length) {
+        const [prev] = seen.rows;
+        if (prev.delta !== -t.amount || prev.counterparty_user_id !== t.to) throw new CoinsError('That tip was already sent with other details');
+        return result;
+      }
       if (from < t.amount) throw new CoinsError('Not enough coins');
       const common = { at, officeId: t.officeId, note: t.note };
       const fromAfter = await this.credit(tx, t.from, from, { ...common, delta: -t.amount, kind: 'tip_out', key: outKey, counterparty: t.to });
       const toAfter = await this.credit(tx, t.to, to, { ...common, delta: t.amount, kind: 'tip_in', key: `${outKey}:in`, counterparty: t.from });
       if (fromAfter === null || toAfter === null) throw new Error('tip key used concurrently');
-      return { fromBalance: fromAfter, toBalance: toAfter, duplicate: false };
+      return { ...result, fromBalance: fromAfter, toBalance: toAfter, duplicate: false };
     });
   }
 

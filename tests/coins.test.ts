@@ -139,6 +139,9 @@ describe(`the coin ledger on ${DB}`, () => {
     // Another sender may use the same uuid without clashing.
     const c = await addUser();
     expect((await wallets.tip({ from: c, to: b, amount: 1, note: '', key, officeId: null })).duplicate).toBe(false);
+    // The same key for a different tip is refused, not reported as sent.
+    await expect(wallets.tip({ from: a, to: b, amount: 26, note: '', key, officeId: null })).rejects.toThrow(/other details/);
+    await expect(wallets.tip({ from: a, to: c, amount: 25, note: '', key, officeId: null })).rejects.toThrow(/other details/);
     const { rows } = await db.query<{ n: string }>("SELECT count(*) AS n FROM coin_ledger WHERE kind IN ('tip_in', 'tip_out') AND user_id = $1", [a]);
     expect(Number(rows[0].n)).toBe(1);
     await expectConsistent();
@@ -274,6 +277,8 @@ describe(`coins in the office on ${DB}`, () => {
     b.socket.on('coins:balance', (e) => balances.push(e));
     g.socket.on('coins:tipped', (e) => tipped.push(e));
     const key = crypto.randomUUID();
+    // Names in the office can be anything; the shout-out uses account names.
+    a.socket.emit('profile', { name: 'The CEO' });
     const answer = await tip(a.socket, { toPlayerId: b.id, amount: 25, note: 'thanks for the review!', key });
     expect(answer).toEqual({ ok: true, balance: WELCOME_COINS + DAILY_COINS - 25 });
     // A retry of the same tip changes nothing.
@@ -301,12 +306,15 @@ describe(`coins in the office on ${DB}`, () => {
   });
 
   it('limits tips to 10 a minute and refuses overdrafts', async () => {
-    const { ada, a, b } = await setup();
+    const { ada, a, b, officeId } = await setup();
     const to = b.id;
     const answers = [];
     for (let i = 0; i < 11; i++) answers.push(await tip(a.socket, { toPlayerId: to, amount: 1 }));
     expect(answers.slice(0, 10).every((r) => r.ok)).toBe(true);
     expect(answers[10]).toMatchObject({ ok: false, error: expect.stringMatching(/minute/) });
+    // Coming in again doesn't reset the limit.
+    const again = await join(officeId, 'Ada', { jar: ada.jar });
+    expect(await tip(again.socket, { toPlayerId: to, amount: 1 })).toMatchObject({ ok: false, error: expect.stringMatching(/minute/) });
     expect((await wallet(ada.jar)).balance).toBe(WELCOME_COINS + DAILY_COINS - 10);
     const { a: a2, b: b2, ada: ada2 } = await setup();
     expect(await tip(a2.socket, { toPlayerId: b2.id, amount: 500 })).toEqual({ ok: false, error: 'Not enough coins' });

@@ -37,7 +37,7 @@ function SendCoinsButton({ player }: { player: RemotePlayer }) {
       className="icon-btn"
       title={`Send coins to ${player.name}`}
       onClick={() => {
-        useCoins.setState({ sendTo: player.id });
+        useCoins.setState({ sendTo: player.userId });
         openWallet();
       }}
     >

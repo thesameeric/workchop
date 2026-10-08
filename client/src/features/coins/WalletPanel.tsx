@@ -26,7 +26,7 @@ import {
   SendIcon,
   type IconComponent,
 } from '../../ui/icons';
-import { loadMore, sendTip, useCoins } from './state';
+import { loadMore, loadWallet, sendTip, useCoins, uuid } from './state';
 
 const fmt = new Intl.NumberFormat();
 
@@ -94,19 +94,26 @@ function SendForm({ balance }: { balance: number }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One key per tip: kept for a retry of the same tip, new once anything changes or it went through.
+  const key = useRef(uuid());
+  const [sent, setSent] = useState(0);
 
   // Signed-in people here, once each (someone may have the office open twice).
   const people = useMemo(() => {
-    const seen = new Set<string>();
-    return Object.values(players)
-      .filter((p) => p.userId && p.userId !== accountId && !seen.has(p.userId) && seen.add(p.userId))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const byUser = new Map<string, { userId: string; name: string }>();
+    for (const p of Object.values(players)) if (p.userId && p.userId !== accountId && !byUser.has(p.userId)) byUser.set(p.userId, { userId: p.userId, name: p.name });
+    return [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [players, accountId]);
-  const to = people.find((p) => p.id === sendTo) ?? null;
+  const to = people.find((p) => p.userId === sendTo) ?? null;
 
   useEffect(() => {
-    if (sendTo && !people.some((p) => p.id === sendTo)) useCoins.setState({ sendTo: null });
+    if (sendTo && !people.some((p) => p.userId === sendTo)) useCoins.setState({ sendTo: null });
   }, [people, sendTo]);
+
+  useEffect(() => {
+    key.current = uuid();
+    setError(null);
+  }, [sendTo, amount, note, sent]);
 
   const valid = Number.isInteger(amount) && amount >= MIN_TIP && amount <= MAX_TIP;
   const short = valid && amount > balance;
@@ -117,10 +124,14 @@ function SendForm({ balance }: { balance: number }) {
     if (!to || !valid || short || busy) return;
     setBusy(true);
     setError(null);
-    const res = await sendTip(to.id, amount, note.trim());
+    const res = await sendTip(to.userId, amount, note.trim(), key.current);
     setBusy(false);
-    if (!res.ok) return setError(res.error);
+    if (!res.ok) {
+      if (!res.uncertain) key.current = uuid();
+      return setError(res.error);
+    }
     setNote('');
+    setSent((n) => n + 1);
     toast(`Sent ${fmt.format(amount)} ${amount === 1 ? 'coin' : 'coins'} to ${to.name}`, { icon: CoinsIcon });
   };
 
@@ -132,10 +143,10 @@ function SendForm({ balance }: { balance: number }) {
     <form className="coin-send" onSubmit={submit}>
       <label className="field">
         <span>To</span>
-        <select value={to?.id ?? ''} onChange={(e) => useCoins.setState({ sendTo: e.target.value || null })}>
+        <select value={to?.userId ?? ''} onChange={(e) => useCoins.setState({ sendTo: e.target.value || null })}>
           <option value="">Choose someone…</option>
           {people.map((p) => (
-            <option key={p.id} value={p.id}>
+            <option key={p.userId} value={p.userId}>
               {p.name}
             </option>
           ))}
@@ -144,7 +155,7 @@ function SendForm({ balance }: { balance: number }) {
       <div className="field">
         <span>Amount</span>
         <div className="coin-stepper">
-          <button type="button" className="icon-btn" onClick={() => setAmount((a) => clamp(a - 1))} disabled={amount <= MIN_TIP} aria-label="Less">
+          <button type="button" className="icon-btn" onClick={() => setAmount((a) => clamp(a - 1))} disabled={amount <= MIN_TIP} aria-label="One coin less">
             <MinusIcon size={16} />
           </button>
           <input
@@ -157,13 +168,13 @@ function SendForm({ balance }: { balance: number }) {
             onBlur={() => setAmount((a) => clamp(a))}
             aria-label="Amount"
           />
-          <button type="button" className="icon-btn" onClick={() => setAmount((a) => clamp(a + 1))} disabled={amount >= MAX_TIP} aria-label="More">
+          <button type="button" className="icon-btn" onClick={() => setAmount((a) => clamp(a + 1))} disabled={amount >= MAX_TIP} aria-label="One coin more">
             <PlusIcon size={16} />
           </button>
         </div>
         <div className="chips coin-quick">
           {QUICK_AMOUNTS.map((n) => (
-            <button type="button" key={n} className={`chip${amount === n ? ' active' : ''}`} onClick={() => setAmount(n)} disabled={n > balance}>
+            <button type="button" key={n} className={`chip${amount === n ? ' active' : ''}`} aria-pressed={amount === n} onClick={() => setAmount(n)} disabled={n > balance}>
               {n}
             </button>
           ))}
@@ -173,8 +184,13 @@ function SendForm({ balance }: { balance: number }) {
         <span>Note (optional)</span>
         <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={MAX_TIP_NOTE} placeholder="Thanks for the help!" />
       </label>
+      {!valid && <p className="form-error">Send between {MIN_TIP} and {MAX_TIP} coins.</p>}
       {short && <p className="form-error">You have {fmt.format(balance)} coins.</p>}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       <button className="btn primary wide" disabled={!to || !valid || short || busy}>
         <SendIcon size={16} />
         {busy ? 'Sending…' : valid ? `Send ${fmt.format(amount)} ${amount === 1 ? 'coin' : 'coins'}` : 'Send coins'}
@@ -265,7 +281,14 @@ export function WalletPanel() {
 
       <section className="coin-section">
         <h3>History</h3>
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}{' '}
+            <button className="link-btn" onClick={() => void loadWallet()}>
+              Try again
+            </button>
+          </p>
+        )}
         {!entries.length && !error && <p className="muted small coin-empty">{balance === null ? 'Loading…' : 'Nothing yet.'}</p>}
         <ul className="coin-history">
           {entries.map((e) => (
