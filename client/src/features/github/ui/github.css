@@ -1,0 +1,555 @@
+/* GitHub: the panel (dark glass in both themes, like the other panels) and Settings > Integrations. */
+
+/* Connect, reconnect, sign in */
+.gh-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.gh-prompt p {
+  margin: 0;
+}
+
+.gh-prompt-icon {
+  color: var(--glass-muted);
+  margin-bottom: 4px;
+}
+
+.gh-sign-in p {
+  margin: 0 0 6px;
+}
+
+.gh-sign-in .sign-in {
+  margin-top: 14px;
+  text-align: left;
+}
+
+.gh-guest {
+  align-items: stretch;
+}
+
+.gh-guest .gh-prompt-icon {
+  align-self: center;
+}
+
+.gh-guest .dev-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gh-guest .or {
+  color: var(--glass-muted);
+}
+
+.gh-guest .or::before,
+.gh-guest .or::after {
+  border-color: var(--glass-line);
+}
+
+/* Apple's button is white on dark backgrounds. */
+.gh-guest .provider-btn.apple {
+  background: var(--glass-ink);
+  border-color: var(--glass-ink);
+  color: var(--glass-solid);
+}
+
+/* The inbox: tabs and a bar on top, the list scrolls. */
+.gh-inbox {
+  overflow: hidden;
+}
+
+/* Too wide for one row (big counts), they wrap rather than hide. */
+.gh-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 10px 8px 0;
+}
+
+/* Sized by their labels and counts, sharing what's left (a tab that wraps alone doesn't fill the row). */
+.gh-tabs .tab {
+  flex: 1 1 auto;
+  max-width: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 4px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.gh-count {
+  min-width: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--glass-raised);
+  color: var(--glass-ink);
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 16px;
+}
+
+.gh-tabs .tab.active .gh-count {
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+
+/* Phones: all four tabs fit in one row down to 320 px wide, with counts up to two digits. */
+@media (max-width: 400px) {
+  .gh-tabs {
+    gap: 2px;
+    padding-inline: 6px;
+  }
+
+  .gh-tabs .tab {
+    gap: 2px;
+    padding-inline: 3px;
+    font-size: 0.72rem;
+  }
+
+  .gh-count {
+    min-width: 14px;
+    padding: 0 2px;
+  }
+}
+
+.gh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--glass-line);
+}
+
+.gh-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--glass-muted);
+  font-size: 0.8rem;
+}
+
+/* Long logins and repo names end in "…" (the full one is in the tooltip). */
+.gh-who-name,
+.gh-repo-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gh-bar .btn.ghost {
+  flex: none;
+  background: transparent;
+  border-color: transparent;
+}
+
+.gh-bar .btn.ghost:hover:not(:disabled) {
+  background: var(--glass-fill);
+}
+
+.gh-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 6px 12px;
+}
+
+.gh-outstanding {
+  display: block;
+  margin: 2px 4px 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--glass-soft);
+  border: 1px solid var(--glass-line);
+  color: var(--glass-ink);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.gh-outstanding:hover {
+  background: var(--glass-fill);
+  text-decoration: underline;
+}
+
+.gh-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gh-item {
+  position: relative;
+  border-radius: 12px;
+}
+
+.gh-item:hover {
+  background: var(--glass-soft);
+}
+
+/* Keyboard focus only: a clicked item doesn't stay lit after the pointer leaves. */
+.gh-item:has(:focus-visible) {
+  background: var(--glass-soft);
+}
+
+.gh-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.gh-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.gh-type {
+  margin-top: 15px;
+  color: var(--glass-muted);
+}
+
+.gh-run.success {
+  color: var(--ok);
+}
+
+.gh-run.failure {
+  color: var(--glass-danger);
+}
+
+.gh-run.waiting {
+  color: var(--away);
+}
+
+.gh-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gh-repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--glass-muted);
+  font-size: 0.74rem;
+}
+
+.gh-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.gh-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--glass-muted);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.gh-item.unread .gh-title {
+  color: var(--glass-ink);
+  font-weight: 600;
+}
+
+.gh-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  color: var(--glass-muted);
+  font-size: 0.74rem;
+}
+
+.gh-meta > * + *::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+.gh-branch {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-status {
+  font-weight: 700;
+}
+
+.gh-status.success {
+  color: var(--ok);
+}
+
+.gh-status.failure {
+  color: var(--glass-danger);
+}
+
+.gh-status.waiting {
+  color: var(--away);
+}
+
+/* Mark read and Done: on hover or keyboard focus (always shown on touch screens). */
+.gh-actions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.gh-item:hover .gh-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gh-item:has(:focus-visible) .gh-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gh-actions .icon-btn {
+  width: 28px;
+  height: 28px;
+  color: var(--glass-ink);
+}
+
+.gh-actions .icon-btn:hover {
+  background: var(--glass-hover);
+}
+
+@media (hover: none) {
+  .gh-item {
+    display: flex;
+    align-items: center;
+  }
+
+  .gh-link {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .gh-actions {
+    position: static;
+    transform: none;
+    flex: none;
+    flex-direction: column;
+    margin-right: 4px;
+    padding: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.gh-empty {
+  padding: 20px 12px;
+  text-align: center;
+}
+
+.gh-empty > p {
+  margin: 0 0 12px;
+}
+
+.gh-help {
+  text-align: left;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--glass-soft);
+}
+
+.gh-help summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.gh-help .gh-hints {
+  margin-top: 8px;
+}
+
+/* Setup hints (panel and settings) */
+.gh-hints {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gh-help a {
+  color: var(--glass-ink);
+}
+
+/* Settings > Integrations */
+.gh-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  line-height: 1.45;
+}
+
+.gh-settings > * {
+  max-width: 100%;
+}
+
+.gh-settings-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.gh-settings-head .hgi {
+  margin-top: 1px;
+}
+
+.gh-settings-head p {
+  margin: 2px 0 0;
+}
+
+.gh-settings a {
+  color: var(--primary-text);
+}
+
+.gh-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gh-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.gh-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--away) 50%, transparent);
+  background: color-mix(in srgb, var(--away) 12%, transparent);
+}
+
+.gh-warning .hgi {
+  margin-top: 1px;
+  color: var(--away);
+}
+
+.gh-warning code {
+  font-size: 0.95em;
+}
+
+.gh-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--field);
+}
+
+.gh-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--neutral-soft);
+  object-fit: cover;
+}
+
+.gh-account-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gh-account-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-alert {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.gh-alert p {
+  margin: 0 0 8px;
+}
+
+.gh-private {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.gh-private p {
+  margin: 0;
+}
+
+.gh-settings-hints {
+  width: 100%;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.gh-settings-hints .gh-hints {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}

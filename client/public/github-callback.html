@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Connecting GitHub…</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <p>Connecting GitHub…</p>
+    <script>
+      // Hand the result (?github=connected, cancelled, failed or signin) back to the Workchop tab that
+      // opened this window, then close.
+      const result = new URLSearchParams(location.search).get('github');
+      if (window.opener) {
+        window.opener.postMessage({ type: 'workchop-github', result }, location.origin);
+        window.close();
+      } else {
+        // No opener (opened as a tab, or the browser cut the link): go back to where connecting
+        // started (saved by the tab that opened this window), carrying the result.
+        let back = new URL('/', location.origin);
+        try {
+          const saved = sessionStorage.getItem('workchop:github-return');
+          sessionStorage.removeItem('workchop:github-return');
+          const url = saved && saved.startsWith('/') && !saved.startsWith('//') ? new URL(saved, location.origin) : null;
+          if (url && url.origin === location.origin) back = url;
+        } catch {
+          // No storage: the start page.
+        }
+        if (result) back.searchParams.set('github', result);
+        location.replace(back.pathname + back.search + back.hash);
+      }
+    </script>
+  </body>
+</html>

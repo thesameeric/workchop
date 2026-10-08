@@ -35,6 +35,11 @@ interface Env {
   APPLE_TEAM_ID?: string;
   APPLE_KEY_ID?: string;
   APPLE_PRIVATE_KEY?: string;
+  /** The OAuth App for GitHub notifications (callback: PUBLIC_URL + /api/integrations/github/callback). */
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  /** 32 random bytes in base64 (`openssl rand -base64 32`) that encrypt the saved GitHub tokens. */
+  TOKEN_ENCRYPTION_KEY?: string;
   /** Uploaded files: "s3" (an R2 bucket via S3_*) or "db" (the Postgres database). */
   UPLOADS_STORAGE?: string;
   UPLOAD_MAX_BYTES?: string;
@@ -64,6 +69,9 @@ const PASSED_TO_SERVER = [
   'APPLE_TEAM_ID',
   'APPLE_KEY_ID',
   'APPLE_PRIVATE_KEY',
+  'GITHUB_CLIENT_ID',
+  'GITHUB_CLIENT_SECRET',
+  'TOKEN_ENCRYPTION_KEY',
   'UPLOADS_STORAGE',
   'UPLOAD_MAX_BYTES',
   'UPLOADS_QUOTA_MB',
