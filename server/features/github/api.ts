@@ -231,8 +231,9 @@ export function createApi(deps: ApiDeps) {
         if (!next) return res;
         await drain(res);
         target = next;
-        // Only 307 and 308 ask for the same request again.
-        if (res.status !== 307 && res.status !== 308) {
+        // As fetch does: a 303, or a 301 or 302 after a POST, is followed with a GET; anything else is sent again as it was.
+        const upper = method.toUpperCase();
+        if (res.status === 303 ? upper !== 'GET' && upper !== 'HEAD' : (res.status === 301 || res.status === 302) && upper === 'POST') {
           method = 'GET';
           body = undefined;
         }

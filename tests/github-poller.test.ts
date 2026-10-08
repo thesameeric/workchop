@@ -971,6 +971,35 @@ describe('tokens', () => {
     }
   });
 
+  it('sends an action again as it was after a 301 or 302, as fetch does', async () => {
+    const u = await connected();
+    const a = mock.addThread(u.ghId, { title: 'A' });
+    const b = mock.addThread(u.ghId, { title: 'B' });
+    await u.start();
+    u.take();
+    mock.redirects.set('/api/notifications/threads/9001', { status: 301, location: `/api/notifications/threads/${a.id}` });
+    mock.redirects.set('/api/notifications/threads/9002', { status: 302, location: `/api/notifications/threads/${b.id}` });
+    expect(await u.poller.read(u.userId, '9001')).toBe(true);
+    expect(await u.poller.done(u.userId, '9002')).toBe(true);
+    expect(mock.calls(`/api/notifications/threads/${a.id}`, 'PATCH')).toHaveLength(1);
+    expect(mock.calls(`/api/notifications/threads/${b.id}`, 'DELETE')).toHaveLength(1);
+    expect(mock.threadsOf(u.ghId).map((t) => [t.id, t.unread])).toEqual([[a.id, false]]);
+
+    // A PUT keeps its body; a 303, or a 301 or 302 after a POST, is followed with a GET.
+    mock.redirects.set('/api/repos/octo/old/thing', { status: 301, location: '/api/repos/octo/new/thing' });
+    await (await u.api.call(u.userId, '/repos/octo/old/thing', { method: 'PUT', body: { x: 1 } })).body?.cancel();
+    expect(mock.calls('/api/repos/octo/new/thing', 'PUT').map((r) => r.body)).toEqual(['{"x":1}']);
+    mock.pages.set(`${mock.apiBase}/repos/octo/new/pulls/8`, `${mock.base}/octo/new/pull/8`);
+    for (const [status, method] of [[303, 'PATCH'], [301, 'POST'], [302, 'POST']] as const) {
+      mock.redirects.set('/api/repos/octo/old/pulls/8', { status, location: '/api/repos/octo/new/pulls/8' });
+      const res = await u.api.call(u.userId, '/repos/octo/old/pulls/8', { method, body: { x: 1 } });
+      expect(res.status).toBe(200);
+      await res.body?.cancel();
+    }
+    expect(mock.calls('/api/repos/octo/new/pulls/8', 'GET').map((r) => [r.body, r.headers['content-type']])).toEqual(Array(3).fill(['', undefined]));
+    u.poller.stop(u.userId);
+  });
+
   it('never follows a redirect with the client secret or a token', async () => {
     const elsewhere = await startMockGithub();
     try {
