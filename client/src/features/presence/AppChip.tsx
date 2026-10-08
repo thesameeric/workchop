@@ -1,7 +1,6 @@
 import { appInfo } from '../../../../shared/apps';
 import { HUGEICONS, type HugeiconName } from '../../ui/hugeicons';
-import { useStore } from '../../state/store';
-import { usePresence } from './state';
+import { useShownApp } from './state';
 
 /** An app's icon from shared/apps.ts. */
 export function AppIcon({ app, size = 14 }: { app: string; size?: number }) {
@@ -29,8 +28,6 @@ export function AppChip({ app, variant = 'list' }: { app: string; variant?: Chip
 
 /** The app chip of someone in the office (`self` for you). */
 export function PlayerApp({ id, self = false, variant }: { id?: string; self?: boolean; variant?: ChipVariant }) {
-  const theirs = useStore((s) => (!self && id ? (s.players[id]?.app ?? null) : null));
-  const mine = usePresence((s) => (self ? (s.self?.app ?? null) : null));
-  const app = self ? mine : theirs;
+  const app = useShownApp(id, self);
   return app ? <AppChip app={app} variant={variant} /> : null;
 }

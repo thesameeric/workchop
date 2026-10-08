@@ -3,7 +3,7 @@ import type { GithubBucket, GithubInbox, GithubItem } from '../shared/github';
 import { fetchStatus } from '../client/src/features/github/api';
 import { markAllRead, markDone, markRead } from '../client/src/features/github/data';
 import { failedRunText } from '../client/src/features/github/format';
-import { failureWatch, needsYou, useGithub } from '../client/src/features/github/state';
+import { failureWatch, hasNewFailure, needsYou, useGithub } from '../client/src/features/github/state';
 
 // The GitHub panel's client logic: which failed runs toast, the badge count, and (with a little of a
 // browser and stand-ins for the office connection and the app's store) the inbox and marking things.
@@ -16,13 +16,22 @@ const fake = vi.hoisted(() => {
   vi.stubGlobal('history', { state: null, replaceState: vi.fn() });
   const stored = new Map<string, string>();
   vi.stubGlobal('sessionStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => void stored.set(k, v), removeItem: (k: string) => void stored.delete(k) });
-  return {
+  const fake = {
     toast: vi.fn(),
     /** The data module's office-session hook, and the session it is in. */
     hooks: [] as ((session: unknown) => () => void)[],
     session: null as unknown,
-    app: { accountReady: false, account: null, officeId: null },
+    app: { accountReady: false, account: null, officeId: null, panel: 'none' },
+    /** The app store's subscribers. */
+    listeners: new Set<(state: unknown, prev: unknown) => void>(),
+    /** Changes the app's state, telling its subscribers. */
+    setApp(patch: Record<string, unknown>) {
+      const prev = fake.app;
+      fake.app = { ...prev, ...patch };
+      for (const listener of fake.listeners) listener(fake.app, prev);
+    },
   };
+  return fake;
 });
 vi.mock('../client/src/lib/session', () => ({
   getSession: () => fake.session,
@@ -30,7 +39,13 @@ vi.mock('../client/src/lib/session', () => ({
   onSession: (_id: string, hook: (session: unknown) => () => void) => void fake.hooks.push(hook),
 }));
 vi.mock('../client/src/state/store', () => {
-  const useStore = { getState: () => fake.app, subscribe: () => () => {} };
+  const useStore = {
+    getState: () => fake.app,
+    subscribe: (listener: (state: unknown, prev: unknown) => void) => {
+      fake.listeners.add(listener);
+      return () => void fake.listeners.delete(listener);
+    },
+  };
   return { useStore, getState: useStore.getState, setState: () => {}, toast: fake.toast };
 });
 
@@ -196,6 +211,43 @@ describe('the GitHub inbox (client)', () => {
     o.leave();
     expect(useGithub.getState()).toMatchObject({ items: {}, loaded: false, more: false });
     o = office();
+  });
+
+  it('shows a new failed run on your desk monitor until you look at it', async () => {
+    const flagged = () => hasNewFailure(useGithub.getState());
+    o.inbox({ items: [run('old', NOW - 60_000), item('1', 'mentions')] });
+    expect(flagged()).toBe(false);
+    // Read here (or on GitHub, which the server passes on), or done: the badge goes.
+    o.emit('github:item', run('2', NOW + 1000));
+    expect(flagged()).toBe(true);
+    markRead('2');
+    expect(flagged()).toBe(false);
+    o.emit('github:item', run('3', NOW + 2000));
+    expect(flagged()).toBe(true);
+    markDone('3');
+    expect(flagged()).toBe(false);
+    o.emit('github:item', run('4', NOW + 3000));
+    o.emit('github:item', run('4', NOW + 3000, 'failure', false));
+    expect(flagged()).toBe(false);
+    // Opening the panel clears it; new ones while it's open don't show.
+    o.emit('github:item', run('5', NOW + 4000));
+    o.emit('github:item', item('6', 'mentions', { updatedAt: NOW + 4000 }));
+    expect(flagged()).toBe(true);
+    fake.setApp({ panel: 'github' });
+    expect(useGithub.getState().newFailures).toEqual([]);
+    o.emit('github:item', run('7', NOW + 5000));
+    expect(flagged()).toBe(false);
+    fake.setApp({ panel: 'none' });
+    expect(flagged()).toBe(false);
+    // Successful runs never show; leaving the office forgets it.
+    o.emit('github:item', run('8', NOW + 6000, 'success'));
+    expect(flagged()).toBe(false);
+    o.emit('github:item', run('9', NOW + 7000));
+    expect(flagged()).toBe(true);
+    o.leave();
+    expect(flagged()).toBe(false);
+    o = office();
+    await flush();
   });
 
   it('marks read and done at once, putting them back when GitHub refuses', async () => {

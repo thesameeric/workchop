@@ -225,6 +225,8 @@ function githubSession(session: OfficeSession): () => void {
     set((s) => ({ items: { ...s.items, [item.id]: item } }));
     if (isNew && get().loaded) {
       toast(failedRunText(item), { kind: 'error', icon: GithubIcon, action: { label: 'Open', run: () => openItem(item) } });
+      // And on your desk's monitor, unless you're looking at the panel.
+      if (getAppState().panel !== 'github') set((s) => ({ newFailures: [...s.newFailures.filter((id) => id !== item.id), item.id] }));
     }
   };
   const onRemove = (id: string) => patchItems((items) => (items[id] ? without(items, id) : null));
@@ -267,5 +269,9 @@ function accountChanged({ accountReady, account }: { accountReady: boolean; acco
 
 useStore.subscribe(accountChanged);
 accountChanged(useStore.getState());
+// Opening the panel is looking at the failed runs: the monitor's badge goes.
+useStore.subscribe(({ panel }) => {
+  if (panel === 'github' && get().newFailures.length) set({ newFailures: [] });
+});
 reportReturn();
 onSession('github', githubSession);

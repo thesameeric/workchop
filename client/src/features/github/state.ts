@@ -17,6 +17,11 @@ export interface GithubState {
   loaded: boolean;
   /** Why GitHub can't be read right now, if it can't. */
   problem: GithubInbox['problem'] | null;
+  /**
+   * Failed runs that arrived since you last opened the panel (thread ids): a red badge pulses on your
+   * own desk's monitor while one is unread. Only this browser knows; nothing goes to the office.
+   */
+  newFailures: string[];
   /** The connect window is open. */
   connecting: boolean;
   /** Who the office connection was made as: an account id, null for a guest, undefined outside an office. */
@@ -28,7 +33,7 @@ export interface GithubState {
 const NO_COUNTS: GithubCounts = { reviewRequests: null, assigned: null };
 
 /** No inbox: signed out, disconnected, or waiting for it. */
-export const EMPTY_INBOX = { items: {}, counts: NO_COUNTS, more: false, loaded: false, problem: null } satisfies Partial<GithubState>;
+export const EMPTY_INBOX = { items: {}, counts: NO_COUNTS, more: false, loaded: false, problem: null, newFailures: [] } satisfies Partial<GithubState>;
 
 export const useGithub = create<GithubState>()(() => ({
   availability: 'unknown',
@@ -46,6 +51,14 @@ export function needsYou(item: GithubItem): boolean {
 
 function isFailedRun(item: GithubItem): boolean {
   return item.bucket === 'actions' && item.run?.status === 'failure';
+}
+
+/** A failed run arrived and you haven't looked at it yet: not read or done, nor the panel opened since. */
+export function hasNewFailure(s: Pick<GithubState, 'items' | 'newFailures'>): boolean {
+  return s.newFailures.some((id) => {
+    const item = s.items[id];
+    return !!item && item.unread && isFailedRun(item);
+  });
 }
 
 /**

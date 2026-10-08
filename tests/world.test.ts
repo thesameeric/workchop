@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { appInfo } from '../client/src/features/world/screen';
+import { describe, expect, it, vi } from 'vitest';
+import { appInfo, drawScreen } from '../client/src/features/world/screen';
 import { HUGEICONS } from '../client/src/ui/hugeicons';
 import { appInfo as appDef, HEADS_DOWN, OTHER_APP } from '../shared/apps';
 import { CATALOG_LIST, getEntry } from '../shared/catalog';
@@ -100,6 +100,25 @@ describe('desk monitors', () => {
     // Unknown apps show as "Working"; no app (or not an id) is the wallpaper.
     expect(appInfo('made-up')!.label).toBe('Working');
     for (const none of [null, undefined, '', 42, { id: 'figma' }]) expect(appInfo(none)).toBeNull();
+  });
+
+  it('show the app only when it is shared, else just the name and the time', () => {
+    vi.stubGlobal('document', { fonts: { check: () => true } });
+    /** The words a screen shows. */
+    const words = (app: unknown) => {
+      const texts: string[] = [];
+      const paint = { addColorStop: () => {} };
+      const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+        get: (target, key) => (key === 'fillText' ? (text: string) => texts.push(text) : key in target ? target[key] : typeof key === 'string' && key.startsWith('create') ? () => paint : () => {}),
+        set: (target, key, value) => ((target[key] = value), true),
+      });
+      drawScreen(ctx as unknown as CanvasRenderingContext2D, 384, 202, { name: 'Ana', app: appInfo(app), time: '09:41' });
+      return texts;
+    };
+    // No app (or one they don't share, which never reaches the office): the wallpaper.
+    expect(words(null)).toEqual(['09:41', 'Ana']);
+    expect(words('figma')).toEqual(['Figma — Ana', '09:41', String.fromCodePoint(HUGEICONS.figma), 'Figma', 'Ana is in Figma']);
+    vi.unstubAllGlobals();
   });
 });
 

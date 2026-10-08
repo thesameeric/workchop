@@ -9,6 +9,7 @@ import {
   areaAt,
   areaCells,
   darkAreas,
+  deskOf,
   deskOwner,
   isLamp,
   isLightOn,
@@ -26,7 +27,8 @@ import { walkTo } from '../../world/movement';
 import { officeData } from '../../world/officeCache';
 import { boxGeo, mat } from '../../world/prims';
 import { DESK_LAMP_BULB, DeskLamp, LightSwitch, PLANT_MODELS, useBulb } from './models';
-import { usePresence } from '../presence/state';
+import { hasNewFailure, useGithub } from '../github/state';
+import { useShownApp } from '../presence/state';
 import { appInfo, clockTime, drawBoot, drawScreen, type ScreenContent } from './screen';
 import { cardAnchor, openCard, sceneActions, useWorld } from './state';
 
@@ -168,9 +170,8 @@ function Screen({ who, onOff }: { who: string | null; onOff: () => void }) {
   );
 
   const name = useStore((s) => (who === 'self' ? s.me.name : who ? s.players[who]?.name : '')) ?? '';
-  const selfApp = usePresence((s) => s.self?.app ?? null);
-  const otherApp = useStore((s) => (who && who !== 'self' ? s.players[who]?.app : null));
-  const app = appInfo(who === 'self' ? selfApp : otherApp);
+  // Only what their name tag shows (nothing when they don't share it): then it's the wallpaper.
+  const app = appInfo(useShownApp(who, who === 'self'));
   const [time, setTime] = useState(clockTime);
   useEffect(() => {
     const t = setInterval(() => setTime(clockTime()), 15_000);
@@ -222,6 +223,66 @@ function Screen({ who, onOff }: { who: string | null; onOff: () => void }) {
       <mesh geometry={screenGeo} material={parts.material} position={[0, 0.98, -0.2742]} renderOrder={3} />
       <mesh geometry={glowGeo} material={parts.glow} position={[0, 0.632, -0.05]} rotation={[-Math.PI / 2, 0, 0]} scale={[1.2, 0.7, 1]} renderOrder={2} raycast={() => null} />
     </>
+  );
+}
+
+// ---------- Your monitor's GitHub badge ----------
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const noRaycast = () => null;
+
+// Sprites the same size on screen at any zoom (about 15px), so the badge is seen from across the office.
+const badgeMaterial = new THREE.SpriteMaterial({
+  map: (() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#e5484d';
+    ctx.beginPath();
+    ctx.arc(32, 32, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 42px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', 32, 35);
+    const t = new THREE.CanvasTexture(canvas);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })(),
+  sizeAttenuation: false,
+  depthWrite: false,
+  toneMapped: false,
+});
+const badgeGlow = new THREE.SpriteMaterial({ map: spotTexture, color: '#ff4d4f', opacity: 0.45, sizeAttenuation: false, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+
+/**
+ * A GitHub Actions run of yours failed: a small red badge pulses on your own desk's monitor (the one
+ * you claimed, or else the one you sit at) until you open the GitHub panel or mark the run read or
+ * done. Drawn only in your browser.
+ */
+function CiBadge({ item }: { item: OfficeItem }) {
+  const failed = useGithub(hasNewFailure);
+  return failed ? <CiBadgeIfMine item={item} /> : null;
+}
+
+function CiBadgeIfMine({ item }: { item: OfficeItem }) {
+  // The desk you claimed here; null for none (undefined outside an office or signed out).
+  const myDesk = useStore((s) => (s.account && s.office ? (deskOf(s.office, s.account.id)?.id ?? null) : undefined));
+  const sitting = useWorld((s) => s.screens[item.id] === 'self');
+  const group = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (!group.current) return;
+    const beat = reducedMotion.matches ? 0.4 : (Math.sin(clock.elapsedTime * Math.PI * 1.4) + 1) / 2;
+    group.current.scale.setScalar(1 + beat * 0.25);
+    badgeGlow.opacity = 0.25 + beat * 0.5;
+  });
+  if (myDesk !== item.id && !(myDesk === null && sitting)) return null;
+  return (
+    <group ref={group} position={[0.34, 1.13, -0.268]}>
+      <sprite material={badgeGlow} scale={0.045} renderOrder={4} raycast={noRaycast} />
+      <sprite material={badgeMaterial} scale={0.016} renderOrder={5} raycast={noRaycast} />
+    </group>
   );
 }
 
@@ -361,7 +422,6 @@ const halo = { lit: haloMaterial(0.45), dark: haloMaterial(0.85) };
 const poolMaterial = (opacity: number) =>
   new THREE.MeshBasicMaterial({ map: spotTexture, color: '#ffc46b', transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
 const pool = { lit: poolMaterial(0.22), dark: poolMaterial(0.5) };
-const noRaycast = () => null;
 
 /** Whether the ceiling lights are off where an item stands. */
 function useInDark(item: OfficeItem): boolean {
@@ -650,6 +710,7 @@ function CardProjector() {
 const PLANT_TYPES = PLANTS.map((p) => p.type);
 
 registerItemDecor({ id: 'world-screen', order: 10, types: ['desk'], Component: DeskScreen });
+registerItemDecor({ id: 'world-ci-badge', order: 15, types: ['desk'], Component: CiBadge });
 registerItemDecor({ id: 'world-nameplate', order: 20, types: ['desk'], Component: Nameplate });
 registerItemDecor({ id: 'world-stickies', order: 30, types: ['desk'], Component: Stickies });
 registerItemDecor({ id: 'world-lamp-glow', order: 40, types: LAMP_TYPES, Component: LampGlow });

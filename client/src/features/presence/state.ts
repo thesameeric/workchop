@@ -2,10 +2,20 @@ import { create } from 'zustand';
 import type { ManualApp, PresenceState, PresenceUpdate } from '../../../../shared/presence';
 import { serverNow } from '../../lib/clock';
 import { getSession } from '../../lib/session';
-import { getState } from '../../state/store';
+import { getState, useStore } from '../../state/store';
 
 /** Your own presence, as the server last told you (null outside an office). */
 export const usePresence = create<{ self: PresenceState | null }>(() => ({ self: null }));
+
+/**
+ * The app shown next to someone's name (`self` for you), or null: what everyone in the office sees,
+ * after their privacy settings. Name tags, the people list, video tiles and desk monitors all use it.
+ */
+export function useShownApp(id: string | null | undefined, self = false): string | null {
+  const theirs = useStore((s) => (!self && id ? (s.players[id]?.app ?? null) : null));
+  const mine = usePresence((s) => (self ? (s.self?.app ?? null) : null));
+  return self ? mine : theirs;
+}
 
 /** Your sharing settings, kept with your account (both on unless turned off; off until it's known). */
 export function sharingPrefs(): { share: boolean; others: boolean } {
