@@ -208,9 +208,8 @@
   gap: 8px;
 }
 
-.coin-earn span {
+.coin-earn span:not(.hgi) {
   flex: 1;
-  text-align: left;
 }
 
 .coin-earn b {
