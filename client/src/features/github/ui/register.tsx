@@ -1,6 +1,6 @@
 // GitHub's place in the interface: its panel (with the dock badge) and Settings > Integrations, both
 // only on servers that have GitHub. Importing data.ts (through these) starts the rest.
-import { useStore } from '../../../state/store';
+import { canSignIn, useStore } from '../../../state/store';
 import { GithubIcon, PlugIcon } from '../../../ui/icons';
 import { registerPanel } from '../../../ui/panels';
 import { registerSettingsSection } from '../../../ui/settings';
@@ -14,8 +14,7 @@ let unregister: (() => void) | null = null;
 /** Shown when this server has GitHub; for guests only if they can sign in here to use it. */
 function visible(): boolean {
   const { availability } = useGithub.getState();
-  const { google, apple, dev } = useStore.getState().providers;
-  return availability === 'on' || (availability === 'guest' && (google || apple || dev));
+  return availability === 'on' || (availability === 'guest' && canSignIn());
 }
 
 function update(): void {

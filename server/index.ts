@@ -38,7 +38,7 @@ export interface ServerOptions {
   db?: Db;
   /** The address people open Workchop at; defaults to PUBLIC_URL, or http://localhost:5173 outside production. */
   publicUrl?: string | null;
-  /** Sign-in providers; defaults to the GOOGLE_*, APPLE_* and DEV_LOGIN variables. */
+  /** Sign-in providers; defaults to the GOOGLE_*, APPLE_*, GITHUB_* and DEV_LOGIN variables. */
   auth?: AuthOptions;
   /** Upload settings; unset ones come from UPLOADS_STORAGE, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_*. */
   uploads?: Partial<UploadOptions>;

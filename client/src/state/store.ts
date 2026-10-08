@@ -138,7 +138,7 @@ export const useStore = create<State>()(() => ({
   connection: 'online',
   account: null,
   accountReady: false,
-  providers: { google: false, apple: false, dev: false },
+  providers: { google: false, apple: false, github: false, dev: false },
   selfId: null,
   isOwner: false,
   office: null,
@@ -195,6 +195,11 @@ export function dismissToast(id: number): void {
 export function canBuild(): boolean {
   const { office, isOwner } = getState();
   return !!office && (office.settings.buildPolicy === 'everyone' || isOwner);
+}
+
+/** Whether this server offers any way to sign in. */
+export function canSignIn(s: Pick<State, 'providers'> = getState()): boolean {
+  return Object.values(s.providers).some(Boolean);
 }
 
 export function setPanel(panel: Panel): void {

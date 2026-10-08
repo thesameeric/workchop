@@ -6,7 +6,7 @@ import { colorFor, initials } from '../lib/color';
 import { navigate, officeIdFromPath } from '../lib/router';
 import { recentOffices, setOwnerKey } from '../lib/storage';
 import { ago } from '../lib/time';
-import { useStore } from '../state/store';
+import { canSignIn, useStore } from '../state/store';
 import { AccountButton, SignInOptions } from './Account';
 import { BuildingIcon, HammerIcon, HeadphonesIcon, LockIcon, UserEditIcon } from './icons';
 
@@ -109,7 +109,7 @@ function YourSpaces({ account }: { account: AccountUser }) {
 }
 
 function Intro() {
-  const providers = useStore((s) => s.providers);
+  const signIn = useStore(canSignIn);
   return (
     <div className="intro">
       <section className="hero">
@@ -133,7 +133,7 @@ function Intro() {
           </li>
         </ul>
       </section>
-      {(providers.google || providers.apple || providers.dev) && (
+      {signIn && (
         <section className="card sign-in-card">
           <h2>Sign in</h2>
           <p className="muted small">Keep your character on every device and find your offices again. Or just create or join one as a guest.</p>

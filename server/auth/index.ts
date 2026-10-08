@@ -2,17 +2,20 @@ import crypto from 'node:crypto';
 import { parseCookie, stringifySetCookie } from 'cookie';
 import express from 'express';
 import * as client from 'openid-client';
-import { MAX_SETTINGS, sanitizeProfile, sanitizeUserName, type AccountUser } from '../../shared/account';
+import { MAX_SETTINGS, sanitizeProfile, sanitizeUserName, type AccountUser, type AuthProvider } from '../../shared/account';
 import { clip } from '../../shared/text';
-import { TooManySettings, type Accounts } from '../accounts';
+import { TooManySettings, type Accounts, type Identity } from '../accounts';
 import type { Db } from '../db';
 import type { ClientSocket } from '../realtime';
+import { GITHUB_API_BASE, GITHUB_OAUTH_BASE, githubProvider, type GithubConfig, type GithubProvider } from './github';
 import { APPLE_ISSUER, appleProvider, checkPrivateKey, GOOGLE_ISSUER, googleProvider, parsePrivateKey, type AppleConfig, type GoogleConfig, type OidcProvider } from './oidc';
 import { hashToken, SESSION_DAYS, Sessions, type Session } from './sessions';
 
 export interface AuthOptions {
   google: GoogleConfig | null;
   apple: AppleConfig | null;
+  /** The GitHub notifications OAuth App (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET); absent is off. */
+  github?: GithubConfig | null;
   /** The "dev" provider: sign in with any name and email, no password. For development and tests only. */
   devLogin: boolean;
 }
@@ -32,12 +35,22 @@ export function authOptionsFromEnv(env: NodeJS.ProcessEnv = process.env, product
       issuer: env.APPLE_ISSUER || APPLE_ISSUER,
     };
   }
+  const githubId = env.GITHUB_CLIENT_ID?.trim();
+  const githubSecret = env.GITHUB_CLIENT_SECRET?.trim();
+  const github = githubId && githubSecret
+    ? {
+        clientId: githubId,
+        clientSecret: githubSecret,
+        oauthBase: (env.GITHUB_OAUTH_BASE?.trim() || GITHUB_OAUTH_BASE).replace(/\/+$/, ''),
+        apiBase: (env.GITHUB_API_BASE?.trim() || GITHUB_API_BASE).replace(/\/+$/, ''),
+      }
+    : null;
   let devLogin = env.DEV_LOGIN === 'true';
   if (devLogin && production && env.DEV_LOGIN_IN_PRODUCTION !== 'true') {
     console.warn('[auth] DEV_LOGIN is ignored in production (anyone could sign in as anyone)');
     devLogin = false;
   }
-  return { google, apple, devLogin };
+  return { google, apple, github, devLogin };
 }
 
 /** A same-site path to go back to after signing in; anything else becomes "/". */
@@ -53,18 +66,34 @@ export function safeReturnPath(v: unknown): string {
   }
 }
 
+/** Whether this app's own page opened the address (or the person typed it): never another site. */
+export function fromThisApp(req: express.Request, publicOrigin: string | null): boolean {
+  const site = req.get('sec-fetch-site');
+  if (site) return site === 'same-origin' || site === 'none';
+  // Browsers without Sec-Fetch-Site still say where the page was.
+  const from = req.get('origin') ?? req.get('referer');
+  try {
+    return !!from && !!publicOrigin && new URL(from).origin === publicOrigin;
+  } catch {
+    return false;
+  }
+}
+
 function withError(path: string, code: string): string {
   const url = new URL(path, 'http://same.invalid');
   url.searchParams.set('auth_error', code);
   return url.pathname + url.search + url.hash;
 }
 
+/** The auth_error for an error the provider sent back. */
+const errorCode = (error: string) => (error === 'access_denied' || error === 'user_cancelled_authorize' ? 'cancelled' : 'failed');
+
 const TX_MINUTES = 10;
 
 export interface AuthDeps {
   db: Db;
   accounts: Accounts;
-  /** Origin the browser uses (PUBLIC_URL); null disables Google and Apple, which need it for redirects. */
+  /** Origin the browser uses (PUBLIC_URL); null disables Google, Apple and GitHub, which need it for redirects. */
   publicOrigin: string | null;
   options: AuthOptions;
   /** Called after a session is deleted, to disconnect its sockets. */
@@ -76,21 +105,24 @@ export interface AuthDeps {
 
 export type Auth = ReturnType<typeof createAuth>;
 
-/** Sign-in with Google, Apple or the dev login, cookie sessions, and the /api/auth and /api/me routes. */
+/** Sign-in with Google, Apple, GitHub or the dev login, cookie sessions, and the /api/auth and /api/me routes. */
 export function createAuth(deps: AuthDeps) {
   const { db, accounts, publicOrigin, options } = deps;
   const sessions = new Sessions(db);
   // Secure cookies need HTTPS, and Safari won't send them to http://localhost.
   const secure = publicOrigin?.startsWith('https:') ?? false;
   const sessionCookie = secure ? '__Host-wc_session' : 'wc_session';
-  const googleTxCookie = secure ? '__Host-wc_auth' : 'wc_auth';
+  // Google and GitHub return with a top-level GET, which carries SameSite=Lax cookies.
+  const txCookie = secure ? '__Host-wc_auth' : 'wc_auth';
   // Apple returns with a cross-site POST, which only carries SameSite=None (and so Secure) cookies.
   const appleTxCookie = '__Host-wc_auth_apple';
 
   const providers: Partial<Record<'google' | 'apple', OidcProvider>> = {};
-  if (options.google || options.apple) {
-    if (!publicOrigin) console.warn('[auth] Google and Apple sign-in need PUBLIC_URL (the address people open Workchop at); they are off');
+  let github: GithubProvider | null = null;
+  if (options.google || options.apple || options.github) {
+    if (!publicOrigin) console.warn('[auth] Google, Apple and GitHub sign-in need PUBLIC_URL (the address people open Workchop at); they are off');
     else {
+      if (options.github) github = githubProvider(options.github, `${publicOrigin}/api/auth/github/callback`);
       if (options.google) providers.google = googleProvider(options.google);
       if (options.apple) {
         try {
@@ -104,8 +136,9 @@ export function createAuth(deps: AuthDeps) {
     }
   }
   if (!deps.quiet) {
-    const on = [...Object.keys(providers), ...(options.devLogin ? ['dev login'] : [])];
+    const on = [...Object.keys(providers), ...(github ? ['github'] : []), ...(options.devLogin ? ['dev login'] : [])];
     if (on.length) console.log(`[auth] sign-in with ${on.join(', ')}`);
+    if (github) console.log(`[auth] GitHub sign-in callback to register: ${publicOrigin}/api/auth/github/callback`);
   }
 
   const setCookie = (res: express.Response, name: string, value: string | null, opts: { maxAge: number; sameSite?: 'lax' | 'none'; secure?: boolean }) => {
@@ -162,10 +195,91 @@ export function createAuth(deps: AuthDeps) {
     setSession(res, token);
   };
 
+  /** Saves a sign-in in progress (the server may restart meanwhile); returns the id for its cookie. */
+  const saveTx = async (provider: Exclude<AuthProvider, 'dev'>, state: string, nonce: string, verifier: string | null, returnTo: string): Promise<string> => {
+    const txId = crypto.randomBytes(32).toString('base64url');
+    await db.query(
+      `INSERT INTO auth_tx (id_hash, provider, state, nonce, code_verifier, return_to, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now() + interval '${TX_MINUTES} minutes')`,
+      [hashToken(txId), provider, state, nonce, verifier, returnTo],
+    );
+    return txId;
+  };
+
+  /** The browser's sign-in in progress with `provider`, used up by any answer; null if there's none or it expired. */
+  const takeTx = async (req: express.Request, res: express.Response, provider: Exclude<AuthProvider, 'dev'>) => {
+    const apple = provider === 'apple';
+    const txName = apple ? appleTxCookie : txCookie;
+    const txId = cookiesOf(req.headers.cookie)[txName];
+    setCookie(res, txName, null, { maxAge: 0, ...(apple ? { sameSite: 'none', secure: true } : {}) });
+    const found = txId
+      ? await db.query<{ state: string; nonce: string; code_verifier: string | null; return_to: string; fresh: boolean }>(
+          `DELETE FROM auth_tx WHERE id_hash = $1 AND provider = $2
+           RETURNING state, nonce, code_verifier, return_to, expires_at > now() AS fresh`,
+          [hashToken(txId), provider],
+        )
+      : null;
+    const tx = found?.rows[0];
+    return tx?.fresh ? tx : null;
+  };
+
   const router = express.Router();
 
   router.get('/auth/providers', (_req, res) => {
-    res.json({ google: !!providers.google, apple: !!providers.apple, dev: options.devLogin });
+    res.json({ google: !!providers.google, apple: !!providers.apple, github: !!github, dev: options.devLogin });
+  });
+
+  // GitHub is OAuth 2 without discovery or ID tokens, so it has routes of its own.
+  router.get('/auth/github/start', async (req, res) => {
+    if (!github) {
+      res.status(404).json({ error: 'This sign-in method is not available.' });
+      return;
+    }
+    const returnTo = safeReturnPath(req.query.return);
+    // Another site mustn't sign you in (or switch your account) behind your back.
+    if (!fromThisApp(req, publicOrigin)) {
+      res.redirect(withError(returnTo, 'failed'));
+      return;
+    }
+    const state = client.randomState();
+    const verifier = client.randomPKCECodeVerifier();
+    // No nonce: there's no ID token to carry it.
+    const txId = await saveTx('github', state, '', verifier, returnTo);
+    setCookie(res, txCookie, txId, { maxAge: TX_MINUTES * 60 });
+    res.redirect(github.authorizeUrl(state, await client.calculatePKCECodeChallenge(verifier)));
+  });
+
+  router.get('/auth/github/callback', async (req, res) => {
+    if (!github) {
+      res.status(404).json({ error: 'GitHub sign-in is not enabled.' });
+      return;
+    }
+    const params = new URL(req.originalUrl, 'http://same.invalid').searchParams;
+    const tx = await takeTx(req, res, 'github');
+    if (!tx) {
+      res.redirect(withError('/', 'expired'));
+      return;
+    }
+    const error = params.get('error');
+    if (error) {
+      res.redirect(withError(tx.return_to, errorCode(error)));
+      return;
+    }
+    const code = params.get('code');
+    let identity: Identity | null = null;
+    if (code && params.get('state') === tx.state) {
+      try {
+        identity = await github.identity(code, tx.code_verifier ?? '');
+      } catch (err) {
+        console.warn('[auth] github sign-in failed:', (err as Error).message);
+      }
+    }
+    if (!identity) {
+      res.redirect(withError(tx.return_to, 'failed'));
+      return;
+    }
+    await signIn(req, res, await accounts.signIn(identity));
+    res.redirect(tx.return_to);
   });
 
   router.get('/auth/:provider/start', async (req, res) => {
@@ -187,12 +301,7 @@ export function createAuth(deps: AuthDeps) {
     const state = client.randomState();
     const nonce = client.randomNonce();
     const verifier = provider.pkce ? client.randomPKCECodeVerifier() : null;
-    const txId = crypto.randomBytes(32).toString('base64url');
-    await db.query(
-      `INSERT INTO auth_tx (id_hash, provider, state, nonce, code_verifier, return_to, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now() + interval '${TX_MINUTES} minutes')`,
-      [hashToken(txId), provider.name, state, nonce, verifier, returnTo],
-    );
+    const txId = await saveTx(provider.name, state, nonce, verifier, returnTo);
     const params: Record<string, string> = {
       ...provider.params,
       // Always from PUBLIC_URL: behind a proxy the request itself may say http://container:3001.
@@ -208,30 +317,20 @@ export function createAuth(deps: AuthDeps) {
     // Apple wants spaces in the scope as %20, not "+".
     url.search = url.searchParams.toString().replace(/\+/g, '%20');
     if (provider.name === 'apple') setCookie(res, appleTxCookie, txId, { maxAge: TX_MINUTES * 60, sameSite: 'none', secure: true });
-    else setCookie(res, googleTxCookie, txId, { maxAge: TX_MINUTES * 60 });
+    else setCookie(res, txCookie, txId, { maxAge: TX_MINUTES * 60 });
     res.redirect(url.href);
   });
 
   /** Checks the provider's answer against the saved sign-in, then starts a session and goes back. */
   const finish = async (req: express.Request, res: express.Response, provider: OidcProvider, params: URLSearchParams, appleUser?: unknown) => {
-    const txName = provider.name === 'apple' ? appleTxCookie : googleTxCookie;
-    const txId = cookiesOf(req.headers.cookie)[txName];
-    setCookie(res, txName, null, { maxAge: 0, ...(provider.name === 'apple' ? { sameSite: 'none', secure: true } : {}) });
-    const found = txId
-      ? await db.query<{ state: string; nonce: string; code_verifier: string | null; return_to: string; fresh: boolean }>(
-          `DELETE FROM auth_tx WHERE id_hash = $1 AND provider = $2
-           RETURNING state, nonce, code_verifier, return_to, expires_at > now() AS fresh`,
-          [hashToken(txId), provider.name],
-        )
-      : null;
-    const tx = found?.rows[0];
-    if (!tx || !tx.fresh) {
+    const tx = await takeTx(req, res, provider.name);
+    if (!tx) {
       res.redirect(withError('/', 'expired'));
       return;
     }
     const error = params.get('error');
     if (error) {
-      res.redirect(withError(tx.return_to, error === 'access_denied' || error === 'user_cancelled_authorize' ? 'cancelled' : 'failed'));
+      res.redirect(withError(tx.return_to, errorCode(error)));
       return;
     }
     const current = new URL(`/api/auth/${provider.name}/callback`, publicOrigin!);

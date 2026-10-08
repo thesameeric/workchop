@@ -5,7 +5,7 @@ import { deskOf, deskOwner, MAX_NOTE_LENGTH, NOTE_COLORS, type DeskNote } from '
 import { colorFor, initials } from '../../lib/color';
 import { leaveOffice } from '../../lib/session';
 import { ago } from '../../lib/time';
-import { setPanel, setState, toast, useStore } from '../../state/store';
+import { canSignIn, setPanel, setState, toast, useStore } from '../../state/store';
 import {
   CloseIcon,
   DeskIcon,
@@ -162,7 +162,7 @@ function DeskCard({ desk }: { desk: OfficeItem }) {
 
 function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
   const mine = useStore((s) => (s.account && s.office ? deskOf(s.office, s.account.id) : undefined));
-  const canSignIn = useStore((s) => s.providers.google || s.providers.apple || s.providers.dev);
+  const signInOffered = useStore(canSignIn);
   const [busy, setBusy] = useState(false);
   const claim = async () => {
     setBusy(true);
@@ -184,7 +184,7 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
             </button>
           </div>
         </>
-      ) : canSignIn ? (
+      ) : signInOffered ? (
         <>
           <p className="wc-text">Sign in to claim a desk: your name goes on it, and people can leave you notes.</p>
           <div className="wc-actions">

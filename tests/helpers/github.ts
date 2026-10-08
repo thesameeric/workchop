@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 // A stand-in for github.com (OAuth web flow) and its REST API (under /api), for tests and for trying
-// the integration in a browser without a real OAuth App:
+// the integration and GitHub sign-in in a browser without a real OAuth App:
 //
 //   npx tsx tests/helpers/github.ts        (PORT=3999 by default; it prints the settings to use)
 
@@ -17,6 +17,22 @@ export interface MockThread {
   subject: { title: string; url: string | null; latest_comment_url: string | null; type: string };
   repository: { full_name: string; html_url: string };
   url: string;
+}
+
+export interface MockEmail {
+  email: string;
+  primary: boolean;
+  verified: boolean;
+}
+
+export interface MockUser {
+  id: number;
+  login: string;
+  name: string | null;
+  /** The public profile email (GET /user), usually null. */
+  email: string | null;
+  /** GET /user/emails, with the user:email scope. */
+  emails: MockEmail[];
 }
 
 interface Token {
@@ -70,13 +86,15 @@ export class MockGithub {
   apiBase = '';
   /** Show an Authorize/Cancel page instead of approving at once (for trying it in a browser). */
   interactive = false;
-  readonly users = new Map<number, { id: number; login: string }>();
+  readonly users = new Map<number, MockUser>();
   /** Who approves the next authorization (default: the first user). */
   authorizeAs: number | null = null;
   /** Send this error back from the next authorization instead of a code (e.g. access_denied). */
   authorizeError: string | null = null;
   /** Answer the next token request with { error }. */
   tokenError: string | null = null;
+  /** Answer GET /user/emails with this status instead (e.g. 403, a secondary rate limit). */
+  emailsStatus: number | null = null;
   /** Issue expiring tokens with refresh tokens (GitHub's default), in seconds. */
   accessTtl: number | null = 8 * 3600;
   refreshTtl: number | null = 183 * 24 * 3600;
@@ -122,8 +140,8 @@ export class MockGithub {
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  addUser(id: number, login: string) {
-    this.users.set(id, { id, login });
+  addUser(id: number, login: string, more: Partial<Pick<MockUser, 'name' | 'email' | 'emails'>> = {}) {
+    this.users.set(id, { id, login, name: null, email: null, emails: [], ...more });
     return this;
   }
 
@@ -268,12 +286,19 @@ export class MockGithub {
 
     const auth = this.bearer(req);
     if (!auth) return json(res, 401, { message: 'Bad credentials' });
-    const scopes = { 'X-OAuth-Scopes': auth.scope.split(/[\s,]+/).join(', ') };
+    const granted = auth.scope.split(/[\s,]+/);
+    const scopes = { 'X-OAuth-Scopes': granted.join(', ') };
     const user = this.users.get(auth.userId)!;
     const threads = this.threadsOf(auth.userId);
 
     if (path === '/user' && method === 'GET') {
-      return json(res, 200, { id: user.id, login: user.login, avatar_url: `https://avatars.githubusercontent.com/u/${user.id}?v=4` }, scopes);
+      const { id, login, name, email } = user;
+      return json(res, 200, { id, login, name, email, avatar_url: `https://avatars.githubusercontent.com/u/${id}?v=4` }, scopes);
+    }
+    if (path === '/user/emails' && method === 'GET') {
+      if (!granted.includes('user:email') && !granted.includes('user')) return json(res, 404, { message: 'Not Found' }, scopes);
+      if (this.emailsStatus) return json(res, this.emailsStatus, { message: 'Mock failure' }, scopes);
+      return json(res, 200, user.emails, scopes);
     }
     if (path === '/notifications' && method === 'GET') {
       const headers: Record<string, string> = { ...scopes, ...(this.pollInterval !== null && { 'X-Poll-Interval': String(this.pollInterval) }) };
@@ -433,7 +458,9 @@ export class MockGithub {
 }
 
 export async function startMockGithub(port = 0, host = '127.0.0.1'): Promise<MockGithub> {
-  return new MockGithub().addUser(583231, 'octocat').start(port, host);
+  return new MockGithub()
+    .addUser(583231, 'octocat', { name: 'The Octocat', emails: [{ email: 'octocat@example.com', primary: true, verified: true }] })
+    .start(port, host);
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -441,7 +468,7 @@ if (isMain) {
   const port = Number(process.env.PORT ?? 3999);
   const mock = await startMockGithub(port, 'localhost');
   mock.interactive = true;
-  mock.addUser(9919, 'hubot');
+  mock.addUser(9919, 'hubot', { name: 'Hubot', email: 'hubot@example.com' });
   const me = 583231;
   mock.addThread(me, { reason: 'mention', title: 'Can you take a look at the login page?', number: 12 });
   mock.addThread(me, { reason: 'review_requested', title: 'Add dark mode to the settings', number: 14 });
@@ -451,7 +478,8 @@ if (isMain) {
   mock.addThread(me, { reason: 'comment', type: 'Issue', title: 'Docs: explain the build mode', number: 7 });
   mock.addThread(me, { reason: 'subscribed', type: 'Discussion', title: 'Ideas for the next office theme', noUrl: true });
   mock.counts.set(me, { reviewRequests: 3, assigned: 2 });
-  console.log(`Mock GitHub on ${mock.base} (add notifications at ${mock.base}/_mock). Start Workchop with:
+  console.log(`Mock GitHub on ${mock.base} (add notifications at ${mock.base}/_mock). Start Workchop with these for
+GitHub notifications and GitHub sign-in:
 
   GITHUB_CLIENT_ID=${mock.clientId} GITHUB_CLIENT_SECRET=${mock.clientSecret} \\
   TOKEN_ENCRYPTION_KEY=${crypto.randomBytes(32).toString('base64')} \\

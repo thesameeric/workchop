@@ -52,12 +52,16 @@
   --swatch-edge: rgba(0, 0, 0, 0.08);
   --backdrop: rgba(10, 12, 25, 0.5);
   --neutral-soft: #eceef5;
-  /* Sign-in buttons, as Google's and Apple's guidelines ask (light page: Google white, Apple black). */
+  /* Sign-in buttons, as Google's and Apple's guidelines ask (light page: Google white, Apple black);
+     GitHub's in its own dark grey. */
   --google-bg: #ffffff;
   --google-line: #747775;
   --google-ink: #1f1f1f;
   --apple-bg: #000000;
   --apple-ink: #ffffff;
+  --github-bg: #24292f;
+  --github-line: #24292f;
+  --github-ink: #ffffff;
   --radius: 14px;
   --shadow: 0 10px 30px rgba(20, 22, 40, 0.12);
   --modal-shadow: 0 30px 60px rgba(10, 12, 25, 0.35);
@@ -99,6 +103,9 @@
   --google-ink: #e3e3e3;
   --apple-bg: #ffffff;
   --apple-ink: #000000;
+  --github-bg: #2d333b;
+  --github-line: #545d68;
+  --github-ink: #f0f6fc;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
   --modal-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
 }
@@ -652,6 +659,12 @@ kbd {
   border: 1px solid var(--apple-bg);
   color: var(--apple-ink);
   font-size: 15px;
+}
+
+.provider-btn.github {
+  background: var(--github-bg);
+  border: 1px solid var(--github-line);
+  color: var(--github-ink);
 }
 
 .provider-btn:hover {

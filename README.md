@@ -19,7 +19,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Your look and name are saved in the browser and can be changed at any time, even inside an office.
 
 **Accounts (optional)**
-- Sign in with Google or Apple (see [Accounts and sign-in](#accounts-and-sign-in)) to keep your character, status, theme and weather settings on every device, and find the offices you visit under *Your spaces*. Anyone with an office link can still join as a guest.
+- Sign in with Google, Apple or GitHub (see [Accounts and sign-in](#accounts-and-sign-in)) to keep your character, status, theme and weather settings on every device, and find the offices you visit under *Your spaces*. Anyone with an office link can still join as a guest.
 - Light and dark themes, or follow the device (*Settings > Appearance*).
 
 **The office**
@@ -125,7 +125,7 @@ Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose
 
 - **Where the data lives:** in the `db-data` Docker volume (offices, accounts and, unless you set up a bucket, uploaded files), and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
 - **Sign-in (optional):** see [Accounts and sign-in](#accounts-and-sign-in). Compose sets `PUBLIC_URL` to `https://<DOMAIN>`.
-- **GitHub notifications (optional):** set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` in `.env`, see [GitHub](#github).
+- **GitHub sign-in and notifications (optional):** set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env` for sign-in, and `TOKEN_ENCRYPTION_KEY` as well for notifications, see [GitHub](#github).
 - **TURN (optional):** people behind strict corporate firewalls may need a relay for calls to connect. The simplest is [Cloudflare's TURN service](#cloudflare-turn-for-calls). To run your own instead, set `TURN_URL=turn:<DOMAIN>:3478`, `TURN_USERNAME` and `TURN_CREDENTIAL` in `.env`, open TCP/UDP 3478 and UDP 49160–49200, and start with `docker compose --profile turn up -d --build`.
 
 ### Hosting on Cloudflare
@@ -168,7 +168,7 @@ npx wrangler secret put DATABASE_URL        # e.g. postgresql://…neon.tech/neo
 npm run deploy                              # builds the app and the image, then deploys
 ```
 
-The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, `OPEN_METEO_API_KEY` (for the [weather](#weather) in commercial use), `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (for [GitHub](#github)), and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
+The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, `OPEN_METEO_API_KEY` (for the [weather](#weather) in commercial use), `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (for [GitHub](#github) sign-in and notifications), and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
 
 How it behaves:
 - **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running. [Desktop helpers](#current-app-and-the-desktop-helper) don't: their reports never start the container or keep it running.
@@ -233,7 +233,7 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 
 Everything is set with environment variables: in `.env` for Docker Compose (see `.env.example`), and on Cloudflare Containers as wrangler secrets (`npx wrangler secret put NAME`) or, for the ones that aren't secret, under `vars` in `cloudflare/wrangler.jsonc`. Keep the ones marked secret out of the repository and of logs.
 
-**Deploy checklist.** Required: a database (`DATABASE_URL`; Compose runs its own Postgres, and needs `DOMAIN` and `POSTGRES_PASSWORD` in `.env`) and `PUBLIC_URL`, the HTTPS address people use (Compose sets it from `DOMAIN`). Then, as needed: sign-in (Google and/or Apple), a bucket for uploaded files (R2 on Cloudflare), TURN for people behind strict firewalls, GitHub notifications, Spotify listen-along, an Open-Meteo key for commercial use, and how long to keep chat. Everything else has a sensible default.
+**Deploy checklist.** Required: a database (`DATABASE_URL`; Compose runs its own Postgres, and needs `DOMAIN` and `POSTGRES_PASSWORD` in `.env`) and `PUBLIC_URL`, the HTTPS address people use (Compose sets it from `DOMAIN`). Then, as needed: sign-in (Google, Apple and/or GitHub), a bucket for uploaded files (R2 on Cloudflare), TURN for people behind strict firewalls, GitHub notifications, Spotify listen-along, an Open-Meteo key for commercial use, and how long to keep chat. Everything else has a sensible default.
 
 | Variable | Needed? | Secret? | Default | What it's for, and where to get it |
 | --- | --- | --- | --- | --- |
@@ -248,8 +248,8 @@ Everything is set with environment variables: in `.env` for Docker Compose (see 
 | `UPLOADS_STORAGE` | No | No | `s3` when `S3_BUCKET` is set, else `db` with Postgres, `fs` with PGlite | Where uploaded files (chat attachments, office tracks) go: `s3`, `db` or `fs`. Each file remembers where it went, so switching keeps old files readable |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | Recommended on Cloudflare (R2) | The access key and its secret | –, `auto` for the region | An S3-compatible bucket for uploads, with path-style URLs. Cloudflare R2: create a bucket and an API token with object read and write; the endpoint is `https://<account id>.r2.cloudflarestorage.com` |
 | `UPLOAD_MAX_BYTES`, `UPLOADS_QUOTA_MB` | No | No | `10485760`, `1024` | Largest file, and the total each office may keep |
-| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | For [GitHub notifications](#github) | The secret | – | An OAuth App on GitHub (*Developer settings > OAuth Apps*). GitHub also needs `TOKEN_ENCRYPTION_KEY`, `PUBLIC_URL` and a way to sign in |
-| `TOKEN_ENCRYPTION_KEY` | For GitHub | Yes | – | Encrypts the saved GitHub tokens: 32 random bytes in base64, from `openssl rand -base64 32`. Without a valid key, GitHub stays off and the log says why. Keep it: with a new key, everyone has to connect GitHub again |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | For "Sign in with GitHub" and [GitHub notifications](#github) | The secret | – | An OAuth App on GitHub (*Developer settings > OAuth Apps*), with the callback URLs for both (see [Accounts and sign-in](#accounts-and-sign-in) and [GitHub](#github)). Both need `PUBLIC_URL`; notifications also need `TOKEN_ENCRYPTION_KEY` |
+| `TOKEN_ENCRYPTION_KEY` | For GitHub notifications | Yes | – | Encrypts the saved GitHub tokens: 32 random bytes in base64, from `openssl rand -base64 32`. Without a valid key, GitHub notifications stay off and the log says why (signing in with GitHub only needs the client ID and secret). Keep it: with a new key, everyone has to connect GitHub again |
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_KEY_API_TOKEN` | For people behind strict firewalls (or the TURN settings below) | The API token | – | Cloudflare's TURN service, from the dashboard (*Realtime > TURN*): short-lived credentials per visitor (replaces the static ICE servers below) |
 | `CLOUDFLARE_TURN_TTL` | No | No | `86400` | How long those credentials last, in seconds (600 to 172800) |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | No | The credential | – | Your own TURN server, e.g. Compose's coturn (comma-separate several URLs) |
@@ -268,10 +268,11 @@ STUN alone is enough on most home and office networks. People behind strict corp
 
 ### Accounts and sign-in
 
-Signing in is optional: anyone with an office link can still join as a guest. People who sign in keep their character, status, theme and weather settings across devices, and the home page lists the offices they visit under *Your spaces* (with who's in them right now), the ones they created (or opened with the owner key) as their own. Accounts are never merged by email address, so signing in with Google and with Apple gives two accounts. The sign-in buttons (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
+Signing in is optional: anyone with an office link can still join as a guest. People who sign in keep their character, status, theme and weather settings across devices, and the home page lists the offices they visit under *Your spaces* (with who's in them right now), the ones they created (or opened with the owner key) as their own. Accounts are never merged by email address, so signing in with Google and with GitHub gives two accounts. The sign-in buttons (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
 
 - **Google:** in the Google Cloud console (Google Auth Platform), set up the branding, set the audience to *External* and publish it to *In production* (for just name, email and profile no review is needed). Create a *Web application* client with the redirect URI `https://<your host>/api/auth/google/callback` (and `http://localhost:5173/api/auth/google/callback` for development), copy the secret right away (it's shown once), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Google deletes clients that go unused for six months.
 - **Apple** (needs a paid Apple Developer membership): enable *Sign in with Apple* on an App ID, create a *Services ID* with your domain and the return URL `https://<your host>/api/auth/apple/callback` (HTTPS only, no localhost), and create a *Sign in with Apple* key. Set `APPLE_CLIENT_ID` (the Services ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY` (the `.p8` file). Apple sends a person's name only the first time they sign in.
+- **GitHub:** uses the OAuth App of [GitHub notifications](#github) (create it as described there), and is on whenever `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set (with `PUBLIC_URL` in production; `TOKEN_ENCRYPTION_KEY` isn't needed for it). Register `${PUBLIC_URL}/api/auth/github/callback` as another callback URL next to `…/api/integrations/github/callback` (and `http://localhost:5173/api/auth/github/callback` for development); the server's log prints it when GitHub sign-in is on. Existing setups with GitHub notifications get the button as soon as they update, so add the callback first, or GitHub refuses the sign-in. Signing in asks only for the `user:email` scope, to read the GitHub profile (name, picture) and email address. Workchop then revokes that token right away (only that one: a connection for notifications stays) and keeps no access to the GitHub account. GitHub asks every time which account to use, and signing in only starts from Workchop's own pages. Signing in with GitHub doesn't connect GitHub notifications: that's still *Connect GitHub* (scope `notifications`).
 - **Development:** `DEV_LOGIN=true npm run dev` adds a sign-in with just a name and email.
 
 Sessions last 30 days from the last visit, in an HttpOnly cookie (`__Host-wc_session` over HTTPS).
@@ -299,13 +300,13 @@ People who sign in can connect their own GitHub account and follow their GitHub 
 
 The dock badge counts unread mentions, review requests and failed runs. Clicking an item opens it on GitHub and marks it read; *Mark read*, *Done* and *Mark all read* change your inbox on GitHub too (*Mark all read* leaves unread what arrived after the panel last checked). Like GitHub's unread view, the panel lists unread notifications only: read ones leave it with the next update. A new failed run also pops up as a message with an *Open* button, and a small red badge pulses on the monitor of your own desk (the one you claimed, or else the one you sit at) until you open the panel or the run is read or done. Only your browser draws it: nothing about your GitHub reaches the office. People connect and disconnect in *Settings > Integrations*; guests see "Sign in to connect GitHub". On a server without the settings below, or where nobody can sign in, GitHub doesn't appear at all.
 
-**Setting it up.** GitHub needs people to sign in, so set up [Google or Apple sign-in](#accounts-and-sign-in) (or `DEV_LOGIN` for development) and `PUBLIC_URL` first. Then:
+**Setting it up.** GitHub needs people to sign in and `PUBLIC_URL`. The OAuth App below also gives them [Sign in with GitHub](#accounts-and-sign-in) (Google, Apple and `DEV_LOGIN` work too). Then:
 1. Create an **OAuth App** (not a GitHub App: GitHub's notifications API doesn't accept GitHub App tokens). Create it under your company's GitHub organization (*Organization settings > Developer settings > OAuth Apps > New OAuth App*), because apps an organization owns get access to its data automatically. A personal one (<https://github.com/settings/applications/new>) works too, but then each organization that restricts OAuth Apps has to approve it first (see below).
-2. Name it (people see the name when they connect) and use your Workchop address as the *Homepage URL*. Set the *Authorization callback URL* to `${PUBLIC_URL}/api/integrations/github/callback`, e.g. `https://office.example.com/api/integrations/github/callback`. It must match exactly. An app can have up to 10 callback URLs, so development (`http://localhost:5173/api/integrations/github/callback`) and production can share one app. Leave *Enable Device Flow* off.
+2. Name it (people see the name when they connect) and use your Workchop address as the *Homepage URL*. Set the *Authorization callback URL* to `${PUBLIC_URL}/api/integrations/github/callback`, e.g. `https://office.example.com/api/integrations/github/callback`, and add `${PUBLIC_URL}/api/auth/github/callback` for signing in. They must match exactly. An app can have up to 10 callback URLs, so development (`http://localhost:5173/api/integrations/github/callback` and `…/api/auth/github/callback`) and production can share one app. Leave *Enable Device Flow* off.
 3. Keep *Expire user access tokens* on (the default). Access tokens then last 8 hours, and Workchop renews them with the refresh token GitHub gives it, which lasts 6 months without use.
 4. Generate a client secret and copy it right away (GitHub shows it only once).
 5. Generate the encryption key with `openssl rand -base64 32`.
-6. Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (in `.env` for Compose, or with `npx wrangler secret put NAME` on Cloudflare Containers) and restart. If only one of the client ID and secret is set, the key is missing or invalid, or `PUBLIC_URL` isn't set (in production), GitHub stays off and the server's log says why. When it's on, the log says so, with the callback URL to register. A `PUBLIC_URL` that isn't an http(s) address stops the server from starting. One that differs from the address people use, or from the callback URL above, makes connecting fail at GitHub.
+6. Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (in `.env` for Compose, or with `npx wrangler secret put NAME` on Cloudflare Containers) and restart. If only one of the client ID and secret is set, or `PUBLIC_URL` isn't set (in production), GitHub stays off; if the key is missing or invalid, only notifications do (signing in with GitHub doesn't need it). The server's log says why. When they're on, the log says so, with the callback URLs to register. A `PUBLIC_URL` that isn't an http(s) address stops the server from starting. One that differs from the address people use, or from the callback URL above, makes connecting fail at GitHub.
 
 Keep `TOKEN_ENCRYPTION_KEY` safe and don't change it. The saved tokens can only be read with it, so with a new key everyone has to connect GitHub again, and anyone who has both the key and the database can use the tokens.
 
@@ -329,7 +330,7 @@ npx tsx tests/helpers/github.ts               # on port 3999 (or PORT); prints t
 DEV_LOGIN=true <those settings> npm run dev   # in a second terminal
 ```
 
-Sign in with the dev login, open an office and connect GitHub: the mock asks which test account to authorize. Add notifications at `http://localhost:3999/_mock`; they show up with the next poll, within about a minute. The mock keeps everything in memory, so connect again after restarting it. To try the real GitHub, add `http://localhost:5173/api/integrations/github/callback` to your OAuth App's callback URLs and start `DEV_LOGIN=true npm run dev` with its `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` and a `TOKEN_ENCRYPTION_KEY`.
+Sign in with the dev login (or with GitHub, through the mock), open an office and connect GitHub: the mock asks which test account to authorize. Add notifications at `http://localhost:3999/_mock`; they show up with the next poll, within about a minute. The mock keeps everything in memory, so connect again after restarting it. To try the real GitHub, add `http://localhost:5173/api/integrations/github/callback` and `http://localhost:5173/api/auth/github/callback` to your OAuth App's callback URLs and start `DEV_LOGIN=true npm run dev` with its `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` and a `TOKEN_ENCRYPTION_KEY`.
 
 ### Music and Spotify
 
@@ -431,7 +432,7 @@ server/   Express + Socket.IO
   officeStore.ts  Cache of open offices, debounced saves, flush on shutdown
   repos.ts     Offices in SQL (one jsonb row each)
   db/          The database (Postgres or PGlite), migrations, import of old JSON offices
-  auth/        Sign-in with Google, Apple or the dev login; cookie sessions
+  auth/        Sign-in with Google, Apple, GitHub or the dev login; cookie sessions
   accounts.ts  Users, sign-in identities, office memberships
   uploads.ts   File uploads and downloads (database, disk or S3/R2)
   features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
@@ -488,7 +489,7 @@ Tests use an in-memory PGlite. They run against real Postgres instead when `TEST
 
 Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicons/`. The app ships only the glyphs it uses: to add one, put its name (from `icons.css`) in `client/src/ui/icon-names.json`, export a component for it in `client/src/ui/icons.tsx` and run `npm run icons`. That regenerates `client/src/ui/hugeicons.ts` and the cut-down font `client/src/assets/hgi-subset.woff2`, and needs fontTools (`pip install fonttools brotli`).
 
-`GITHUB_OAUTH_BASE` and `GITHUB_API_BASE` (by default `https://github.com` and `https://api.github.com`) point the [GitHub](#github) integration at another server. They're only for the tests and the mock GitHub (`npx tsx tests/helpers/github.ts`); don't set them anywhere else.
+`GITHUB_OAUTH_BASE` and `GITHUB_API_BASE` (by default `https://github.com` and `https://api.github.com`) point GitHub sign-in and the [GitHub](#github) integration at another server. They're only for the tests and the mock GitHub (`npx tsx tests/helpers/github.ts`); don't set them anywhere else.
 
 Coins are off (see [Coins](#coins-off-for-now)): `COINS=on npm run dev` brings back the old version to work on it. Its tests (`tests/coins.test.ts`, `tests/client-coins.test.ts`) turn it on themselves and also check that it's off by default.
 

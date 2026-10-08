@@ -1,4 +1,4 @@
-import type { AccountUser, UserProfile } from '../../../shared/account';
+import type { AccountUser, AuthProvider, UserProfile } from '../../../shared/account';
 import type { AvatarConfig, Status } from '../../../shared/types';
 import { getState, setState, toast } from '../state/store';
 import { devSignIn, fetchMe, fetchProviders, signOutRequest, updateMe } from './api';
@@ -100,7 +100,7 @@ export function reportAuthError(): void {
 }
 
 /** Where a sign-in button goes: the provider, then back to this page. */
-export function signInUrl(provider: 'google' | 'apple'): string {
+export function signInUrl(provider: Exclude<AuthProvider, 'dev'>): string {
   return `/api/auth/${provider}/start?return=${encodeURIComponent(location.pathname + location.search)}`;
 }
 

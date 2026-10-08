@@ -57,6 +57,11 @@
   color: var(--glass-solid);
 }
 
+/* GitHub's dark button needs a visible edge on the dark glass. */
+.gh-guest .provider-btn.github {
+  border-color: var(--glass-muted);
+}
+
 /* The inbox: tabs and a bar on top, the list scrolls. */
 .gh-inbox {
   overflow: hidden;

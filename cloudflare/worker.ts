@@ -40,7 +40,7 @@ interface Env {
   APPLE_TEAM_ID?: string;
   APPLE_KEY_ID?: string;
   APPLE_PRIVATE_KEY?: string;
-  /** The OAuth App for GitHub notifications (callback: PUBLIC_URL + /api/integrations/github/callback). */
+  /** The OAuth App for GitHub sign-in and notifications (callbacks: PUBLIC_URL + /api/auth/github/callback and + /api/integrations/github/callback). */
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   /** 32 random bytes in base64 (`openssl rand -base64 32`) that encrypt the saved GitHub tokens. */
