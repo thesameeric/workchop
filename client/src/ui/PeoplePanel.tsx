@@ -5,6 +5,7 @@ import { colorFor, initials } from '../lib/color';
 import { local, remoteTargets } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { setState, useStore } from '../state/store';
+import { PlayerApp } from '../features/presence/AppChip';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon } from './icons';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
@@ -41,6 +42,7 @@ export function PeoplePanel() {
         </span>
         <div className="person-info">
           <strong>{me.name} (you)</strong>
+          <PlayerApp self />
           <select value={me.status} onChange={(e) => getSession()?.updateProfile({ status: e.target.value as Status })} aria-label="Status">
             {STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -61,6 +63,7 @@ export function PeoplePanel() {
           </span>
           <div className="person-info">
             <strong>{p.name}</strong>
+            <PlayerApp id={p.id} />
             <span className="muted small">
               {linked[p.id] ? <span className="badge">In conversation</span> : STATUS_LABEL[p.status]}
               {Number.isFinite(p.dist) && ` · ${p.dist.toFixed(0)} m`}

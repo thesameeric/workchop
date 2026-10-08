@@ -83,6 +83,15 @@ const PORT = 3001;
 const IDLE_MS = 15 * 60 * 1000;
 /** The server only starts listening once it reaches the database, which it retries for about 30 s. */
 const STARTUP_MS = 90 * 1000;
+/**
+ * Desktop helpers (the current-app indicator) report here every 15 s. They must not start a stopped
+ * container or keep an idle one running, so they only get through while people use Workchop.
+ */
+const HELPER_PATH = '/api/me/app-presence';
+/** Reports are passed on only this soon after a visit (open tabs check in every 4 minutes). */
+const HELPER_FORWARD_MS = 5 * 60 * 1000;
+/** How long a helper is asked to wait when its report isn't passed on (seconds). */
+const HELPER_RETRY_S = 60;
 
 /** A short fingerprint of the server's settings, to notice when secrets change. */
 async function fingerprint(env: Record<string, string>): Promise<string> {
@@ -101,6 +110,8 @@ function unavailable(message: string): Response {
 export class WorkchopServer extends DurableObject<Env> {
   /** Resolves once the container answers its health check. */
   private ready: Promise<void> | null = null;
+  /** When the last request other than a helper report came in. */
+  private lastVisit = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -116,6 +127,11 @@ export class WorkchopServer extends DurableObject<Env> {
     if (!this.env.DATABASE_URL && this.env.EPHEMERAL_STORAGE !== 'true') {
       return unavailable('Workchop needs a database on Cloudflare: set the DATABASE_URL secret (see the README).');
     }
+    const url = new URL(request.url);
+    if (url.pathname !== HELPER_PATH) this.lastVisit = Date.now();
+    else if (!container.running || Date.now() - this.lastVisit > HELPER_FORWARD_MS) {
+      return new Response(null, { status: 204, headers: { 'retry-after': String(HELPER_RETRY_S) } });
+    }
     // The container stops when idle (or when Cloudflare moves it): start a new one when needed.
     if (!container.running) this.ready = null;
     this.ready ??= this.start().catch((err) => {
@@ -129,7 +145,6 @@ export class WorkchopServer extends DurableObject<Env> {
       return unavailable('Workchop is starting up. Please try again in a moment.');
     }
 
-    const url = new URL(request.url);
     const forwarded = new Request(new URL(url.pathname + url.search, `http://container:${PORT}`), request);
     forwarded.headers.delete('host');
     try {

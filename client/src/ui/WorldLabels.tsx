@@ -4,6 +4,8 @@ import type { Status, Zone } from '../../../shared/types';
 import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
+import { PlayerApp } from '../features/presence/AppChip';
+import { DeskAppLabels } from '../features/presence/DeskLabels';
 import { LockIcon, MicOffIcon } from './icons';
 
 const TAG_Y = 2.12;
@@ -38,6 +40,7 @@ const PlayerLabel = memo(function PlayerLabel({
         <div className={`nametag${speaking ? ' speaking' : ''}${self ? ' self' : ''}`}>
           <span className={`status-dot ${status}`} />
           <span className="nametag-name">{name}</span>
+          <PlayerApp id={id} self={self} variant="tag" />
           {!mic && (
             <span className="nametag-muted">
               <MicOffIcon size={12} />
@@ -86,6 +89,8 @@ export function WorldLabels() {
       {zones.map((z) => (
         <ZoneLabel key={z.id} zone={z} active={z.id === activeZoneId} />
       ))}
+      {/* Under the name tags. */}
+      <DeskAppLabels />
       {ids.map((id) => (
         <RemoteLabel key={id} id={id} />
       ))}

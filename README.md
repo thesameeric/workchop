@@ -34,6 +34,11 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Text chat to everyone, to people nearby, or as a direct message. The people list shows who's in a conversation, with "go to" and "message" buttons.
 - Works on phones: tap to walk, drag to look around.
 
+**Current app** (like Tandem)
+- Show what you're working in next to your name: "Figma", "VS Code", "Heads-down"… on your name tag, in the people list, on video tiles and on your desk's monitor while you sit at it.
+- Pick it by hand (the status button next to you in the dock, or *Settings > Privacy & status*), for 30 minutes, an hour, today or until you clear it.
+- Or let the optional [desktop helper](#current-app-and-the-desktop-helper) show it automatically (signed-in people). *Share what app I'm using* turns it off everywhere at once.
+
 | Key | Action |
 | --- | --- |
 | `W` `A` `S` `D` / arrows | Move (`Shift` to run) |
@@ -136,7 +141,7 @@ npm run deploy                              # builds the app and the image, then
 The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
 
 How it behaves:
-- **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running.
+- **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running. [Desktop helpers](#current-app-and-the-desktop-helper) don't: their reports never start the container or keep it running.
 - **Restarts.** Deploys, changed secrets, and now and then Cloudflare's host maintenance briefly disconnect everyone. People see "Reconnecting…" for a few seconds, then carry on. Office edits are saved first. When you change a secret, the server restarts on the next visit so it picks up the new value.
 - **Placement.** Set `constraints.regions` in `cloudflare/wrangler.jsonc` to keep the container near your team and your database. Set `LOCATION_HINT` too, but **before the first visit**: Cloudflare places the coordinating Durable Object once and never moves it.
 - **Size.** It runs as a single container (live rooms are in memory), on `basic` (¼ vCPU, 1 GiB) by default. That's plenty for a few dozen people; use `standard-1` for more.
@@ -168,6 +173,8 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
 | Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
 | Who's online, positions, calls | In memory only (live state) |
+| Current app (picked by hand or from the desktop helper) | In memory only, never stored; a helper's report expires after 45 s without a heartbeat |
+| Desktop helper pairings: computer name, when paired and last used | The database (`api_tokens`), with only a SHA-256 of each token |
 
 **Postgres or PGlite?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in an `offices` table; the tables are created and upgraded automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. Without `DATABASE_URL`, the server runs PGlite, Postgres compiled to WebAssembly, inside its own process: no setup, fine for development and a single small server with a persistent disk, but it needs about 300–500 MB of memory and every query briefly pauses the server. Switching between the two doesn't move data over.
 
@@ -229,6 +236,24 @@ The built-in radio stations work out of the box. Two things to know before addin
   2. Set `SPOTIFY_CLIENT_ID` (in `.env` for Docker Compose) and restart. No client secret is needed (sign-in uses PKCE).
   3. Every listener needs **Spotify Premium** and a desktop browser. Apps in Spotify's *development mode* work only for accounts you add under *User Management* (currently up to 5). Spotify grants wider access only to established organisations, and its developer policy doesn't allow apps aimed at businesses. So treat listen-along as a feature for small teams and friends, and use the board's links and Jams for everyone else.
 
+### Current app and the desktop helper
+
+Browsers can't see which app you're using, so Workchop has two ways to show it:
+
+- **By hand**, for everyone (guests too): the status button next to you in the dock, or *Settings > Privacy & status*. What you pick wins over the helper. Nothing shows while you're *Away*.
+- **The desktop helper** (signed-in people): *Settings > Desktop helper > Pair a computer* creates a token for that computer, shown once, and a command to copy into a terminal, which asks for the token (so it stays out of your shell history). The command downloads one script (`helper/workchop-presence.cjs`, no packages, needs [Node.js](https://nodejs.org) 18+), pairs it and starts it. Later, start it with `node ~/workchop-presence.cjs run`; `status` shows what it would send, `unpair` forgets the token. Remove a computer in the same settings section and its token stops working at once.
+
+**Privacy.** Every 5 seconds the helper reads only the identifier of the app in front (a macOS bundle id, a Windows process name or a Linux window class), never window titles, URLs or the screen. It turns that into an id from Workchop's list (`shared/apps.ts`) **on your computer** and sends only the id, or `other` for any app not on the list (shown as "Working", or hidden if you turn off *Show other apps as "Working"*). It sends on a change plus a heartbeat every 15 s. The server keeps it in memory only. It's hidden while you're on *Do not disturb* or wearing headphones, and turning off *Share what app I'm using* hides it everywhere at once. Its token is kept in `~/.config/workchop/helper.json` (`%APPDATA%\Workchop\helper.json` on Windows), readable only by you.
+
+**Per system:**
+- **macOS:** reads `NSWorkspace.frontmostApplication` through `osascript` (JavaScript for Automation). It sends no Apple Events, so macOS asks for no Automation, Accessibility or Screen Recording permission.
+- **Windows:** one hidden PowerShell process reads the foreground window's process name (`GetForegroundWindow`). Where PowerShell is locked down (AppLocker/WDAC "ConstrainedLanguage"), the helper reports that it can't tell. Some company security tools flag PowerShell calling Windows APIs; ask your IT team first on a managed computer.
+- **Linux:** on X11 it uses `xprop` (`WM_CLASS` only). On Wayland it works on Sway, Hyprland and niri, and on GNOME with the [Focused Window D-Bus](https://github.com/flexagoon/focused-window-dbus) extension (which shows the focused window's title to other programs on your session bus too; Workchop drops it). Other Wayland desktops, including KDE Plasma, can't tell yet: the helper says so in *Settings > Desktop helper*, and picking a status by hand still works.
+
+**Starting it at login:** macOS, a LaunchAgent (`~/Library/LaunchAgents/com.workchop.presence.plist` running `node ~/workchop-presence.cjs run` with `RunAtLoad`); Windows, a shortcut in `shell:startup` to `node %USERPROFILE%\workchop-presence.cjs run` (or Task Scheduler); Linux, a systemd user service (`ExecStart=/usr/bin/node %h/workchop-presence.cjs run`, `systemctl --user enable --now workchop-presence`).
+
+**Server side.** `PUT /api/me/app-presence` with `Authorization: Bearer wcp_…` and `{"app": "<id>" | "other" | null, "platform": "macos" | "windows" | "linux", "v": 1}` answers 204. The server takes about one report per 2 s per token. When none of your tabs is in an office, it answers with `Retry-After: 30` and the helper waits. On Cloudflare Containers, the Worker answers helper reports itself (204, `Retry-After: 60`) when the container isn't running, and passes reports on only within 5 minutes of someone using Workchop (open tabs check in every 4 minutes), so a helper never starts the container and can't keep it running. Nothing to configure: the feature needs no settings of its own.
+
 ## How it works
 
 ```
@@ -255,6 +280,7 @@ server/   Express + Socket.IO
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangler.jsonc, worker.ts)
+helper/   The optional desktop helper for the current-app indicator (workchop-presence.cjs)
 ```
 
 - **The server decides who talks to whom.** Clients stream their position to the server, which runs the proximity and private-area rules in `shared/geometry.ts`. When two people should be connected it sends `peer:connect` to both, with a link id and which side makes the WebRTC offer. When they drift apart it sends `peer:disconnect`. Signalling messages are relayed only between currently linked people, on their current link id, so nobody can open a call with someone they shouldn't hear.
