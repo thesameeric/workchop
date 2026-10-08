@@ -10,12 +10,18 @@ import type { AuthProvider } from '../shared/account';
 const fake = vi.hoisted(() => {
   vi.stubGlobal('location', { pathname: '/o/abc', search: '?x=1' });
   const fake = {
-    state: { account: null, providers: { google: false, apple: false, github: false, dev: false } as Record<AuthProvider, boolean> },
+    state: { account: null as { id: string } | null, providers: { google: false, apple: false, github: false, dev: false } as Record<AuthProvider, boolean> },
     listeners: new Set<(state: unknown, prev: unknown) => void>(),
     /** This server's sign-in methods, telling the store's subscribers. */
     setProviders(providers: Partial<Record<AuthProvider, boolean>>) {
       const prev = fake.state;
       fake.state = { ...prev, providers: { google: false, apple: false, github: false, dev: false, ...providers } };
+      for (const listener of fake.listeners) listener(fake.state, prev);
+    },
+    /** Signs in or out, telling the store's subscribers. */
+    setAccount(account: { id: string } | null) {
+      const prev = fake.state;
+      fake.state = { ...prev, account };
       for (const listener of fake.listeners) listener(fake.state, prev);
     },
     /** What's in the dock and in Settings. */
@@ -114,6 +120,14 @@ describe('what needs an account (client)', () => {
     fake.setProviders({ github: true });
     expect(fake.sections.has('desktop-helper')).toBe(true);
     fake.setProviders({});
+    expect(fake.sections.has('desktop-helper')).toBe(false);
+  });
+
+  it('keeps the desktop helper for someone signed in when the sign-in methods are unknown', () => {
+    fake.setProviders({});
+    fake.setAccount({ id: 'u1' });
+    expect(fake.sections.has('desktop-helper')).toBe(true);
+    fake.setAccount(null);
     expect(fake.sections.has('desktop-helper')).toBe(false);
   });
 });

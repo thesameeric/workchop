@@ -1,6 +1,6 @@
 import type { PresenceState } from '../../../../shared/presence';
 import { onSession } from '../../lib/session';
-import { canSignIn, useStore } from '../../state/store';
+import { canSignIn, getState, useStore } from '../../state/store';
 import { icon } from '../../ui/icons';
 import { registerSettingsSection } from '../../ui/settings';
 import { HelperSection, StatusSection } from './Settings';
@@ -12,18 +12,20 @@ import './presence.css';
 
 registerSettingsSection({ id: 'presence', title: 'Privacy & status', icon: icon('user-status'), order: 30, Component: StatusSection });
 
-// Pairing the helper needs an account: its section is only on servers where people can sign in.
+// Pairing the helper needs an account: its section is only on servers where people can sign in, and
+// always for someone signed in, so they can still see and remove the computers they paired.
 let offHelper: (() => void) | null = null;
 function helperSection(): void {
-  if (canSignIn() && !offHelper) {
+  const show = !!getState().account || canSignIn();
+  if (show && !offHelper) {
     offHelper = registerSettingsSection({ id: 'desktop-helper', title: 'Desktop helper', icon: icon('laptop-programming'), order: 35, Component: HelperSection });
-  } else if (!canSignIn() && offHelper) {
+  } else if (!show && offHelper) {
     offHelper();
     offHelper = null;
   }
 }
 useStore.subscribe((s, prev) => {
-  if (s.providers !== prev.providers) helperSection();
+  if (s.providers !== prev.providers || s.account !== prev.account) helperSection();
 });
 helperSection();
 
