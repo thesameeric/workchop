@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { withGeo } from './geo';
 
 /*
  * Runs Workchop's Docker image (the Node server: API, Socket.IO realtime, calls signalling) on
@@ -20,6 +21,10 @@ interface Env {
   DATABASE_URL?: string;
   DATABASE_SSL?: string;
   SPOTIFY_CLIENT_ID?: string;
+  /** Key for Open-Meteo's paid weather API: the free one is for non-commercial use only. */
+  OPEN_METEO_API_KEY?: string;
+  /** "off" turns the weather off. */
+  WEATHER?: string;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_KEY_API_TOKEN?: string;
   CLOUDFLARE_TURN_TTL?: string;
@@ -52,6 +57,8 @@ const PASSED_TO_SERVER = [
   'DATABASE_URL',
   'DATABASE_SSL',
   'SPOTIFY_CLIENT_ID',
+  'OPEN_METEO_API_KEY',
+  'WEATHER',
   'CLOUDFLARE_TURN_KEY_ID',
   'CLOUDFLARE_TURN_KEY_API_TOKEN',
   'CLOUDFLARE_TURN_TTL',
@@ -162,8 +169,9 @@ export class WorkchopServer extends DurableObject<Env> {
 
   private async start(): Promise<void> {
     const container = this.ctx.container!;
-    // Every request arrives through Cloudflare, which sets CF-Connecting-IP to the visitor's address.
-    const env: Record<string, string> = { CLIENT_IP_HEADER: 'cf-connecting-ip' };
+    // Every request arrives through Cloudflare, which sets CF-Connecting-IP to the visitor's address,
+    // and through this Worker, which sets the x-workchop-geo-* headers (withGeo).
+    const env: Record<string, string> = { CLIENT_IP_HEADER: 'cf-connecting-ip', GEO_HEADERS: 'workchop' };
     for (const key of PASSED_TO_SERVER) {
       const value = this.env[key];
       if (value) env[key] = value;
@@ -232,6 +240,6 @@ export default {
   fetch(request, env): Promise<Response> {
     // Workchop keeps live rooms in memory, so everyone must reach the same server.
     const hint = env.LOCATION_HINT?.trim() as DurableObjectLocationHint | undefined;
-    return env.WORKCHOP.getByName('workchop', hint ? { locationHint: hint } : undefined).fetch(request);
+    return env.WORKCHOP.getByName('workchop', hint ? { locationHint: hint } : undefined).fetch(withGeo(request, request.cf));
   },
 } satisfies ExportedHandler<Env>;

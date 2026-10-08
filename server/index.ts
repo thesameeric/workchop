@@ -285,6 +285,7 @@ export async function startServer(opts: ServerOptions = {}) {
     realtime,
     uploads,
     publicOrigin,
+    clientIp,
   };
   try {
     await registerFeatures(features, ctx);

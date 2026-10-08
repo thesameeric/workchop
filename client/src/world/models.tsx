@@ -1,11 +1,12 @@
 import { useFrame } from '@react-three/fiber';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { JukeboxData } from '../../../shared/music';
 import type { ItemData } from '../../../shared/types';
 import { useStore } from '../state/store';
 import { getEntry } from '../../../shared/catalog';
 import { shade } from '../lib/color';
+import { sceneLighting } from './layers';
 import { Ball, Box, Cyl } from './prims';
 
 // Furniture built from primitives. Every model is centred on its footprint,
@@ -333,14 +334,46 @@ function Partition({ c }: { c: string }) {
   );
 }
 
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+/** What's inside sways a little in the wind (sceneLighting), about a point `y` up; not when the device asks for less motion. */
+function Sway({ y, children }: { y: number; children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  const phase = useMemo(() => Math.random() * 10, []);
+  useFrame(({ clock }) => {
+    const g = ref.current;
+    if (!g?.parent) return;
+    const { windX, windZ } = sceneLighting;
+    const wind = Math.hypot(windX, windZ);
+    if (wind < 0.5 || reducedMotion.matches) {
+      if (g.rotation.x || g.rotation.z) g.rotation.set(0, 0, 0);
+      return;
+    }
+    // Swings between upright and leaning away from the wind, at most about 3° (from 10 m/s up).
+    const angle = 0.06 * Math.min(wind / 10, 1) * (0.5 + 0.5 * Math.sin(clock.elapsedTime * 2.2 + phase));
+    // The wind in the model's own axes (the item may be turned).
+    const m = g.parent.matrixWorld.elements;
+    const x = (m[0] * windX + m[2] * windZ) / wind;
+    const z = (m[8] * windX + m[10] * windZ) / wind;
+    g.rotation.set(angle * z, 0, -angle * x);
+  });
+  return (
+    <group ref={ref} position={[0, y, 0]}>
+      <group position={[0, -y, 0]}>{children}</group>
+    </group>
+  );
+}
+
 function Plant() {
   return (
     <group>
       <Cyl p={[0, 0.2, 0]} rad={0.2} top={1.35} h={0.4} c="#d9774a" />
       <Cyl p={[0, 0.4, 0]} rad={0.25} h={0.02} c="#4a3326" shadow={false} />
-      <Ball p={[0, 0.68, 0]} s={[0.32, 0.36, 0.32]} c="#3a9d5d" />
-      <Ball p={[0.15, 0.85, 0.05]} s={[0.2, 0.24, 0.2]} c="#46b36b" />
-      <Ball p={[-0.13, 0.9, -0.08]} s={[0.18, 0.22, 0.18]} c="#2f8f55" />
+      <Sway y={0.42}>
+        <Ball p={[0, 0.68, 0]} s={[0.32, 0.36, 0.32]} c="#3a9d5d" />
+        <Ball p={[0.15, 0.85, 0.05]} s={[0.2, 0.24, 0.2]} c="#46b36b" />
+        <Ball p={[-0.13, 0.9, -0.08]} s={[0.18, 0.22, 0.18]} c="#2f8f55" />
+      </Sway>
     </group>
   );
 }
@@ -349,11 +382,13 @@ function TallPlant() {
   return (
     <group>
       <Cyl p={[0, 0.22, 0]} rad={0.2} top={1.25} h={0.44} c="#f2f2f2" />
-      <Cyl p={[0, 0.9, 0]} rad={0.035} h={1} c="#6b4423" />
-      <Ball p={[0, 1.55, 0]} s={[0.42, 0.4, 0.42]} c="#2f8f55" />
-      <Ball p={[0.2, 1.8, 0.1]} s={[0.28, 0.28, 0.28]} c="#3aa864" />
-      <Ball p={[-0.18, 1.85, -0.12]} s={[0.25, 0.25, 0.25]} c="#2a7d4b" />
-      <Ball p={[0.05, 1.25, -0.2]} s={[0.22, 0.2, 0.22]} c="#3a9d5d" />
+      <Sway y={0.44}>
+        <Cyl p={[0, 0.9, 0]} rad={0.035} h={1} c="#6b4423" />
+        <Ball p={[0, 1.55, 0]} s={[0.42, 0.4, 0.42]} c="#2f8f55" />
+        <Ball p={[0.2, 1.8, 0.1]} s={[0.28, 0.28, 0.28]} c="#3aa864" />
+        <Ball p={[-0.18, 1.85, -0.12]} s={[0.25, 0.25, 0.25]} c="#2a7d4b" />
+        <Ball p={[0.05, 1.25, -0.2]} s={[0.22, 0.2, 0.22]} c="#3a9d5d" />
+      </Sway>
     </group>
   );
 }

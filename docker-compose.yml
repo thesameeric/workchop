@@ -20,6 +20,9 @@ services:
       CLOUDFLARE_TURN_TTL: ${CLOUDFLARE_TURN_TTL:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       CHAT_RETENTION_DAYS: ${CHAT_RETENTION_DAYS:-}
+      # Weather: a paid Open-Meteo key for commercial use, or WEATHER=off.
+      OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
+      WEATHER: ${WEATHER:-}
       # The address people open Workchop at (sign-in redirects are built from it).
       PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN:?Set DOMAIN in .env}}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -39,6 +42,8 @@ services:
       S3_REGION: ${S3_REGION:-}
       # Caddy passes each visitor's address on in X-Forwarded-For (use cf-connecting-ip behind Cloudflare).
       CLIENT_IP_HEADER: ${CLIENT_IP_HEADER-x-forwarded-for}
+      # Visitors' approximate location for the weather: "cloudflare" only behind Cloudflare (see the README).
+      GEO_HEADERS: ${GEO_HEADERS:-}
     depends_on:
       db:
         condition: service_healthy

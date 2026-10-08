@@ -26,6 +26,11 @@ export interface ServerContext {
   uploads: Uploads;
   /** The address people open Workchop at (PUBLIC_URL's origin), when known. */
   publicOrigin: string | null;
+  /**
+   * The address a request comes from, for per-visitor limits: the first one in CLIENT_IP_HEADER when
+   * that is set (behind a proxy), otherwise the connection's.
+   */
+  clientIp(req: express.Request): string;
 }
 
 /**

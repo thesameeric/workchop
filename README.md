@@ -41,6 +41,10 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Signed-in members have a wallet of virtual coins (just for fun: no real money, nothing to buy or cash out). See [Coins](#coins).
 - Thank a coworker with a tip from the Wallet panel (its dock button shows your balance) or the people list, and everyone in the office sees a little celebration over them.
 
+**Local weather**
+- Everyone sees the weather and time of day where *they* are: the sky and sunlight follow their local time, with clouds, fog, rain, snow or thunderstorms around the office. A chip in the top bar shows the conditions, temperature and place; click it for details. Data from [Open-Meteo](https://open-meteo.com/) (see [Weather](#weather)).
+- The place is a city you pick, your device's location (only when you ask), or roughly where your connection comes from. You can also show your weather and local time on your row in the people list (off by default, and never the place).
+
 **Getting around**
 - `WASD` or the arrow keys move you relative to the camera, and `Shift` runs. Click the floor to walk there (with pathfinding); click a chair to walk over and sit.
 - Drag to orbit the camera and scroll to zoom. Walls and shelves between you and the camera fade out.
@@ -134,7 +138,7 @@ Keep running the Compose stack on your server, but let Cloudflare handle HTTPS i
 3. In `.env`, add `CLOUDFLARE_TUNNEL_TOKEN=<token>` and `COMPOSE_FILE=docker-compose.yml:deploy/cloudflare-tunnel.yml`, and set `DOMAIN` to the tunnel's hostname. With `COMPOSE_FILE` set, every plain `docker compose` command, including updates, uses the tunnel setup.
 4. If the stack already runs with Caddy, stop it first with `docker compose down` before adding `COMPOSE_FILE`. Then start it with `docker compose up -d --build`.
 
-Caddy isn't started, so you can close ports 80 and 443: nothing needs to be reachable from the internet. Calls still go directly between people, so use [Cloudflare TURN](#cloudflare-turn-for-calls) for people behind strict firewalls.
+Caddy isn't started, so you can close ports 80 and 443: nothing needs to be reachable from the internet. Calls still go directly between people, so use [Cloudflare TURN](#cloudflare-turn-for-calls) for people behind strict firewalls. To let the weather use each visitor's approximate location, turn on Cloudflare's *Add visitor location headers* and set `GEO_HEADERS=cloudflare` (see [Weather](#weather)).
 
 #### Cloudflare Containers
 
@@ -153,7 +157,7 @@ npx wrangler secret put DATABASE_URL        # e.g. postgresql://…neon.tech/neo
 npm run deploy                              # builds the app and the image, then deploys
 ```
 
-The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
+The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, `OPEN_METEO_API_KEY` (for the [weather](#weather) in commercial use), and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
 
 How it behaves:
 - **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running. [Desktop helpers](#current-app-and-the-desktop-helper) don't: their reports never start the container or keep it running.
@@ -190,6 +194,7 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Headphones (focus mode) | In memory only, while you're in the office |
 | Noise suppression choice, devices | Each person's browser (local storage) |
 | Coin wallets and every coin movement (a ledger) | The database |
+| Weather settings: on/off, units, sharing, the chosen city or the rounded device location | Each person's browser (local storage). For signed-in people, also with their account, except the device location. The weather itself is cached in memory only, per ~11 km cell |
 | Who's online, positions, calls | In memory only (live state) |
 | Current app (picked by hand or from the desktop helper) | In memory only, never stored; a helper's report expires after 45 s without a heartbeat |
 | Desktop helper pairings: computer name, when paired and last used | The database (`api_tokens`), with only a SHA-256 of each token |
@@ -232,12 +237,15 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` directly behind the bundled Caddy (set in Compose), `cf-connecting-ip` when every request comes through Cloudflare (set automatically on Containers and with the Tunnel). Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
 | `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
 | `CHAT_RETENTION_DAYS` | – (keep) | Delete chat messages (with their threads) that have been quiet for this many days, with their files (see [Chat](#chat)) |
+| `WEATHER` | – | `off` turns the [weather](#weather) off: no calls to Open-Meteo, and everyone sees the usual daytime office |
+| `OPEN_METEO_API_KEY` | – | Key for a paid Open-Meteo plan, needed for commercial use (the free API is non-commercial only, see [Weather](#weather)). A value that can't be a key (spaces, more than 200 characters) is ignored with a warning |
+| `GEO_HEADERS` | – | Who sets the headers with each visitor's approximate location, used for the weather: `workchop` (Workchop's Cloudflare Worker; set automatically on Containers) or `cloudflare` (Cloudflare's *Add visitor location headers* Managed Transform, e.g. with the Tunnel). Like `CLIENT_IP_HEADER`, only set it when every request comes through that proxy, or visitors could fake their location |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
 
 ### Accounts and sign-in
 
-Signing in is optional: anyone with an office link can still join as a guest. People who sign in keep their character, status and theme across devices, and the home page lists the offices they visit under *Your spaces* (with who's in them right now), the ones they created (or opened with the owner key) as their own. Accounts are never merged by email address, so signing in with Google and with Apple gives two accounts. The sign-in buttons (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
+Signing in is optional: anyone with an office link can still join as a guest. People who sign in keep their character, status, theme and weather settings across devices, and the home page lists the offices they visit under *Your spaces* (with who's in them right now), the ones they created (or opened with the owner key) as their own. Accounts are never merged by email address, so signing in with Google and with Apple gives two accounts. The sign-in buttons (on the home page, and in an office's lobby, which you come back to after signing in) appear for the methods that are set up:
 
 - **Google:** in the Google Cloud console (Google Auth Platform), set up the branding, set the audience to *External* and publish it to *In production* (for just name, email and profile no review is needed). Create a *Web application* client with the redirect URI `https://<your host>/api/auth/google/callback` (and `http://localhost:5173/api/auth/google/callback` for development), copy the secret right away (it's shown once), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Google deletes clients that go unused for six months.
 - **Apple** (needs a paid Apple Developer membership): enable *Sign in with Apple* on an App ID, create a *Services ID* with your domain and the return URL `https://<your host>/api/auth/apple/callback` (HTTPS only, no localhost), and create a *Sign in with Apple* key. Set `APPLE_CLIENT_ID` (the Services ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY` (the `.p8` file). Apple sends a person's name only the first time they sign in.
@@ -300,6 +308,43 @@ Every signed-in member has one wallet, the same in every office. Guests see "Sig
 
 The server decides everything. Each change runs in one database transaction that locks the wallets involved (always in the same order, so two tips can't deadlock), refuses to go below zero (also enforced by a `CHECK` on the balance), and writes a ledger row with the new balance. Unique keys make the daily bonus, presence coins and tips happen at most once, even when a tip is retried. An office's owner can turn coins off there (Wallet panel → *Coins in this office*): tipping is hidden and nobody earns coins in that office, while wallets stay as they are. Coins need no configuration.
 
+### Weather
+
+Everyone sees the weather and time of day where they are, in their own view of the office. The weather comes from [Open-Meteo](https://open-meteo.com/) through the Workchop server and works without any setup, but check the licence below. `WEATHER=off` turns it off.
+
+**Whose location.** For each person, the first of these that's available:
+1. A city they pick in *Settings > Weather*.
+2. Their device's location, only after they click *Use my location* (the browser asks first; it needs HTTPS or localhost).
+3. Roughly where their connection comes from, when the server is told (see below). This is usually the nearest city, and wrong for people on a VPN or a company proxy.
+4. None: the usual daytime office, without weather.
+
+The weather popover shows which one is used. *Show my local weather* in Settings turns it off for yourself.
+
+**Privacy.**
+- Coordinates are rounded to 0.1° (about 11 km) in the browser, so precise positions never leave it. The server rounds again before asking Open-Meteo, which keeps its request logs for 90 days, and never stores GPS positions.
+- The browser keeps the chosen city, or the rounded device location labelled "Your location". For signed-in people, the weather settings and chosen city (not the device location) are also saved with their account.
+- Showing your weather to others is opt-in (*Settings > Weather*, off by default). They then see your conditions, temperature and local time on your row in the people list, never the place.
+
+**Licence.** Open-Meteo's free API is for **non-commercial use only** (see their [terms](https://open-meteo.com/en/terms)). For commercial use, for example if Workchop is sold, shows ads or is part of a company's product, take a [paid plan](https://open-meteo.com/en/pricing) and set `OPEN_METEO_API_KEY`, or set `WEATHER=off`. With a key, the server uses Open-Meteo's customer servers and sends the key in a header, never in a URL. The data is licensed CC BY 4.0, so the app shows "Weather data by Open-Meteo.com" next to the weather, and "Location data based on GeoNames" with the city search.
+
+**Location from the connection.**
+- **Cloudflare Containers:** automatic. The Worker passes each visitor's approximate location (Cloudflare's guess from their IP address) to the server, after removing any copies sent by the visitor, and starts the server with `GEO_HEADERS=workchop`.
+- **Cloudflare Tunnel:** in the Cloudflare dashboard, turn on the *Add visitor location headers* Managed Transform for your domain (under *Rules*), and add `GEO_HEADERS=cloudflare` to `.env`. Only do this when the server can't be reached without going through Cloudflare (with the Tunnel and closed ports, it can't); otherwise visitors could fake their location.
+- **Anything else** (Caddy, plain Docker): there's no location from the connection, so people pick a city or use their device's location.
+
+**Caching and limits.** The free API allows fewer than 10,000 calls a day, 5,000 an hour and 600 a minute per IP address, shared by everyone on your server. So the server:
+- answers only people who are in an office, and keeps the weather of each ~11 km cell for 16 to 19 minutes (city searches for a day), so people in the same city share one call;
+- limits the calls each visitor can cause (only requests that make the server ask Open-Meteo count): 20 weather lookups and 30 city searches per 10 minutes per connection, and per IP address (an IPv6 /64 counts as one) 60 of each per 10 minutes and 1,000 lookups and 300 searches a day. People behind one address, such as a company network or a VPN, share these; someone over a limit still gets their place's last weather if it's at most 3 hours old;
+- sends one request at a time, and makes at most 8,000 calls a day and 1,000 an hour (city searches and failed calls included; the counts restart on the UTC day and hour), so no one can use up a day's calls in an hour;
+- after a "too many requests" answer, waits until Open-Meteo's limit resets (the next minute, hour or day, in UTC; a minute for other limits), and after a failed call waits a minute before asking for that place or search again (for a place, twice as long after each further failure in a row, up to 15 minutes);
+- while it can't ask Open-Meteo, keeps serving each place's last weather for up to 3 hours. After that, people there get no weather until it can ask again: once the day's 8,000 calls are spent, that's midnight UTC.
+
+These counts and pauses are kept in memory, per server run: a restart (a deploy, a changed setting, or Cloudflare stopping an idle container) starts them over, so a server that restarts on a busy day can make more calls that day.
+
+Each browser asks again a little after its place's weather in the server's cache runs out, so about every 20 minutes. A hidden tab waits until you're back, unless you share your weather (so others see it up to date).
+
+On Cloudflare Containers the outgoing IP address may be shared with other Cloudflare customers, which can use up the free limits; set an API key if the weather stops updating there.
+
 ## How it works
 
 ```
@@ -314,6 +359,9 @@ client/   React + react-three-fiber app (Vite)
   src/features/  Client features, loaded automatically (see Development)
     chat/      Chat panel: channels, direct messages, threads, mentions, reactions, files
     audio/     Headphones (focus mode) and shoulder taps, reaction particles and confetti
+    presence/  Current app: status picker, app chips, desk labels, desktop helper settings
+    coins/     Wallet panel, tips and their celebrations
+    weather/   Local weather: settings, top-bar chip, sky, light and weather effects
 server/   Express + Socket.IO
   realtime.ts  Presence, movement, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   turn.ts      Short-lived Cloudflare TURN credentials
@@ -328,9 +376,13 @@ server/   Express + Socket.IO
   features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
   features/chat/  Channels, messages, threads, mentions, reactions, read markers (tables chat_*)
   features/audio.ts  Shoulder taps for people wearing headphones
+  features/presence/  Current app from the status picker or the desktop helper (table api_tokens)
+  features/coins/  Wallets, the coin ledger, daily and presence coins, tips (tables wallets, coin_*)
+  features/weather/  Open-Meteo proxy with a cache per ~11 km cell, location from proxy headers
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
-cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangler.jsonc, worker.ts)
+cloudflare/  Worker that runs the Docker image on Cloudflare Containers and passes on visitors'
+             approximate location (wrangler.jsonc, worker.ts, geo.ts)
 helper/   The optional desktop helper for the current-app indicator (workchop-presence.cjs)
 ```
 
@@ -341,6 +393,7 @@ helper/   The optional desktop helper for the current-app indicator (workchop-pr
 - **Office edits are operations** (`add`, `update`, `remove`, `zone:*`, `settings`). They are applied optimistically on the client and validated and normalised by the server with the same `applyOp` code. The server then echoes them to everyone in its own order, so all clients converge. Rejected edits trigger a full resync.
 - **Music is synced by clock, not streamed.** Clients estimate the server's clock (`time` pings). The built-in stations are generated from it with a seeded pattern, so every browser plays the same bar. Track lists play from a shared start time. Listen-along sessions store the DJ's track, position and server time, and listeners seek to match (the DJ re-sends on track changes, pauses and seeks).
 - **Chat is stored, except what's live.** Channel messages and direct messages between signed-in people are rows in `chat_messages`; the server checks every mention (a member of the office, a guest who is here, or `@here`) before saving and notifying anyone, keeps mentions for people who are away, and remembers how far each signed-in person has read. Nearby messages and direct messages with guests only pass through the server.
+- **Weather is each viewer's own.** Each browser asks the server for the weather at its own rounded location and draws the sky, light and weather itself; none of it is part of the office. The server only fetches and caches Open-Meteo's answers.
 - **Everything in the world is generated in code** (furniture, characters, floor textures), so there are no asset files to load.
 
 ## Development
@@ -352,12 +405,15 @@ npm test          # unit tests for geometry/office rules + server integration te
 
 Tests use an in-memory PGlite. They run against real Postgres instead when `TEST_DATABASE_URL` points at a database they may write to (each test file gets its own schema), e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`. Run both before changing SQL: production may run Postgres 16 while PGlite is Postgres 18.
 
-**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register` gets an Express router mounted at `/api`, the database, the office store, `auth.userFromRequest`/`requireUser`, and the realtime hooks (`onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `updatePlayer`…). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
+**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register` gets an Express router mounted at `/api`, the database, the office store, `auth.userFromRequest`/`requireUser`, `clientIp(req)` (the visitor's IP address, from `CLIENT_IP_HEADER` behind a proxy, for per-visitor limits), and the realtime hooks (`onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `updatePlayer`…). Socket ids are visible to everyone in the office, so an HTTP route shouldn't trust an `X-Workchop-Socket` header alone: also limit by `clientIp(req)`, or check a secret only that socket has (like the upload key). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
 
 **Adding a client feature:** create `client/src/features/<name>/index.ts` (or `.tsx`); every such file is loaded at startup, so nothing else needs editing. From there:
 
 - `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, useBadge?, badgeTone?, shortcut? })` from `ui/panels.tsx` adds a side panel and its dock button (chat is 10, music 20, people 30; `setPanel(id)` toggles it).
 - `registerSettingsSection({ id, title, icon, order, Component })` from `ui/settings.tsx` adds a section to Settings (Appearance is 10, Audio & video 20).
+- `registerTopBarItem({ id, order, Component })` from `ui/topbar.ts` adds something to the top bar, after the music that's playing (weather is 10). `Component` renders null when there's nothing to show.
+- `registerPersonDetail({ id, order, Component })` from `ui/PeoplePanel.tsx` adds a line under other people's names in the People panel (weather is 10). `Component` gets `{ player }` and renders null when there's nothing to show for them.
+- `registerSceneLayer({ id, order, Component })` from `world/layers.ts` adds a component to the 3D office, rendered inside the Canvas after the office (weather is 10). Each layer has its own `Suspense` and error boundary, so it can be `lazy`, and one that fails doesn't take the office down. To change the sky, fog, light, wind (plants sway with it) or how the ground looks, write to `sceneLighting` (same file) from `useFrame` with priority `-1`, so before the office's own components read it each frame. Call `resetSceneLighting()` when your layer unmounts, or the office keeps your sky and light.
 - `onSession(id, (session) => cleanup)` from `lib/session.ts` runs for every office visit, after the socket is created and before it connects: add handlers with `session.socket.on(…)` (typed, including your augmented events; they run after the app's own), act after joining with `session.onJoined((rejoin) => …)` (rejoins follow reconnects), and read `session.officeId` and `session.selfId()`. The function you return runs when the person leaves, and also when the hook is registered again under the same `id` (a hot reload) or unregistered mid-visit, so undo there what the hook added (`socket.off`, the function `onJoined` returns). `session.upload(file, { name, onProgress, signal })` uploads a file into the office and resolves to `{ id, url, name, contentType, size }`, or throws an Error whose message can be shown ("File too large (max 10 MB)", the server's reason…).
 - `toast(text, { kind, icon, action: { label, run } })` from `state/store.ts` shows a message, optionally with an icon and a button.
 - For signed-in people, `getState().account` is their account and `saveAccountSettings({ key: value })` from `lib/account.ts` saves small preferences with it, merged key by key with the saved ones (at most 50 keys per account, so prefix yours, e.g. `weather.unit`; guests have none: show a "Sign in to …" hint instead).
@@ -371,3 +427,4 @@ Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicon
 - Anyone with an office link can join it. The owner key, stored in the creator's browser, only controls who may edit.
 - Chat: each person can send about one message a second (bursts of 6) and create a channel every 20 seconds (bursts of 3); an office has up to 200 open channels. Messages are up to 4,000 characters with up to 5 files, and history loads 50 messages at a time.
 - Uploads: each office keeps up to `UPLOADS_QUOTA_MB` of files. Each visitor (IP address) can send 3 files at once and 60 per 10 minutes, and the server holds at most 4 files of the maximum size in memory at a time.
+- Weather: each ~11 km place with someone online costs up to 4 Open-Meteo calls an hour, so the budget of 8,000 a day covers at least 80 places online around the clock. Past it, the server serves each place's last weather for up to 3 hours, then none until midnight UTC (open tabs keep showing what they have). The count is per server run: a restart starts it over.

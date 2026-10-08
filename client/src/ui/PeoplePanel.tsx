@@ -1,17 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import { STATUSES } from '../../../shared/avatar';
 import type { Status } from '../../../shared/types';
 import { setFocus, tapShoulder } from '../features/audio/focus';
 import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { local, remoteTargets } from '../lib/positions';
+import { createRegistry } from '../lib/registry';
 import { getSession } from '../lib/session';
-import { messagePlayer, useStore } from '../state/store';
+import { messagePlayer, useStore, type RemotePlayer } from '../state/store';
 import { PlayerApp } from '../features/presence/AppChip';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon, TapIcon } from './icons';
 import { personActionKey, usePersonActions } from './personActions';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
+
+/** A line a feature adds under someone's name in the People panel (e.g. their weather). */
+export interface PersonDetail {
+  id: string;
+  /** Position among the feature lines (lower first). */
+  order: number;
+  /** Renders null when there's nothing to show for this person. */
+  Component: ComponentType<{ player: RemotePlayer }>;
+}
+
+const details = createRegistry<PersonDetail>();
+
+/** Adds a line to other people's rows (call it when your module loads); returns a function that removes it. */
+export const registerPersonDetail = details.register;
 
 /** Distances change constantly; refresh them a couple of times per second. */
 function useTick(ms: number) {
@@ -29,6 +44,7 @@ export function PeoplePanel() {
   const mic = useStore((s) => s.media.mic);
   const focus = useStore((s) => s.focus);
   const actions = usePersonActions();
+  const extra = details.useList();
   useTick(500);
 
   const others = Object.values(players)
@@ -82,6 +98,9 @@ export function PeoplePanel() {
               {p.focus ? 'Wearing headphones' : linked[p.id] ? <span className="badge">In conversation</span> : STATUS_LABEL[p.status]}
               {Number.isFinite(p.dist) && ` · ${p.dist.toFixed(0)} m`}
             </span>
+            {extra.map((d) => (
+              <d.Component key={details.keyOf(d)} player={p} />
+            ))}
           </div>
           <div className="person-icons">
             {p.focus && <FocusBadge size={14} />}

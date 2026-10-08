@@ -46,7 +46,9 @@ where the hooks below allow it, to keep merges easy.
   add a new one.
 - ServerContext (ctx): `app` (router at /api, after express.json, before the API 404; a guard rejects
   cross-site POST/PATCH/DELETE), `io`, `db`, `store`, `uploads`, `publicOrigin`,
-  `auth.userFromRequest(req)`, `auth.requireUser` (401 or res.locals.user), `realtime`.
+  `auth.userFromRequest(req)`, `auth.requireUser` (401 or res.locals.user), `realtime`,
+  `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy). Socket ids are visible to
+  everyone in an office, so an HTTP route that takes X-Workchop-Socket should also limit by `clientIp`.
 - RealtimeApi (ctx.realtime): `onSocket(s => s.socket.on(...))`, `onJoin(s => ...)`,
   `onLeave((s, {officeId, player}) => ...)` (may be async; failures are logged), `emitToOffice`,
   `emitToUser`, `playersOfUser`, `updatePlayer` (broadcasts player:updated), `contextOf`, `onlineCount`.
@@ -69,6 +71,14 @@ where the hooks below allow it, to keep merges easy.
   people 30; build is dock:false). Store `panel` is a string id; open with `setPanel(id)`.
 - Settings sections: `registerSettingsSection({ id, title, icon, order, Component })` from
   client/src/ui/settings.tsx (Appearance 10, Audio & video 20). Use orders 30+ for new sections.
+- Top bar: `registerTopBarItem({ id, order, Component })` from client/src/ui/topbar.ts (after the
+  music; weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
+  client/src/ui/PeoplePanel.tsx, a line under each other person's name (`Component` gets `{ player }`;
+  weather 10). Both render null when there's nothing to show.
+- 3D scene: `registerSceneLayer({ id, order, Component })` from client/src/world/layers.ts, rendered in
+  the Canvas after the office, each in its own Suspense and error boundary (weather 10). Change the
+  sky, fog, light or wind through `sceneLighting` from useFrame with priority -1, and call
+  `resetSceneLighting()` on unmount.
 - Session hooks: `onSession('<unique-id>', (session) => cleanup)` from client/src/lib/session.ts. Runs
   when an office session is created (before connect) or at once if already in one; cleanup on leave /
   re-registration — undo everything (socket.off, unsubscribe). session.socket (typed with augmented

@@ -1116,6 +1116,8 @@ kbd {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  /* The toasts go under it. */
+  anchor-name: --topbar;
 }
 
 .office-chip {
@@ -2074,6 +2076,13 @@ body:has(.emote-menu) .hint {
   pointer-events: none;
 }
 
+/* In an office, below the top bar however many rows it has (the zone, the music, features' items). */
+@supports (anchor-name: --topbar) {
+  .toasts:not(.page) {
+    top: max(104px, anchor(--topbar bottom, 0px) + 8px);
+  }
+}
+
 /* Outside an office: centred at the bottom. */
 .toasts.page {
   top: auto;
@@ -2353,6 +2362,16 @@ body:has(.emote-menu) .hint {
   }
 }
 
+/* In a conversation, the top bar's rows under the office chip (the zone, the music, features' items)
+   go below the video strip, which ends at 178px (60px + 176px tiles at 16:10 + padding), with room for
+   its scroll bar; the office chip ends at 56px. Not in short windows, where the help card would then
+   cover them. */
+@media (max-width: 960px) and (min-height: 600px) {
+  .office:has(> .video-strip) .topbar > .office-chip + * {
+    margin-top: 134px;
+  }
+}
+
 @media (max-width: 720px) {
   .character-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -2490,6 +2509,11 @@ body:has(.emote-menu) .hint {
 
   .tile {
     width: 132px;
+  }
+
+  /* Below the video strip of smaller tiles, which ends at 151px. */
+  .office:has(> .video-strip) .topbar > .office-chip + * {
+    margin-top: 107px;
   }
 
   .self-view {
