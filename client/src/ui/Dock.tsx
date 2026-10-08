@@ -194,7 +194,7 @@ function PanelButton({ panel, open }: { panel: PanelDef; open: boolean }) {
   );
 }
 
-/** A panel in the More menu, with its badge (e.g. the wallet's balance). */
+/** A panel in the More menu, with its badge (e.g. My desk's unread notes). */
 function PanelItem({ panel, onPick }: { panel: PanelDef; onPick: () => void }) {
   const badge = panel.useBadge?.() ?? null;
   const { icon: Icon } = panel;

@@ -15,7 +15,7 @@ import { openDb, type DatabaseSsl, type Db } from './db';
 import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
 import { registerFeatures, type Feature, type ServerContext } from './features';
-import { features as defaultFeatures } from './features/index';
+import { serverFeatures } from './features/index';
 import { windowLimiter } from './limits';
 import { OfficeStore } from './officeStore';
 import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
@@ -42,7 +42,7 @@ export interface ServerOptions {
   auth?: AuthOptions;
   /** Upload settings; unset ones come from UPLOADS_STORAGE, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_*. */
   uploads?: Partial<UploadOptions>;
-  /** Server features to load; defaults to the list in server/features/index.ts. */
+  /** Server features to load; defaults to serverFeatures() in server/features/index.ts (which reads COINS). */
   features?: Feature[];
   /** Directory with the built client to serve; omit in development (Vite serves it). */
   clientDir?: string | null;
@@ -98,7 +98,7 @@ function originOf(publicUrl: string | null): string | null {
 
 export async function startServer(opts: ServerOptions = {}) {
   const dataDir = path.resolve(opts.dataDir ?? 'data');
-  const features = opts.features ?? defaultFeatures;
+  const features = opts.features ?? serverFeatures();
   // Settings are checked before the database is opened, so a mistake there doesn't leave it locked.
   const publicUrl = opts.publicUrl !== undefined ? opts.publicUrl : process.env.PUBLIC_URL || (process.env.NODE_ENV === 'production' ? null : 'http://localhost:5173');
   const publicOrigin = originOf(publicUrl);

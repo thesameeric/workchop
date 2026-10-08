@@ -2,30 +2,21 @@ import { compactCoins, type BalanceEvent, type TipEvent } from '../../../../shar
 import { onSession } from '../../lib/session';
 import { getState, setPanel, toast, useStore, type RemotePlayer } from '../../state/store';
 import { CalendarCheckIcon, CoinsIcon, GiftIcon, WalletIcon } from '../../ui/icons';
+import { registerOverlay } from '../../ui/overlays';
 import { registerPanel } from '../../ui/panels';
 import { registerPersonAction } from '../../ui/personActions';
+import { Celebrations } from './Celebrations';
 import { addBurst, balanceChanged, loadWallet, resetWallet, useCoins } from './state';
 import { WalletPanel } from './WalletPanel';
 import './coins.css';
 
+// Coins are off unless the server runs with COINS=on (README: "Coins (off for now)"). Then, when you
+// join an office, it says whether they're on there ('coins:office'), and only then do the wallet, the
+// "Send coins" buttons and the celebrations appear. Without that, nothing shows and nothing is asked.
+
 function openWallet(): void {
   if (getState().panel !== 'wallet') setPanel('wallet');
 }
-
-registerPanel({
-  id: 'wallet',
-  title: 'Wallet',
-  icon: WalletIcon,
-  Component: WalletPanel,
-  order: 35,
-  inMore: true,
-  badgeTone: 'neutral',
-  useBadge: () => {
-    const balance = useCoins((s) => s.balance);
-    const signedIn = useStore((s) => !!s.account);
-    return signedIn && balance !== null ? compactCoins(balance) : null;
-  },
-});
 
 function SendCoinsButton({ player }: { player: RemotePlayer }) {
   const me = useStore((s) => s.account?.id);
@@ -45,7 +36,36 @@ function SendCoinsButton({ player }: { player: RemotePlayer }) {
   );
 }
 
-registerPersonAction({ id: 'coins', order: 10, Component: SendCoinsButton });
+let hide: (() => void) | null = null;
+
+/** Adds (or takes away) everything coins show: the server has them, or you left the office. */
+function showCoins(on: boolean): void {
+  if (on && !hide) {
+    const off = [
+      registerPanel({
+        id: 'wallet',
+        title: 'Wallet',
+        icon: WalletIcon,
+        Component: WalletPanel,
+        order: 35,
+        inMore: true,
+        badgeTone: 'neutral',
+        useBadge: () => {
+          const balance = useCoins((s) => s.balance);
+          const signedIn = useStore((s) => !!s.account);
+          return signedIn && balance !== null ? compactCoins(balance) : null;
+        },
+      }),
+      registerPersonAction({ id: 'coins', order: 10, Component: SendCoinsButton }),
+      // Over the name tags.
+      registerOverlay({ id: 'coins', order: 5, Component: Celebrations }),
+    ];
+    hide = () => off.forEach((remove) => remove());
+  } else if (!on && hide) {
+    hide();
+    hide = null;
+  }
+}
 
 onSession('coins', (session) => {
   const { socket } = session;
@@ -69,14 +89,22 @@ onSession('coins', (session) => {
       action: { label: 'Wallet', run: openWallet },
     });
   };
-  const onOffice = ({ enabled }: { enabled: boolean }) => useCoins.setState({ enabled });
+  // The server has coins: it says so on every join. Your wallet loads then (again after a rejoin).
+  let due = true;
+  const onOffice = ({ enabled }: { enabled: boolean }) => {
+    useCoins.setState({ enabled });
+    showCoins(true);
+    if (!due) return;
+    due = false;
+    if (getState().account) void loadWallet();
+    else resetWallet();
+  };
 
   socket.on('coins:balance', onBalance);
   socket.on('coins:tipped', onTipped);
   socket.on('coins:office', onOffice);
   const offJoined = session.onJoined(() => {
-    if (getState().account) void loadWallet();
-    else resetWallet();
+    due = true;
   });
 
   return () => {
@@ -84,6 +112,7 @@ onSession('coins', (session) => {
     socket.off('coins:tipped', onTipped);
     socket.off('coins:office', onOffice);
     offJoined();
+    showCoins(false);
     resetWallet();
     useCoins.setState({ enabled: true });
   };

@@ -6,7 +6,6 @@ import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
 import { PlayerApp } from '../features/presence/AppChip';
-import { Celebrations } from '../features/coins/Celebrations';
 import { LockIcon, MicOffIcon } from './icons';
 
 const TAG_Y = 2.12;
@@ -90,19 +89,15 @@ export function WorldLabels() {
   const zones = useStore((s) => s.office?.zones ?? []);
   const activeZoneId = useStore((s) => s.activeZoneId);
   return (
-    <>
-      <div className="world-labels" aria-hidden="true">
-        {zones.map((z) => (
-          <ZoneLabel key={z.id} zone={z} active={z.id === activeZoneId} />
-        ))}
-        {ids.map((id) => (
-          <RemoteLabel key={id} id={id} />
-        ))}
-        <PlayerLabel id={selfId} self name={me.name} status={me.status} mic={mic} focus={focus} />
-      </div>
-      {/* Over them. */}
-      <Celebrations />
-    </>
+    <div className="world-labels" aria-hidden="true">
+      {zones.map((z) => (
+        <ZoneLabel key={z.id} zone={z} active={z.id === activeZoneId} />
+      ))}
+      {ids.map((id) => (
+        <RemoteLabel key={id} id={id} />
+      ))}
+      <PlayerLabel id={selfId} self name={me.name} status={me.status} mic={mic} focus={focus} />
+    </div>
   );
 }
 

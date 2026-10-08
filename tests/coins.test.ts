@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountUser } from '../shared/account';
 import {
   compactCoins,
@@ -23,6 +23,7 @@ import type { Feature } from '../server/features';
 import { feature as chat } from '../server/features/chat';
 import { createCoins } from '../server/features/coins';
 import { CoinsError, Wallets } from '../server/features/coins/wallets';
+import { serverFeatures } from '../server/features/index';
 import { startServer } from '../server/index';
 import { freshDb, TEST_DATABASE_URL } from './helpers/db';
 import { io as connect } from 'socket.io-client';
@@ -448,4 +449,59 @@ describe(`presence coins and idleness on ${DB}`, () => {
     }
     expect(await balance(jar)).toBe(WELCOME_COINS);
   });
+});
+
+// Coins are off until they're redesigned: only COINS=on (for development) brings them back. The
+// tests above turn them on by passing the feature in.
+describe(`coins switched off (the default) on ${DB}`, () => {
+  const names = (env: NodeJS.ProcessEnv) => serverFeatures(env).map((f) => f.name);
+
+  it('are part of the server only with COINS=on', () => {
+    for (const COINS of [undefined, '', 'off', 'yes', 'true']) expect(names({ COINS })).not.toContain('coins');
+    expect(names({ COINS: 'on' })).toContain('coins');
+    expect(names({ COINS: ' ON ' })).toContain('coins');
+    // Everything else is the same either way.
+    expect(names({})).toEqual(names({ COINS: 'on' }).filter((n) => n !== 'coins'));
+  });
+
+  it('have no tables, routes, socket events or timers', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-coins-off-'));
+    const start = async (env: NodeJS.ProcessEnv) =>
+      startServer({ port: 0, host: '127.0.0.1', db: await freshDb(), dataDir, quiet: true, iceServers: [], features: serverFeatures(env), auth: { google: null, apple: null, devLogin: true } });
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    const on = await start({ COINS: 'on' });
+    const withCoins = intervals.mock.calls.length;
+    await on.close();
+    intervals.mockClear();
+    const server = await start({});
+    // The coins' presence timer is the only difference.
+    expect(intervals.mock.calls.length).toBe(withCoins - 1);
+    intervals.mockRestore();
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      for (const table of ['wallets', 'coin_ledger']) {
+        expect((await server.db.query<{ t: string | null }>('SELECT to_regclass($1)::text AS t', [table])).rows[0].t).toBeNull();
+      }
+      const jar = new Jar();
+      await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Ada', email: `ada-${crypto.randomUUID()}@example.com` }));
+      for (const route of ['/api/me/wallet', '/api/me/wallet/history']) expect((await jar.fetch(`${base}${route}`)).status).toBe(404);
+
+      const { id, ownerKey } = await createOffice(base, jar);
+      const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie: jar.header() } });
+      const heard: string[] = [];
+      socket.onAny((event: string) => heard.push(event));
+      const res = await new Promise<JoinResponse>((resolve) => {
+        socket.on('connect', () => socket.emit('join', { officeId: id, name: 'Ada', avatar: DEFAULT_AVATAR, ownerKey }, resolve));
+      });
+      expect(res.ok).toBe(true);
+      // Nobody answers coin requests.
+      await expect(socket.timeout(300).emitWithAck('coins:tip', { toUserId: 'someone', amount: 5, key: crypto.randomUUID() })).rejects.toThrow();
+      await expect(socket.timeout(300).emitWithAck('coins:office', false)).rejects.toThrow();
+      expect(heard.filter((e) => e.startsWith('coins:'))).toEqual([]);
+      socket.disconnect();
+    } finally {
+      await server.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

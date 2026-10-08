@@ -11,5 +11,11 @@ import { feature as world } from './world';
  * The server's features, registered in this order after the core routes and socket handlers.
  * Each module exports `const feature: Feature = { name, migrations?, register(ctx) }`; import it
  * and add it to the list.
+ *
+ * Coins are off until they're redesigned (see "Coins (off for now)" in the README): only COINS=on
+ * adds them, for development. Off, they have no tables, routes, socket handlers or timers.
  */
-export const features: Feature[] = [chat, world, audio, presence, coins, weather, github];
+export function serverFeatures(env: NodeJS.ProcessEnv = process.env): Feature[] {
+  const coinsOn = env.COINS?.trim().toLowerCase() === 'on';
+  return [chat, world, audio, presence, ...(coinsOn ? [coins] : []), weather, github];
+}

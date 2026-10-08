@@ -1,5 +1,11 @@
 # Feature: coins wallet
 
+> **Status: off for now.** The owner wants actual coins, not coins earned through activity, so this
+> version is disabled until the feature is redesigned. By default the server registers nothing of it
+> (no tables, routes, socket handlers or timers) and the client shows nothing. `COINS=on` turns it
+> back on, for development only. The code and its tests stay in the repository; the rest of this page
+> describes that old version.
+
 Owner's words: "Users can have coins (wallet)".
 
 Virtual coins only — no real money, no purchases with real currency, no cash-out. Signed-in members
