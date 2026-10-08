@@ -16,6 +16,12 @@ import { feature as world } from './world';
  * adds them, for development. Off, they have no tables, routes, socket handlers or timers.
  */
 export function serverFeatures(env: NodeJS.ProcessEnv = process.env): Feature[] {
-  const coinsOn = env.COINS?.trim().toLowerCase() === 'on';
-  return [chat, world, audio, presence, ...(coinsOn ? [coins] : []), weather, github];
+  return [chat, world, audio, presence, ...(coinsOn(env) ? [coins] : []), weather, github];
 }
+
+/** The features left out by a setting (their tables stay in a database that had them on). */
+export function dormantFeatures(env: NodeJS.ProcessEnv = process.env): Feature[] {
+  return coinsOn(env) ? [] : [coins];
+}
+
+const coinsOn = (env: NodeJS.ProcessEnv) => env.COINS?.trim().toLowerCase() === 'on';

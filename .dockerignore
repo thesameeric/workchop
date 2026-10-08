@@ -1,8 +1,14 @@
 node_modules
+**/node_modules
 dist
+**/dist
 data
 .git
 .env
+**/.env
+**/.dev.vars
 *.log
 cloudflare
 .wrangler
+# Claude Code's worktrees (whole checkouts with their own node_modules).
+.claude

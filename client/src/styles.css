@@ -1088,6 +1088,15 @@ kbd {
   font-weight: 600;
 }
 
+.world-failed {
+  padding: 16px;
+  text-align: center;
+}
+
+.world-failed p {
+  margin: 0 0 12px;
+}
+
 .glass,
 .topbar .office-chip,
 .dock,

@@ -15,7 +15,7 @@ import { openDb, type DatabaseSsl, type Db } from './db';
 import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
 import { registerFeatures, type Feature, type ServerContext } from './features';
-import { serverFeatures } from './features/index';
+import { dormantFeatures, serverFeatures } from './features/index';
 import { windowLimiter } from './limits';
 import { OfficeStore } from './officeStore';
 import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
@@ -106,7 +106,8 @@ export async function startServer(opts: ServerOptions = {}) {
   if (uploadOptions.storage === 's3' && !uploadOptions.s3) throw new Error(S3_MISSING);
   const db = opts.db ?? (await openDb({ databaseUrl: opts.databaseUrl, databaseSsl: opts.databaseSsl, dataDir }));
   try {
-    const applied = await migrate(db, collectMigrations(features));
+    const dormant = opts.features ? [] : dormantFeatures().flatMap((f) => f.migrations ?? []);
+    const applied = await migrate(db, collectMigrations(features), dormant);
     if (applied.length && !opts.quiet) console.log(`[db] applied migrations: ${applied.join(', ')}`);
     // A database handed in by a test has no data directory of its own unless one is given.
     if (!opts.db || opts.dataDir) await importLegacyOffices(db, dataDir);
@@ -117,6 +118,9 @@ export async function startServer(opts: ServerOptions = {}) {
   const store = new OfficeStore(new SqlOfficeRepo(db));
   await store.init();
   if (!opts.quiet) console.log(`[workchop] storing data in ${db.description}`);
+  if (!publicOrigin && !opts.quiet) {
+    console.warn('[workchop] PUBLIC_URL is not set: sign-in and GitHub are off, and requests from other sites are let through. Set it to the address people open Workchop at.');
+  }
 
   const accounts = new Accounts(db);
 
@@ -323,6 +327,10 @@ export async function startServer(opts: ServerOptions = {}) {
   if (servesClient) {
     const clientDir = opts.clientDir!;
     app.use(express.static(clientDir, { index: false, maxAge: '1h' }));
+    // A file of an older build (asked for by a page left open over an update) is gone: no page instead.
+    app.use('/assets', (_req, res) => {
+      res.status(404).type('text').send('Not found');
+    });
     app.get(/.*/, (_req, res) => {
       // With `root`, a hidden folder in the install path (like ~/.local) isn't refused as a dotfile.
       res.sendFile('index.html', { root: clientDir });

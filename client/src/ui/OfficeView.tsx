@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { reactionForKey } from '../../../shared/avatar';
 import { toggleFocus } from '../features/audio/focus';
 import { FocusIndicator } from '../features/audio/Headphones';
@@ -20,6 +20,33 @@ import { WorldLabels, ZoneIndicator } from './WorldLabels';
 
 // Features' 3D modules load with the scene, so it appears complete.
 const World = lazy(() => Promise.all([import('../world/World'), loadWorldModules()]).then(([world]) => world));
+
+/** The 3D office didn't load: most likely Workchop was updated and this page's files are gone. */
+class WorldBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('The office failed to load.', error);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="loading world-failed">
+        <div>
+          <p>The office didn’t load. Workchop may have just been updated.</p>
+          <button className="btn primary" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
 
 function TopBar() {
   const name = useStore((s) => s.office?.settings.name ?? '');
@@ -175,9 +202,11 @@ export function OfficeView() {
   useShortcuts();
   return (
     <div className="office">
-      <Suspense fallback={<div className="loading">Loading the office…</div>}>
-        <World />
-      </Suspense>
+      <WorldBoundary>
+        <Suspense fallback={<div className="loading">Loading the office…</div>}>
+          <World />
+        </Suspense>
+      </WorldBoundary>
       <WorldLabels />
       <Overlays />
       <TopBar />

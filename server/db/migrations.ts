@@ -131,8 +131,10 @@ const MIGRATION_LOCK = 72_430_917;
 /**
  * Applies pending migrations in one transaction, under an advisory lock so two servers starting
  * at once (e.g. during a deploy) don't both run them. Returns the names of the ones applied.
+ * `dormant` are those of features turned off (coins): not run, but not unknown either when the
+ * database ran them while the feature was on.
  */
-export async function migrate(db: Db, migrations: Migration[] = coreMigrations): Promise<string[]> {
+export async function migrate(db: Db, migrations: Migration[] = coreMigrations, dormant: Migration[] = []): Promise<string[]> {
   return db.transaction(async (tx) => {
     // Transaction-level lock: works through poolers in transaction mode (e.g. Neon) and is released on commit.
     await tx.query(`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK})`);
@@ -145,7 +147,7 @@ export async function migrate(db: Db, migrations: Migration[] = coreMigrations):
       )`);
     const { rows } = await tx.query<{ id: number; name: string; checksum: string }>('SELECT id, name, checksum FROM schema_migrations');
     const applied = new Map(rows.map((r) => [r.id, r]));
-    const known = new Set(migrations.map((m) => m.id));
+    const known = new Set([...migrations, ...dormant].map((m) => m.id));
     for (const r of rows) {
       if (!known.has(r.id)) console.warn(`[db] the database has migration ${r.id} (${r.name}), which this version doesn't know`);
     }

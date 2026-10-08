@@ -105,7 +105,7 @@ export function createAuth(deps: AuthDeps) {
   }
   if (!deps.quiet) {
     const on = [...Object.keys(providers), ...(options.devLogin ? ['dev login'] : [])];
-    if (on.length) console.log(`[auth] sign-in with ${on.join(', ')}`);
+    console.log(on.length ? `[auth] sign-in with ${on.join(', ')}` : '[auth] no sign-in method is set up: everyone joins as a guest (no accounts, desks or GitHub)');
   }
 
   const setCookie = (res: express.Response, name: string, value: string | null, opts: { maxAge: number; sameSite?: 'lax' | 'none'; secure?: boolean }) => {

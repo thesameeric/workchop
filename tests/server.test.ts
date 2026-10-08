@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connect, type Socket } from 'socket.io-client';
@@ -114,6 +114,30 @@ describe('REST API', () => {
   it('serves ICE configuration', async () => {
     const cfg = await (await fetch(`${base}/api/config`)).json();
     expect(cfg).toEqual({ iceServers: [], turn: false, spotifyClientId: null, uploadMaxBytes: 10 * 1024 * 1024 });
+  });
+});
+
+describe('the built client', () => {
+  it('serves the page for app addresses, and 404 for files an older build had', async () => {
+    const clientDir = mkdtempSync(path.join(tmpdir(), 'workchop-client-'));
+    mkdirSync(path.join(clientDir, 'assets'));
+    writeFileSync(path.join(clientDir, 'index.html'), '<!doctype html><title>Workchop</title>');
+    writeFileSync(path.join(clientDir, 'assets', 'World-new.js'), 'export {};');
+    const app = await startServer({ port: 0, host: '127.0.0.1', dataDir, db: await createTestDb(), quiet: true, iceServers: [], clientDir });
+    try {
+      const at = (p: string) => fetch(`http://127.0.0.1:${app.port}${p}`);
+      const page = await at('/o/abc');
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain('<title>Workchop</title>');
+      expect((await at('/assets/World-new.js')).headers.get('content-type')).toContain('javascript');
+      // A page left open over an update asks for its old chunks: they're gone, not the page.
+      const old = await at('/assets/World-old.js');
+      expect(old.status).toBe(404);
+      expect(old.headers.get('content-type')).toContain('text/plain');
+    } finally {
+      await app.close();
+      rmSync(clientDir, { recursive: true, force: true });
+    }
   });
 });
 

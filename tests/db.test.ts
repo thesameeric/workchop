@@ -53,6 +53,28 @@ describe(`migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
     await db.exec('DROP TABLE test_things');
     await db.query('DELETE FROM schema_migrations WHERE id = 901');
   });
+
+  it('know the migrations of a feature that is off, without running them', async () => {
+    const db = await createTestDb();
+    const feature: Migration[] = [{ id: 902, name: 'test_off', sql: 'CREATE TABLE test_off (id int PRIMARY KEY)' }];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Turned on once, then off: nothing to run, nothing to warn about.
+      expect(await migrate(db, collectMigrations([{ name: 'off', migrations: feature }]))).toEqual(['902 test_off']);
+      expect(await migrate(db, collectMigrations(), feature)).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      // A migration this version really doesn't know is worth a warning.
+      expect(await migrate(db, collectMigrations())).toEqual([]);
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/migration 902 \(test_off\), which this version doesn't know/);
+      // And a feature that's off doesn't get its tables.
+      await db.exec('DROP TABLE test_off');
+      await db.query('DELETE FROM schema_migrations WHERE id = 902');
+      expect(await migrate(db, collectMigrations(), feature)).toEqual([]);
+      expect((await db.query<{ t: string | null }>("SELECT to_regclass('test_off')::text AS t")).rows[0].t).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe(`the Db layer on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {

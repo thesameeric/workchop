@@ -81,8 +81,10 @@ export function weatherFeature(options: WeatherOptions = {}): Feature {
           const off: WeatherHere = { place: null, off: true };
           res.set('Cache-Control', 'no-store').json(off);
         });
+        if (!ctx.quiet) console.log('[weather] weather is off (WEATHER=off)');
         return;
       }
+      if (!ctx.quiet) console.log('[weather] local weather is on (from Open-Meteo)');
       const now = upstream.now ?? Date.now;
       const geo = geoHeadersFrom(geoHeaders !== undefined ? geoHeaders : env.GEO_HEADERS);
       const openMeteo = createOpenMeteo({

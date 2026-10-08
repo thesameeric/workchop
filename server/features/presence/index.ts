@@ -68,6 +68,10 @@ function createPresence(ctx: ServerContext): void {
     sweeper = setInterval(sweep, SWEEP_MS);
     sweeper.unref();
   };
+  ctx.onClose(() => {
+    if (sweeper) clearInterval(sweeper);
+    sweeper = null;
+  });
 
   ctx.realtime.onSocket((s) => {
     const canSet = s.limiter(2, 8);

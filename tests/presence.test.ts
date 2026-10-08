@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { appMatchers, HELPER_TTL_MS, MANUAL_MAX_MS, matchApp, sanitizeHelperApp, sanitizeManualApp } from '../shared/apps';
 import { sanitizePresenceUpdate, type PresenceState } from '../shared/presence';
 import type { PlayerPatch } from '../shared/types';
@@ -393,5 +393,32 @@ describe('presence over the network', () => {
     const res = await fetch(`${base}/api/app-presence/apps`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(JSON.parse(JSON.stringify(appMatchers())));
+  });
+});
+
+describe('presence on a server that closes', () => {
+  it('stops its timer, even with statuses still set', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-presence-close-'));
+    const set = vi.spyOn(globalThis, 'setInterval');
+    const cleared = vi.spyOn(globalThis, 'clearInterval');
+    try {
+      const server = await startServer({ port: 0, host: '127.0.0.1', db: await createTestDb(), dataDir, quiet: true, iceServers: [], features: [feature], auth: { google: null, apple: null, devLogin: true } });
+      const base = `http://127.0.0.1:${server.port}`;
+      const jar = new Jar();
+      await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Ada', email: 'ada-close@example.com' }));
+      const { id } = await createOffice(base);
+      const me = await join(base, id, 'Ada', { jar });
+      // A status until she clears it: kept after she leaves, so the sweeper keeps going.
+      me.socket.emit('presence:set', { manual: { app: 'focus', until: null } });
+      await until(() => set.mock.calls.some(([, ms]) => ms === 5_000));
+      const sweeper = set.mock.results[set.mock.calls.findIndex(([, ms]) => ms === 5_000)].value;
+      me.socket.disconnect();
+      await server.close();
+      expect(cleared).toHaveBeenCalledWith(sweeper);
+    } finally {
+      set.mockRestore();
+      cleared.mockRestore();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
