@@ -29,8 +29,6 @@ function Switch({ label, hint, checked, disabled, onChange }: { label: string; h
 export function WeatherSettings() {
   const prefs = useWeather((s) => s.prefs);
   const here = useWeather((s) => s.here);
-  const available = useWeather((s) => s.available);
-  if (available === false) return <p className="muted">Weather isn’t available on this server.</p>;
   // Where the weather would come from, also while it's off.
   const { source, place } = resolvePlace({ ...prefs, enabled: true }, here);
   const detail = source === 'city' && place ? placeDetail(place) : '';

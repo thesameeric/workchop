@@ -112,16 +112,21 @@ function windowsDetector(spawn, log) {
   let child = null;
   let restarts = 0;
   let stopped = false;
+  // Settles with PowerShell's first answer (its first start can take a few seconds).
+  let answered;
+  const ready = new Promise((resolve) => (answered = resolve));
   const start = () => {
     let buffer = '';
     try {
       child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     } catch {
       unsupported = true;
+      answered();
       return;
     }
     child.on('error', () => {
       unsupported = true;
+      answered();
     });
     child.stdout.on('data', (chunk) => {
       buffer += chunk;
@@ -132,7 +137,8 @@ function windowsDetector(spawn, log) {
         else if (line.startsWith('=')) {
           latest = line.slice(1).trim();
           restarts = 0;
-        }
+        } else continue;
+        answered();
       }
     });
     child.on('exit', () => {
@@ -142,6 +148,7 @@ function windowsDetector(spawn, log) {
       if (++restarts > 5) {
         log('PowerShell keeps stopping; showing nothing.');
         unsupported = true;
+        answered();
         return;
       }
       setTimeout(() => !stopped && start(), 5000 * restarts).unref();
@@ -151,6 +158,7 @@ function windowsDetector(spawn, log) {
   };
   start();
   const detect = async () => (unsupported ? { unsupported: true } : { candidates: [latest] });
+  detect.ready = ready;
   detect.stop = () => {
     stopped = true;
     if (child) child.kill();
@@ -404,8 +412,13 @@ async function main(argv) {
     if (!config || !config.server || !config.token) throw new Error('Not paired yet. In Workchop, open Settings > Desktop helper and pair this computer.');
     const detect = createDetector({ platform, log });
     if (command === 'status') {
+      if (detect.ready) {
+        // Up to 10 s for the first answer.
+        let timer;
+        await Promise.race([detect.ready, new Promise((resolve) => (timer = setTimeout(resolve, 10000)))]);
+        clearTimeout(timer);
+      }
       const r = await detect();
-      if (detect.stop) await new Promise((resolve) => setTimeout(resolve, 2000)).then(async () => Object.assign(r, await detect()));
       detect.stop?.();
       console.log(`Paired with ${config.server} (${file})`);
       console.log(r.unsupported ? "This desktop can't tell which app is in front." : `In front now: ${matchApp(config.matchers, platform, r.candidates || []) || 'nothing'}`);

@@ -549,6 +549,23 @@ describe('Open-Meteo forecasts', () => {
     expect(upstream.calls).toHaveLength(1000);
   });
 
+  it('with an API key (a paid plan), asks two at a time and allows 3,750 calls an hour', async () => {
+    quiet();
+    const { om, upstream } = setup({ apiKey: 'sk-secret-123' });
+    const gate = deferred<void>();
+    upstream.answer = () => gate.promise.then(() => Response.json(forecast()));
+    const asks = Promise.all([om.report(1, 1), om.report(2, 2), om.report(3, 3)]);
+    await flush();
+    expect(upstream.calls).toHaveLength(2);
+    gate.resolve();
+    await asks;
+    expect(upstream.calls).toHaveLength(3);
+    upstream.answer = () => Response.json(forecast());
+    for (let i = 3; i < 3750; i++) await om.report(-60 + (i % 1200) / 10, 5 * Math.floor(i / 1200));
+    await expect(om.report(80, 0)).rejects.toMatchObject({ retryAt: Date.UTC(2026, 9, 8, 13) });
+    expect(upstream.calls).toHaveLength(3750);
+  });
+
   it('uses the customer hosts with an API key, sent only in a header and never logged', async () => {
     const { warn, error } = quiet();
     const { om, upstream, clock } = setup({ apiKey: 'sk-secret-123' });
@@ -674,11 +691,11 @@ describe('the weather feature', () => {
     return { ctx, routes, onSocket };
   };
 
-  it('registers nothing with WEATHER=off', async () => {
+  it('registers only the answer that it is off with WEATHER=off', async () => {
     vi.stubEnv('WEATHER', 'off');
     const { ctx, routes, onSocket } = fakeContext();
     await weatherFeature().register(ctx);
-    expect(routes).toEqual([]);
+    expect(routes).toEqual(['/weather/here']);
     expect(onSocket).not.toHaveBeenCalled();
   });
 

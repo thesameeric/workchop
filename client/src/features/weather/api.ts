@@ -42,9 +42,9 @@ async function withTimeout<T>(ms: number, signal: AbortSignal, request: (signal:
 /** Your approximate place from your connection, null when the server doesn't know it, 'off' when it has no weather. */
 export async function fetchHere(): Promise<WeatherPlace | null | 'off'> {
   const res = await fetch('/api/weather/here', { signal: AbortSignal.timeout(10_000), cache: 'no-store' });
-  if (res.status === 404) return 'off';
   if (!res.ok) throw await failed(res);
-  return toPlace(((await res.json()) as { place?: unknown }).place);
+  const here = (await res.json()) as { place?: unknown; off?: unknown };
+  return here.off === true ? 'off' : toPlace(here.place);
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);

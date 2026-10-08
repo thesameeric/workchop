@@ -102,6 +102,11 @@ const HELPER_PATH = '/api/me/app-presence';
 const HELPER_FORWARD_MS = 5 * 60 * 1000;
 /** How long a helper is asked to wait when its report isn't passed on (seconds). */
 const HELPER_RETRY_S = 60;
+/**
+ * The same while the container is still running without visitors: longer than IDLE_MS, so that even
+ * if reaching this object counted as activity, helpers couldn't keep the container running.
+ */
+const HELPER_RETRY_RUNNING_S = IDLE_MS / 1000 + 60;
 
 /** A short fingerprint of the server's settings, to notice when secrets change. */
 async function fingerprint(env: Record<string, string>): Promise<string> {
@@ -140,7 +145,8 @@ export class WorkchopServer extends DurableObject<Env> {
     const url = new URL(request.url);
     if (url.pathname !== HELPER_PATH) this.lastVisit = Date.now();
     else if (!container.running || Date.now() - this.lastVisit > HELPER_FORWARD_MS) {
-      return new Response(null, { status: 204, headers: { 'retry-after': String(HELPER_RETRY_S) } });
+      const wait = container.running ? HELPER_RETRY_RUNNING_S : HELPER_RETRY_S;
+      return new Response(null, { status: 204, headers: { 'retry-after': String(wait) } });
     }
     // The container stops when idle (or when Cloudflare moves it): start a new one when needed.
     if (!container.running) this.ready = null;

@@ -214,9 +214,11 @@ describe('GET /api/weather/here', () => {
     expect(await res.json()).toEqual({ place: null });
   });
 
-  it('is missing when weather is off', async () => {
+  it('says so when weather is off', async () => {
     const at = `http://127.0.0.1:${off.port}`;
-    expect((await get('/weather/here', saoPaulo, at)).status).toBe(404);
+    const here = await get('/weather/here', saoPaulo, at);
+    expect(here.status).toBe(200);
+    expect(await here.json()).toEqual({ place: null, off: true });
     expect((await get('/weather?lat=1&lon=1', {}, at)).status).toBe(404);
   });
 });

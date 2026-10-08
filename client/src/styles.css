@@ -1216,21 +1216,63 @@ body:has(.emote-menu) .hint {
   display: none;
 }
 
-/* Beside an open side panel (which may be wide, like chat's), centred in the space left of it, with
-   the controls card moved up out of its way. */
+/* Beside an open side panel (which may be wide, like chat's), centred in the space left of it: the
+   banner on wide screens (it's hidden on narrower ones), the hint from tablet widths up. */
 @media (min-width: 1041px) {
   .office:has(> .side-panel) .focus-indicator {
     left: calc((100% - var(--panel-w) - 24px) / 2);
   }
+}
 
-  .office:has(> .side-panel):has(> .focus-indicator) .help {
-    bottom: 134px;
+@media (min-width: 721px) {
+  .office:has(> .side-panel) .hint {
+    left: calc((100% - var(--panel-w) - 24px) / 2);
+    max-width: calc(100% - var(--panel-w) - 48px);
   }
 }
 
 @media (max-width: 1040px) {
   .office:has(.side-panel) .focus-indicator {
     display: none;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1040px) {
+  .office:has(> .side-panel) .hint {
+    bottom: 86px;
+  }
+}
+
+/* The controls card (bottom left) moves up out of the way of the banner and the hint where they
+   would cover it: on narrower screens, and beside a side panel. */
+@media (min-width: 721px) and (max-width: 1040px) {
+  .office:has(> .hint) :is(.help, .help-toggle),
+  .office:not(:has(> .side-panel)):has(> .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 134px;
+  }
+
+  .office:not(:has(> .side-panel)):has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 182px;
+  }
+}
+
+@media (min-width: 1041px) and (max-width: 1130px) {
+  .office:has(> .hint, > .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 134px;
+  }
+
+  .office:has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 182px;
+  }
+}
+
+@media (min-width: 1131px) {
+  .office:has(> .side-panel):has(> .hint, > .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 134px;
+  }
+
+  .office:has(> .side-panel):has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
+    bottom: 182px;
   }
 }
 
@@ -1669,6 +1711,38 @@ body:has(.emote-menu) .hint {
   text-overflow: ellipsis;
 }
 
+/* The dock's More menu on narrow screens (Dock.tsx). */
+.more-menu {
+  width: min(280px, calc(100vw - 16px));
+  max-height: calc(100dvh - 90px);
+  overflow-y: auto;
+}
+
+.more-badge {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--glass-raised);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.dock-menu .more-menu button.danger {
+  color: var(--glass-danger);
+}
+
+/* Tablets: no room for your name or the invite button (it's in the office chip too). */
+@media (max-width: 960px) {
+  .me-btn {
+    padding: 5px;
+  }
+
+  .me-name,
+  .dock .hide-narrow {
+    display: none;
+  }
+}
+
 .person-avatar {
   position: relative;
   flex: none;
@@ -1705,10 +1779,10 @@ body:has(.emote-menu) .hint {
   gap: 4px;
   padding: 6px;
   border-radius: 14px;
-  animation: menu-in 0.12s ease-out;
+  animation: emote-menu-in 0.12s ease-out;
 }
 
-@keyframes menu-in {
+@keyframes emote-menu-in {
   from {
     opacity: 0;
     transform: translateX(-50%) translateY(6px);
@@ -1832,10 +1906,12 @@ body:has(.emote-menu) .hint {
   padding: 6px 6px 12px;
 }
 
+/* The buttons go on a line of their own when there are too many to leave room for the name. */
 .person {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 2px 10px;
   padding: 8px 10px;
   border-radius: 12px;
 }
@@ -1850,7 +1926,7 @@ body:has(.emote-menu) .hint {
 }
 
 .person-info {
-  flex: 1;
+  flex: 1 1 130px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1878,6 +1954,7 @@ body:has(.emote-menu) .hint {
 
 .person-actions {
   display: flex;
+  margin-left: auto;
 }
 
 /* Build */
@@ -2033,6 +2110,9 @@ body:has(.emote-menu) .hint {
   bottom: 86px;
   transform: translateX(-50%);
   z-index: 22;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  text-align: center;
   padding: 7px 14px;
   border-radius: 999px;
   font-size: 0.85rem;
@@ -2506,7 +2586,10 @@ body:has(.emote-menu) .hint {
     height: 40px;
   }
 
-  .me-name,
+  .me-btn {
+    padding: 3px;
+  }
+
   .hide-mobile {
     display: none;
   }
@@ -2536,9 +2619,6 @@ body:has(.emote-menu) .hint {
 
   .hint {
     bottom: 72px;
-    width: max-content;
-    max-width: calc(100vw - 24px);
-    text-align: center;
   }
 }
 

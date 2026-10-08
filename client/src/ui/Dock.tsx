@@ -1,17 +1,50 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import { appInfo } from '../../../shared/apps';
 import { REACTIONS } from '../../../shared/avatar';
 import { HeadphonesButton } from '../features/audio/Headphones';
+import { toggleFocus } from '../features/audio/focus';
+import { PresenceDockButton, PresenceIcon, PresenceMenu } from '../features/presence/DockButton';
+import { usePresence } from '../features/presence/state';
 import { colorFor, initials } from '../lib/color';
 import { media } from '../lib/media';
 import { officeUrl } from '../lib/router';
 import { getSession, leaveOffice } from '../lib/session';
 import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
-import { CamIcon, CamOffIcon, HammerIcon, LeaveIcon, LinkIcon, MicIcon, MicOffIcon, ScreenIcon, SettingsIcon, SmileIcon } from './icons';
-import { AccountMenu, usePopover } from './Account';
+import {
+  CamIcon,
+  CamOffIcon,
+  HammerIcon,
+  HeadphonesIcon,
+  HeadphonesOffIcon,
+  LeaveIcon,
+  LinkIcon,
+  MicIcon,
+  MicOffIcon,
+  MoreIcon,
+  ScreenIcon,
+  SettingsIcon,
+  SmileIcon,
+} from './icons';
+import { AccountMenu, menuKeys, usePopover } from './Account';
 import { useMediaState } from './media';
-import { PresenceDockButton } from '../features/presence/DockButton';
 import { panelKey, usePanels, type PanelDef } from './panels';
+
+const NARROW = '(max-width: 720px)';
+
+function onNarrowChange(fn: () => void): () => void {
+  const query = window.matchMedia(NARROW);
+  query.addEventListener('change', fn);
+  return () => query.removeEventListener('change', fn);
+}
+
+/** Phone-sized screens: the dock keeps the main buttons and puts the rest in its More menu. */
+function useNarrow(): boolean {
+  return useSyncExternalStore(onNarrowChange, () => window.matchMedia(NARROW).matches);
+}
+
+/** Most phone browsers can't share the screen. */
+const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia;
 
 export async function copyInvite(): Promise<void> {
   const id = useStore.getState().officeId;
@@ -135,10 +168,108 @@ function PanelButton({ panel, open }: { panel: PanelDef; open: boolean }) {
   );
 }
 
+/** A panel in the More menu, with its badge (e.g. the wallet's balance). */
+function PanelItem({ panel, onPick }: { panel: PanelDef; onPick: () => void }) {
+  const badge = panel.useBadge?.() ?? null;
+  const { icon: Icon } = panel;
+  return (
+    <button
+      role="menuitem"
+      onClick={() => {
+        onPick();
+        setPanel(panel.id);
+      }}
+    >
+      <Icon size={18} />
+      {panel.title}
+      {badge !== null && badge !== 0 && badge !== '' && <span className="more-badge">{badge}</span>}
+    </button>
+  );
+}
+
+/** On narrow screens: the dock's other buttons, in a menu above it ("Working in…" opens in its place). */
+function MoreButton({ panels }: { panels: PanelDef[] }) {
+  const { open, setOpen, close, ref, menuRef, buttonRef } = usePopover();
+  const [at, setAt] = useState({ right: 0, bottom: 0 });
+  const [picking, setPicking] = useState(false);
+  const focus = useStore((s) => s.focus);
+  const screen = useMediaState().screen;
+  const app = usePresence((s) => s.self?.app ?? null);
+  const toggle = () => {
+    const r = ref.current!.getBoundingClientRect();
+    setAt({ right: Math.max(8, window.innerWidth - r.right), bottom: window.innerHeight - r.top + 12 });
+    setPicking(false);
+    setOpen((v) => !v);
+  };
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open && !picking) menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [open, picking]);
+  /** Closes the menu, then does `run`. */
+  const pick = (run: () => void) => () => {
+    close();
+    run();
+  };
+  return (
+    <div ref={ref}>
+      <button ref={buttonRef} className={`dock-btn${open ? ' on' : ''}`} onClick={toggle} title="More" aria-haspopup="menu" aria-expanded={open}>
+        <MoreIcon />
+      </button>
+      {open &&
+        createPortal(
+          // The picker is wider: against the screen's edge.
+          <div className="dock-menu" ref={menuRef} style={picking ? { ...at, right: 8 } : at}>
+            {picking ? (
+              <PresenceMenu onPicked={() => close(true)} />
+            ) : (
+              <div className="account-menu more-menu" role="menu" aria-label="More" ref={menu} onKeyDown={(e) => menuKeys(e, close)}>
+                <button role="menuitem" onClick={pick(toggleFocus)}>
+                  {focus ? <HeadphonesOffIcon size={18} /> : <HeadphonesIcon size={18} />}
+                  {focus ? 'Take headphones off' : 'Put on headphones'}
+                </button>
+                <button role="menuitem" onClick={() => setPicking(true)}>
+                  <PresenceIcon app={app} size={18} />
+                  {app ? `Working in ${appInfo(app).label}` : 'Working in…'}
+                </button>
+                {panels.map((p) => (
+                  <PanelItem key={panelKey(p)} panel={p} onPick={close} />
+                ))}
+                {canShareScreen && (
+                  <button role="menuitem" onClick={pick(toggleScreen)}>
+                    <ScreenIcon size={18} />
+                    {screen ? 'Stop sharing' : 'Share your screen'}
+                  </button>
+                )}
+                <button role="menuitem" onClick={pick(() => setPanel('build'))}>
+                  <HammerIcon size={18} />
+                  {canBuild() ? 'Build mode' : 'Build mode (owner only)'}
+                </button>
+                <button role="menuitem" onClick={pick(() => void copyInvite())}>
+                  <LinkIcon size={18} />
+                  Copy invite link
+                </button>
+                <button role="menuitem" onClick={pick(() => setState({ modal: 'settings' }))}>
+                  <SettingsIcon size={18} />
+                  Settings
+                </button>
+                <button role="menuitem" className="danger" onClick={pick(() => leaveOffice())}>
+                  <LeaveIcon size={18} />
+                  Leave office
+                </button>
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
 export function Dock() {
   const m = useMediaState();
   const panel = useStore((s) => s.panel);
-  const panels = usePanels();
+  const panels = usePanels().filter((p) => p.dock !== false);
+  const narrow = useNarrow();
   // The reactions button while its menu is open.
   const [emoteAnchor, setEmoteAnchor] = useState<HTMLElement | null>(null);
   const closeEmotes = useCallback(() => setEmoteAnchor(null), []);
@@ -149,7 +280,7 @@ export function Dock() {
     <nav className="dock" aria-label="Controls">
       <div className="dock-group">
         <MeButton />
-        <PresenceDockButton />
+        {!narrow && <PresenceDockButton />}
       </div>
       <div className="dock-group center">
         <button className={`dock-btn${m.mic ? '' : ' off'}`} onClick={() => media.setMic(!m.mic)} title={m.mic ? 'Mute (M)' : 'Unmute (M)'}>
@@ -158,10 +289,14 @@ export function Dock() {
         <button className={`dock-btn${m.cam ? '' : ' off'}`} onClick={() => media.setCam(!m.cam)} title={m.cam ? 'Stop camera (V)' : 'Start camera (V)'}>
           {m.cam ? <CamIcon /> : <CamOffIcon />}
         </button>
-        <button className={`dock-btn${m.screen ? ' on' : ''}`} onClick={toggleScreen} title={m.screen ? 'Stop sharing' : 'Share your screen'}>
-          <ScreenIcon />
-        </button>
-        <HeadphonesButton />
+        {!narrow && (
+          <>
+            <button className={`dock-btn${m.screen ? ' on' : ''}`} onClick={toggleScreen} title={m.screen ? 'Stop sharing' : 'Share your screen'}>
+              <ScreenIcon />
+            </button>
+            <HeadphonesButton />
+          </>
+        )}
         <button
           className={`dock-btn${emoteAnchor ? ' on' : ''}`}
           onClick={(e) => {
@@ -175,30 +310,41 @@ export function Dock() {
           <SmileIcon />
         </button>
         {emoteAnchor && <EmoteMenu anchor={emoteAnchor} onClose={closeEmotes} />}
-        <button
-          className={`dock-btn${panel === 'build' ? ' on' : ''}`}
-          onClick={() => setPanel('build')}
-          title={buildAllowed ? 'Build mode (B)' : 'Only the owner can edit this office'}
-        >
-          <HammerIcon />
-        </button>
+        {!narrow && (
+          <button
+            className={`dock-btn${panel === 'build' ? ' on' : ''}`}
+            onClick={() => setPanel('build')}
+            title={buildAllowed ? 'Build mode (B)' : 'Only the owner can edit this office'}
+          >
+            <HammerIcon />
+          </button>
+        )}
       </div>
-      <div className="dock-group">
-        {panels
-          .filter((p) => p.dock !== false)
-          .map((p) => (
+      {narrow ? (
+        <div className="dock-group">
+          {panels
+            .filter((p) => !p.inMore && !p.hideOnMobile)
+            .map((p) => (
+              <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
+            ))}
+          <MoreButton panels={panels.filter((p) => p.inMore && !p.hideOnMobile)} />
+        </div>
+      ) : (
+        <div className="dock-group">
+          {panels.map((p) => (
             <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
           ))}
-        <button className="dock-btn hide-mobile" onClick={copyInvite} title="Copy invite link">
-          <LinkIcon />
-        </button>
-        <button className="dock-btn" onClick={() => setState({ modal: 'settings' })} title="Settings">
-          <SettingsIcon />
-        </button>
-        <button className="dock-btn danger" onClick={() => leaveOffice()} title="Leave office">
-          <LeaveIcon />
-        </button>
-      </div>
+          <button className="dock-btn hide-narrow" onClick={copyInvite} title="Copy invite link">
+            <LinkIcon />
+          </button>
+          <button className="dock-btn" onClick={() => setState({ modal: 'settings' })} title="Settings">
+            <SettingsIcon />
+          </button>
+          <button className="dock-btn danger" onClick={() => leaveOffice()} title="Leave office">
+            <LeaveIcon />
+          </button>
+        </div>
+      )}
     </nav>
   );
 }

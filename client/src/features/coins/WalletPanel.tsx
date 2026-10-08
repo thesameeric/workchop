@@ -250,7 +250,13 @@ function SignInToGetAWallet() {
 export function WalletPanel() {
   const account = useStore((s) => s.account);
   const isOwner = useStore((s) => s.isOwner);
-  const { balance, entries, more, loadingMore, error, enabled } = useCoins();
+  // Field by field: the store also holds everyone's celebrations, which change often.
+  const balance = useCoins((s) => s.balance);
+  const entries = useCoins((s) => s.entries);
+  const more = useCoins((s) => s.more);
+  const loadingMore = useCoins((s) => s.loadingMore);
+  const error = useCoins((s) => s.error);
+  const enabled = useCoins((s) => s.enabled);
   const shown = useCountUp(balance);
 
   if (!account) {

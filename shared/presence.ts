@@ -41,15 +41,6 @@ export interface HelperDevice {
   platform: AppPlatform | null;
 }
 
-/** What the helper sends to PUT /api/me/app-presence. */
-export interface HelperReport {
-  app: string | null;
-  platform: AppPlatform;
-  v: 1;
-  /** This computer can't tell which app is in front (e.g. a Wayland desktop without support). */
-  unsupported?: boolean;
-}
-
 declare module './types' {
   interface ClientToServerEvents {
     'presence:set': (update: PresenceUpdate) => void;

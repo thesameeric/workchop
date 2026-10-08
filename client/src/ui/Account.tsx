@@ -25,16 +25,18 @@ export function usePopover() {
       const target = e.target as Node;
       if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
+    // Escape closes only this (first, so it doesn't also close the side panel or spotlight).
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      e.stopPropagation();
       setOpen(false);
       buttonRef.current?.focus();
     };
     window.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [open]);
   return { open, setOpen, close, ref, menuRef, buttonRef };
@@ -44,7 +46,7 @@ export function usePopover() {
  * Keyboard use of a menu: arrows, Home and End move between its items, Escape and Tab close it
  * (Escape back to its button). Keys used here don't reach the office's shortcuts or movement.
  */
-function menuKeys(e: KeyboardEvent<HTMLElement>, close: (refocus?: boolean) => void): void {
+export function menuKeys(e: KeyboardEvent<HTMLElement>, close: (refocus?: boolean) => void): void {
   const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
   const at = items.indexOf(document.activeElement as HTMLElement);
   let next: number;

@@ -20,6 +20,8 @@ export interface PanelDef {
   dock?: boolean;
   /** No dock button on narrow screens. */
   hideOnMobile?: boolean;
+  /** On narrow screens its button goes in the dock's More menu (the dock only has room for a few). */
+  inMore?: boolean;
   /** A hook giving the dock button's badge (a count, or short text like "9+"); null or 0 shows none. */
   useBadge?: () => number | string | null;
   /** 'alert' (default) is red, for things to look at; 'neutral' is grey, for plain counts. */

@@ -268,7 +268,7 @@ describe('presence over the network', () => {
     // Nobody of Ada's online: accepted, but the helper is asked to check back later.
     const idle = await report(token, { app: 'figma', platform: 'macos', v: 1 });
     expect(idle.status).toBe(204);
-    expect(idle.headers.get('retry-after')).toBe('30');
+    expect(idle.headers.get('retry-after')).toBe('300');
 
     const { id } = await createOffice(base);
     const me = await join(base, id, 'Ada', { jar: ada });
@@ -342,6 +342,25 @@ describe('presence over the network', () => {
     // Another person can't see or remove Eve's computers.
     const mallory = await signIn('Mallory');
     expect(await (await mallory.fetch(`${base}/api/me/devices`)).json()).toEqual([]);
+  });
+
+  it('restores a hand-picked status after a restart, even if the helper reported first', async () => {
+    const cy = await signIn('Cy');
+    const { token } = (await (await cy.fetch(`${base}/api/me/devices`, json({ label: 'Desk' }))).json()) as { token: string };
+    // The helper gets through before any of Cy's tabs is back.
+    expect((await report(token, { app: 'vscode', platform: 'linux', v: 1 })).status).toBe(204);
+    const { id } = await createOffice(base);
+    const me = await join(base, id, 'Cy', { jar: cy });
+    let mine: PresenceState | null = null;
+    me.socket.on('presence:state', (s) => (mine = s));
+    me.socket.emit('presence:set', { share: true, others: true, manual: { app: 'figma', until: null }, restore: true });
+    await until(() => mine?.app === 'figma');
+    // Offered again later (another reconnect), it doesn't undo a newer choice.
+    me.socket.emit('presence:set', { manual: null });
+    await until(() => mine?.app === 'vscode');
+    me.socket.emit('presence:set', { manual: { app: 'figma', until: null }, restore: true });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mine!.app).toBe('vscode');
   });
 
   it('lets guests pick a status, for their visit only', async () => {

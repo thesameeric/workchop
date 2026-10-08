@@ -14,12 +14,12 @@ import { HelperTokens, isTokenFormat, hashToken, TooManyDevices } from './tokens
 /** How often expiries are checked while anyone has a presence. */
 const SWEEP_MS = 5_000;
 /** Without anyone of theirs online, the helper is asked to check back this much later (seconds). */
-const IDLE_RETRY_S = 30;
+const IDLE_RETRY_S = 300;
 
 const userKey = (id: string) => `u:${id}`;
 const guestKey = (socketId: string) => `s:${socketId}`;
 
-export function createPresence(ctx: ServerContext) {
+function createPresence(ctx: ServerContext): void {
   const map = new PresenceMap();
   const tokens = new HelperTokens(ctx.db);
   /** The presence each socket was last told, to send only changes. */
@@ -77,8 +77,9 @@ export function createPresence(ctx: ServerContext) {
         const update = sanitizePresenceUpdate(raw);
         if (!update) return;
         const key = keyOf(s);
-        // After a reconnect, a status is only restored if the server has forgotten it (a restart).
-        if (update.restore && map.get(key)) delete update.manual;
+        // After a reconnect, a status is only restored if the server has forgotten it (a restart),
+        // even if a desktop helper has reported since.
+        if (update.restore && map.get(key)?.fromClient) delete update.manual;
         map.update(key, update);
         refresh(key);
         startSweeping();
@@ -153,7 +154,8 @@ export function createPresence(ctx: ServerContext) {
 
   // About one report per 2 s per token (the helper sends on change and every 15 s).
   const mayReport = windowLimiter(5, 10_000);
-  // Tokens not in memory cost a query each: limit those overall.
+  // Tokens not in memory cost a query each: limit those per address, and overall.
+  const mayLookUpFrom = windowLimiter(10, 1000);
   const mayLookUp = windowLimiter(50, 1000);
   const report: express.RequestHandler = async (req, res) => {
     const token = /^Bearer\s+(\S+)$/i.exec(req.get('authorization') ?? '')?.[1];
@@ -161,15 +163,16 @@ export function createPresence(ctx: ServerContext) {
       res.status(401).json({ error: 'Pair this computer again in Workchop: Settings > Desktop helper.' });
       return;
     }
-    if (!mayReport(hashToken(token))) {
+    const hash = hashToken(token);
+    if (!mayReport(hash)) {
       res.set('Retry-After', '2').status(429).json({ error: 'Too many reports.' });
       return;
     }
-    if (!tokens.cached(token) && !mayLookUp('all')) {
+    if (!tokens.cached(hash) && !(mayLookUpFrom(ctx.clientIp(req)) && mayLookUp('all'))) {
       res.set('Retry-After', '5').status(503).json({ error: 'Busy, try again shortly.' });
       return;
     }
-    const owner = await tokens.verify(token);
+    const owner = await tokens.verify(token, hash);
     if (!owner) {
       res.status(401).json({ error: 'This computer was removed. Pair it again in Workchop: Settings > Desktop helper.' });
       return;
@@ -185,15 +188,17 @@ export function createPresence(ctx: ServerContext) {
     const key = userKey(owner.userId);
     map.report(key, owner.id, { app: reported, platform: body.platform, unsupported });
     seen.set(owner.id, { platform: body.platform, at: Date.now() });
-    tokens.touch(owner.id).catch((err) => console.error('[presence] could not note a token was used:', err));
     refresh(key);
     startSweeping();
-    if (!playersOf(key).length) res.set('Retry-After', String(IDLE_RETRY_S));
+    if (playersOf(key).length) {
+      // Not while they're offline, so the database can sleep (e.g. a serverless one).
+      tokens.touch(owner.id).catch((err) => console.error('[presence] could not note a token was used:', err));
+    } else {
+      res.set('Retry-After', String(IDLE_RETRY_S));
+    }
     res.status(204).end();
   };
   app.put('/me/app-presence', report);
-
-  return { map, tokens };
 }
 
 export const feature: Feature = {

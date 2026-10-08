@@ -10,7 +10,10 @@ export interface CoinsOptions {
   tickMs?: number;
   /** Active presence that earns presence coins (ms). */
   presenceMs?: number;
-  /** Without moving, chatting or reacting (and with mic, camera and screen off) for this long, someone is idle. */
+  /**
+   * Without moving, chatting, reacting, changing their status or switching apps (and with mic, camera
+   * and screen off) for this long, someone is idle.
+   */
   idleMs?: number;
 }
 
@@ -72,9 +75,11 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
         }
       });
 
-      // Signed-in people in offices, by socket id, and when each last did something.
+      // Signed-in people in offices, by socket id, when each last did something, and the app others
+      // last saw them in (the desktop helper reports switching apps).
       const present = new Map<string, SocketContext>();
       const lastActive = new Map<string, number>();
+      const lastApp = new Map<string, string | null>();
       // Active time not yet paid out, per account (several tabs count once), and when it last grew.
       const earned = new Map<string, { ms: number; at: number }>();
       const paying = new Set<string>();
@@ -88,7 +93,7 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
         const touch = () => {
           if (present.has(s.socket.id)) lastActive.set(s.socket.id, now());
         };
-        for (const event of ['move', 'chat:send', 'chat:edit', 'chat:react', 'emote'] as const) s.socket.on(event, touch);
+        for (const event of ['move', 'chat:send', 'chat:edit', 'chat:react', 'emote', 'profile', 'presence:set'] as const) s.socket.on(event, touch);
 
         s.socket.on('coins:tip', async (raw, ack) => {
           if (typeof ack !== 'function') return;
@@ -172,6 +177,7 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
       realtime.onLeave((s, { officeId }) => {
         present.delete(s.socket.id);
         lastActive.delete(s.socket.id);
+        lastApp.delete(s.socket.id);
         if (!realtime.onlineCount(officeId)) enabled.delete(officeId);
       });
 
@@ -183,6 +189,9 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
           const p = s.me();
           const room = s.room();
           if (!p || !room || !s.user || p.status === 'away' || enabled.get(room.officeId) === false) continue;
+          const app = p.app ?? null;
+          if (lastApp.has(socketId) && lastApp.get(socketId) !== app) lastActive.set(socketId, t);
+          lastApp.set(socketId, app);
           const idle = t - (lastActive.get(socketId) ?? 0) > idleMs && !p.mic && !p.cam && !p.screen;
           if (!idle) active.set(s.user.id, room.officeId);
         }

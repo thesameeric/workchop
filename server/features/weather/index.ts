@@ -75,7 +75,14 @@ export function weatherFeature(options: WeatherOptions = {}): Feature {
     register(ctx) {
       const { enabled, geoHeaders, ...upstream } = options;
       const env = process.env;
-      if (!(enabled ?? env.WEATHER?.trim().toLowerCase() !== 'off')) return;
+      if (!(enabled ?? env.WEATHER?.trim().toLowerCase() !== 'off')) {
+        // Clients ask this first: an answer (rather than a 404) tells them quietly to hide the weather.
+        ctx.app.get('/weather/here', (_req, res) => {
+          const off: WeatherHere = { place: null, off: true };
+          res.set('Cache-Control', 'no-store').json(off);
+        });
+        return;
+      }
       const now = upstream.now ?? Date.now;
       const geo = geoHeadersFrom(geoHeaders !== undefined ? geoHeaders : env.GEO_HEADERS);
       const openMeteo = createOpenMeteo({

@@ -72,6 +72,7 @@ export const HUGEICONS = {
   'minus-sign': 0xf2139,
   'moon-02': 0xf2174,
   'moon-cloud': 0xf2181,
+  'more-horizontal': 0xf218f,
   'music-note-03': 0xf21e2,
   'notion-01': 0xf223e,
   'paint-board': 0xf22a4,

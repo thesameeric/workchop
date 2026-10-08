@@ -100,18 +100,16 @@ export class HelperTokens {
     return res.rowCount > 0;
   }
 
-  /** Whether this token was looked up recently, so checking it again costs no query. */
-  cached(token: string): boolean {
-    const hash = hashToken(token);
+  /** Whether this token (by its hash) was looked up recently, so checking it again costs no query. */
+  cached(hash: string): boolean {
     const hit = this.known.get(hash);
     const missedAt = this.unknown.get(hash);
     return (!!hit && this.now() - hit.at < CACHE_MS) || (missedAt !== undefined && this.now() - missedAt < CACHE_MS);
   }
 
-  /** Who a presence token belongs to, or null (wrong format, unknown or revoked). */
-  async verify(token: string): Promise<TokenOwner | null> {
+  /** Who a presence token belongs to, or null (wrong format, unknown or revoked). Pass its hash if known. */
+  async verify(token: string, hash = hashToken(token)): Promise<TokenOwner | null> {
     if (!isTokenFormat(token)) return null;
-    const hash = hashToken(token);
     const now = this.now();
     const hit = this.known.get(hash);
     if (hit && now - hit.at < CACHE_MS) return { id: hit.id, userId: hit.userId };

@@ -66,15 +66,17 @@ where the hooks below allow it, to keep merges easy.
 ## Client plug-in API
 - Put client code in client/src/features/<name>/index.ts(x): files there load automatically at
   startup; nothing else needs editing to register them.
-- Panels: `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, useBadge?,
+- Panels: `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?,
   badgeTone?: 'alert'|'neutral', shortcut? })` from client/src/ui/panels.tsx (chat 10, music 20,
-  people 30; build is dock:false). Store `panel` is a string id; open with `setPanel(id)`.
+  people 30, wallet 35; build is dock:false; `inMore` puts the button in the dock's More menu on
+  phones). Store `panel` is a string id; open with `setPanel(id)`.
 - Settings sections: `registerSettingsSection({ id, title, icon, order, Component })` from
   client/src/ui/settings.tsx (Appearance 10, Audio & video 20). Use orders 30+ for new sections.
 - Top bar: `registerTopBarItem({ id, order, Component })` from client/src/ui/topbar.ts (after the
   music; weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
   client/src/ui/PeoplePanel.tsx, a line under each other person's name (`Component` gets `{ player }`;
-  weather 10). Both render null when there's nothing to show.
+  weather 10), and `registerPersonAction({ id, order, Component })` from client/src/ui/personActions.ts,
+  a button next to them (coins 10). All render null when there's nothing to show.
 - 3D scene: `registerSceneLayer({ id, order, Component })` from client/src/world/layers.ts, rendered in
   the Canvas after the office, each in its own Suspense and error boundary (weather 10). Change the
   sky, fog, light or wind through `sceneLighting` from useFrame with priority -1, and call

@@ -145,6 +145,9 @@ export class Wallets {
 
   /** Makes sure the wallet exists; returns the welcome bonus when it was just created. */
   async ensure(userId: string): Promise<Award | null> {
+    // Usually there is one already: a read, not a write.
+    const found = await this.db.query('SELECT 1 FROM wallets WHERE user_id = $1', [userId]);
+    if (found.rows.length) return null;
     const at = new Date(this.now());
     return this.db.transaction(async (tx) => ((await this.create(tx, userId, at)) ? { balance: WELCOME_COINS, delta: WELCOME_COINS, kind: 'welcome' } : null));
   }

@@ -36,7 +36,10 @@ export interface OpenMeteoOptions {
   random?: () => number;
   /** A paid plan's key (OPEN_METEO_API_KEY): uses the customer hosts. */
   apiKey?: string | null;
-  /** Calls a UTC day the server allows itself, failed ones and place searches included; an eighth of them at most in a UTC hour. */
+  /**
+   * Calls a UTC day the server allows itself, failed ones and place searches included; an eighth of them
+   * at most in a UTC hour. 8,000 by default, 30,000 with an API key.
+   */
   dailyBudget?: number;
   /** Cells kept in memory (the ones updated longest ago go first). */
   maxCells?: number;
@@ -150,10 +153,12 @@ export function createOpenMeteo(options: OpenMeteoOptions = {}) {
   const fetchImpl = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
-  const budget = options.dailyBudget ?? 8000;
-  const hourlyBudget = Math.ceil(budget / 8);
-  const maxCells = options.maxCells ?? 5000;
   const apiKey = options.apiKey || null;
+  // The free API allows fewer than 10,000 calls a day; the smallest paid plan 1M a month and two at once.
+  const budget = options.dailyBudget ?? (apiKey ? 30_000 : 8000);
+  const hourlyBudget = Math.ceil(budget / 8);
+  const atOnce = apiKey ? 2 : 1;
+  const maxCells = options.maxCells ?? 5000;
   const forecastHost = apiKey ? 'https://customer-api.open-meteo.com' : 'https://api.open-meteo.com';
   const geocodingHost = apiKey ? 'https://customer-geocoding-api.open-meteo.com' : 'https://geocoding-api.open-meteo.com';
   // The key goes in a header, never in URLs (or logs).
@@ -167,7 +172,7 @@ export function createOpenMeteo(options: OpenMeteoOptions = {}) {
   let spent = 0;
   let hour = -1;
   let spentThisHour = 0;
-  let busy = false;
+  let running = 0;
   const waiting: (() => void)[] = [];
 
   /** Until when Open-Meteo may not be asked at `t` (after a 429, or with this hour's or today's calls spent); earlier: it may. */
@@ -193,8 +198,8 @@ export function createOpenMeteo(options: OpenMeteoOptions = {}) {
   };
 
   const myTurn = async () => {
-    if (!busy) {
-      busy = true;
+    if (running < atOnce) {
+      running++;
       return;
     }
     if (waiting.length >= MAX_WAITING) throw new WeatherUnavailable('Too many weather requests waiting', now() + 10_000);
@@ -203,10 +208,10 @@ export function createOpenMeteo(options: OpenMeteoOptions = {}) {
   const nextTurn = () => {
     const next = waiting.shift();
     if (next) next();
-    else busy = false;
+    else running--;
   };
 
-  /** One request to Open-Meteo, in turn (one at a time). */
+  /** One request to Open-Meteo, in turn (one at a time, or two with an API key). */
   const call = async (url: string): Promise<unknown> => {
     checkAllowed();
     await myTurn();

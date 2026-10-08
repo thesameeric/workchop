@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -21,7 +22,7 @@ interface Helper {
 }
 const helper = createRequire(import.meta.url)('../helper/workchop-presence.cjs') as {
   matchApp(m: unknown, platform: AppPlatform, candidates: string[]): string | null;
-  createDetector(opts: { platform: AppPlatform; exec?: Exec; env?: Record<string, string> }): Detect;
+  createDetector(opts: { platform: AppPlatform; exec?: Exec; env?: Record<string, string>; spawn?: () => unknown }): Detect & { ready?: Promise<void>; stop?: () => void };
   createHelper(opts: { config: object; platform: AppPlatform; detect: Detect; fetch?: typeof fetch; now?: () => number }): Helper;
   swayFocused(tree: unknown): (string | null | undefined)[] | null;
   parseGnome(out: string): string[];
@@ -230,6 +231,17 @@ describe('desktop helper', () => {
     expect(ps).toContain('[IntPtr]::Zero');
     expect(ps).toContain('Get-Process -Id 1234');
     expect(ps).not.toMatch(/MainWindowTitle|GetWindowText/);
+  });
+
+  it('can wait for PowerShell’s first answer on Windows (its first start can be slow)', async () => {
+    const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stdin: { on() {}, end() {} }, kill() {} });
+    const detect = helper.createDetector({ platform: 'windows', spawn: () => child });
+    expect(await detect()).toEqual({ candidates: [''] });
+    setTimeout(() => child.stdout.emit('data', 'noise\r\n=Co'), 20);
+    setTimeout(() => child.stdout.emit('data', 'de\r\n'), 40);
+    await detect.ready;
+    expect(await detect()).toEqual({ candidates: ['Code'] });
+    detect.stop!();
   });
 });
 

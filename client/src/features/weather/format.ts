@@ -61,10 +61,11 @@ export function formatWind(kph: number, fromDeg: number, units: Units): string {
   return `${n} ${units === 'f' ? 'mph' : 'km/h'} ${COMPASS[Math.round((((fromDeg % 360) + 360) % 360) / 45) % 8]}`;
 }
 
-/** "0.4 mm" or "0.02 in". */
+/** The last 15 minutes' precipitation (Open-Meteo's current value) as a rate: "1.6 mm/h" or "0.06 in/h". */
 export function formatPrecipitation(mm: number, units: Units): string {
-  if (units === 'f') return `${Number((mm / 25.4).toFixed(2))} in`;
-  return `${Number(mm.toFixed(1))} mm`;
+  const perHour = mm * 4;
+  if (units === 'f') return `${Number((perHour / 25.4).toFixed(2))} in/h`;
+  return `${Number(perHour.toFixed(1))} mm/h`;
 }
 
 /** "800 m", "2.5 km" or "0.5 mi". */

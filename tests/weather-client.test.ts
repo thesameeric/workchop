@@ -168,8 +168,9 @@ describe('words and numbers', () => {
     expect(formatWind(0.4, 90, 'c')).toBe('Calm');
     expect(formatWind(12, 315, 'c')).toBe('12 km/h NW');
     expect(formatWind(16.09344, 92, 'f')).toBe('10 mph E');
-    expect(formatPrecipitation(0.44, 'c')).toBe('0.4 mm');
-    expect(formatPrecipitation(25.4, 'f')).toBe('1 in');
+    // Per hour, from the last 15 minutes.
+    expect(formatPrecipitation(0.44, 'c')).toBe('1.8 mm/h');
+    expect(formatPrecipitation(6.35, 'f')).toBe('1 in/h');
     expect(formatVisibility(804, 'c')).toBe('800 m');
     expect(formatVisibility(2500, 'c')).toBe('2.5 km');
     expect(formatVisibility(1609.344, 'f')).toBe('1 mi');
@@ -325,7 +326,7 @@ describe('your weather in the app', () => {
     /** Joins an office whose server has weather (or not), with your connection in Lisbon. */
     async function join(hook: Hook, weather = true) {
       const fetch = vi.fn(async (url: string) => {
-        if (!weather) return Response.json({ error: 'Not found' }, { status: 404 });
+        if (!weather) return url === '/api/weather/here' ? Response.json({ place: null, off: true }) : Response.json({ error: 'Not found' }, { status: 404 });
         if (url === '/api/weather/here') return Response.json({ place: lisbon });
         return Response.json(sunny, { headers: { 'Cache-Control': 'private, max-age=240' } });
       });

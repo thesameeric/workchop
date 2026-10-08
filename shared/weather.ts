@@ -89,6 +89,8 @@ export interface WeatherReport {
 /** GET /api/weather/here: the visitor's approximate place from their connection, when the server knows it. */
 export interface WeatherHere {
   place: WeatherPlace | null;
+  /** The server has no weather (WEATHER=off). */
+  off?: true;
 }
 
 /** What someone shares with others in the office about their weather (Settings > Weather, off by default). No place. */

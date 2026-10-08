@@ -45,6 +45,11 @@ const geometries = {
   flames: flameGeometry(),
 };
 
+// One material per kind, shared by every burst and kept (disposing it would throw away the compiled
+// shader, so each burst would compile it again). Particles fade out by shrinking.
+const material = (opacity: number) => new THREE.MeshBasicMaterial({ transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+const materials = { confetti: material(1), hearts: material(1), flames: material(0.9) };
+
 interface Spec {
   count: number;
   /** Seconds until the effect is gone. */
@@ -140,14 +145,10 @@ const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: 
   const spec = SPECS[kind];
   const ref = useRef<THREE.InstancedMesh>(null);
   const particles = useMemo(() => makeParticles(kind), [kind]);
-  // Its own material: each burst fades out on its own.
-  const material = useMemo(() => new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }), []);
   const born = useRef<number | null>(null);
   const finished = useRef(false);
   /** Which way the character faced when it started. */
   const facing = useMemo(() => new THREE.Quaternion(), []);
-
-  useEffect(() => () => material.dispose(), [material]);
 
   useLayoutEffect(() => {
     const mesh = ref.current;
@@ -224,10 +225,9 @@ const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: 
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (kind === 'flames' && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    material.opacity = kind === 'flames' ? 0.9 : Math.min(1, (spec.life - now) / 0.4);
   });
 
-  return <instancedMesh ref={ref} args={[geometries[kind], material, spec.count]} frustumCulled={false} raycast={() => null} />;
+  return <instancedMesh ref={ref} args={[geometries[kind], materials[kind], spec.count]} frustumCulled={false} raycast={() => null} />;
 });
 
 /** Particles for the reactions that have them (🎉 confetti, ❤️ hearts, 🔥 flames), seen by everyone. */

@@ -48,10 +48,11 @@
   color: var(--glass-muted);
 }
 
-/* The popover, in a portal on the page (outside the office's own styles). */
+/* The popover, in a portal on the page (outside the office's own styles). Above the toasts, which
+   start in the same place: they move beside it while it's open, where there's room. */
 .weather-pop {
   position: fixed;
-  z-index: 60;
+  z-index: 96;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -342,6 +343,13 @@
   align-items: center;
   gap: 4px;
   font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 661px) {
+  body:has(.weather-pop) .toasts:not(.page) {
+    left: 324px;
+    max-width: calc(100vw - 336px);
+  }
 }
 
 /* Narrow: just the condition and temperature (the place stays while there's no temperature yet). */

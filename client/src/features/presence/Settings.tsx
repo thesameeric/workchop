@@ -25,12 +25,17 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint: strin
   );
 }
 
-async function savePref(key: 'appShare' | 'appOthers', value: boolean) {
+type Pref = 'share' | 'others';
+const SETTING: Record<Pref, string> = { share: 'appShare', others: 'appOthers' };
+
+async function savePref(pref: Pref, value: boolean): Promise<void> {
   // Tell the office at once (hiding must not wait for the save), then keep it with the account.
-  sendPresence(key === 'appShare' ? { share: value } : { others: value });
+  sendPresence({ [pref]: value });
   try {
-    await saveAccountSettings({ [key]: value });
+    await saveAccountSettings({ [SETTING[pref]]: value });
   } catch (err) {
+    // Not saved: back to what is, in the office too.
+    sendPresence({ [pref]: !value });
     toast((err as Error).message, 'error');
   }
 }
@@ -40,7 +45,19 @@ export function StatusSection() {
   const account = useStore((s) => s.account);
   // Re-read when the account's settings change.
   useStore((s) => s.account?.profile.settings);
-  const prefs = sharingPrefs();
+  // A switch flips at once, and back if saving fails.
+  const [flipped, setFlipped] = useState<Partial<Record<Pref, boolean>>>({});
+  const prefs = { ...sharingPrefs(), ...flipped };
+  const flip = (pref: Pref, value: boolean) => {
+    setFlipped((f) => ({ ...f, [pref]: value }));
+    void savePref(pref, value).then(() =>
+      setFlipped((f) => {
+        const rest = { ...f };
+        delete rest[pref];
+        return rest;
+      }),
+    );
+  };
   return (
     <div className="presence-settings">
       <div className="field">
@@ -54,13 +71,13 @@ export function StatusSection() {
             label="Share what app I’m using"
             hint="From the desktop helper. Hidden while you’re on Do not disturb or wearing headphones."
             checked={prefs.share}
-            onChange={(v) => void savePref('appShare', v)}
+            onChange={(v) => flip('share', v)}
           />
           <Toggle
             label="Show other apps as “Working”"
             hint="Apps that aren’t in Workchop’s list. Their names are never sent."
             checked={prefs.others}
-            onChange={(v) => void savePref('appOthers', v)}
+            onChange={(v) => flip('others', v)}
           />
         </>
       ) : (

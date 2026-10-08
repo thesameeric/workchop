@@ -19,6 +19,8 @@ import {
 } from '../shared/coins';
 import type { Db } from '../server/db';
 import { collectMigrations, migrate } from '../server/db/migrations';
+import type { Feature } from '../server/features';
+import { feature as chat } from '../server/features/chat';
 import { createCoins } from '../server/features/coins';
 import { CoinsError, Wallets } from '../server/features/coins/wallets';
 import { startServer } from '../server/index';
@@ -352,5 +354,98 @@ describe(`coins in the office on ${DB}`, () => {
     expect(w.balance).toBe(WELCOME_COINS + DAILY_COINS + PRESENCE_DAILY_CAP);
     expect(w.recent.filter((e) => e.kind === 'presence')).toHaveLength(PRESENCE_DAILY_CAP / PRESENCE_COINS);
     expect((await wallet(bo.jar)).balance).toBe(WELCOME_COINS + DAILY_COINS);
+  });
+});
+
+describe(`presence coins and idleness on ${DB}`, () => {
+  let server: Awaited<ReturnType<typeof startServer>>;
+  let base: string;
+  let dataDir: string;
+  // Idleness follows this clock; presence time grows with each (real) tick.
+  let clock = Date.parse('2026-03-02T10:00:00Z');
+  const IDLE_MS = 60_000;
+  // Stands in for the desktop helper: sets the app others see you in.
+  const apps: Feature = {
+    name: 'test-apps',
+    register(ctx) {
+      ctx.realtime.onSocket((s) =>
+        s.socket.on('test:app' as never, ((app: string) => {
+          const room = s.room();
+          const me = s.me();
+          if (room && me) ctx.realtime.updatePlayer(room.officeId, me.id, { app });
+        }) as never),
+      );
+    },
+  };
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-coins-idle-'));
+    server = await startServer({
+      port: 0,
+      host: '127.0.0.1',
+      db: await freshDb(),
+      dataDir,
+      quiet: true,
+      iceServers: [],
+      features: [chat, createCoins({ now: () => clock, tickMs: 20, presenceMs: 40, idleMs: IDLE_MS }), apps],
+      auth: { google: null, apple: null, devLogin: true },
+    });
+    base = `http://127.0.0.1:${server.port}`;
+  }, 60_000);
+
+  const sockets: Client[] = [];
+  afterAll(async () => {
+    sockets.forEach((s) => s.disconnect());
+    await server?.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const balance = async (jar: Jar) => ((await (await jar.fetch(`${base}/api/me/wallet`)).json()) as WalletResponse).balance;
+
+  /** A new member, available in the office. */
+  async function member(officeId: string, name: string, ownerKey?: string) {
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name, email: `${name.toLowerCase()}-${crypto.randomUUID()}@example.com` }));
+    const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie: jar.header() } });
+    sockets.push(socket);
+    const res = await new Promise<JoinResponse>((resolve) => {
+      socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey, status: 'available' }, resolve));
+    });
+    if (!res.ok) throw new Error(res.error);
+    return { jar, socket };
+  }
+
+  it('stops paying idle members, and counts chat, status changes and switching apps as activity', async () => {
+    const { id } = await createOffice(base);
+    const activities: [string, (socket: Client) => void][] = [
+      ['chat', (socket) => socket.emit('chat:send', { conv: 'c:none', text: 'hi' } as never, () => {})],
+      ['status', (socket) => socket.emit('profile', { status: 'busy' })],
+      ['app', (socket) => (socket as unknown as { emit(event: string, app: string): void }).emit('test:app', 'figma')],
+    ];
+    for (const [name, act] of activities) {
+      const { jar, socket } = await member(id, name);
+      await until(async () => (await balance(jar)) >= WELCOME_COINS + DAILY_COINS);
+      // Nothing for a while (and no mic, camera or screen): idle, so no presence coins.
+      clock += IDLE_MS + 1000;
+      await sleep(100);
+      const idle = await balance(jar);
+      await sleep(200);
+      expect(await balance(jar), name).toBe(idle);
+      act(socket);
+      await until(async () => (await balance(jar)) > idle);
+    }
+  });
+
+  it('pays no presence coins (and no daily bonus) in an office with coins off', async () => {
+    const { id, ownerKey } = await createOffice(base);
+    const owner = await member(id, 'Owner', ownerKey);
+    expect(await owner.socket.timeout(3000).emitWithAck('coins:office', false)).toEqual({ ok: true });
+    const { jar, socket } = await member(id, 'Active');
+    for (let i = 0; i < 10; i++) {
+      socket.emit('move', 5 + i * 0.1, 5, 0, 'walk');
+      await sleep(30);
+    }
+    expect(await balance(jar)).toBe(WELCOME_COINS);
   });
 });

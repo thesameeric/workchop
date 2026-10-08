@@ -62,7 +62,7 @@
 
 .app-options {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 6px;
 }
 
@@ -132,7 +132,7 @@
 
 /* The quick menu above the dock, in the office's glass style. */
 .presence-menu {
-  width: min(380px, calc(100vw - 16px));
+  width: min(404px, calc(100vw - 16px));
   max-height: calc(100vh - 120px);
   overflow-y: auto;
   padding: 12px;

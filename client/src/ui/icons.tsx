@@ -30,6 +30,7 @@ export const PeopleIcon = icon('user-multiple');
 export const LinkIcon = icon('link-04');
 export const SettingsIcon = icon('settings-01');
 export const LeaveIcon = icon('logout-01');
+export const MoreIcon = icon('more-horizontal');
 export const CloseIcon = icon('cancel-01');
 export const RotateIcon = icon('rotate-01');
 export const TrashIcon = icon('delete-02');

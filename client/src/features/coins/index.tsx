@@ -1,11 +1,9 @@
-import { createRoot } from 'react-dom/client';
 import { compactCoins, type BalanceEvent, type TipEvent } from '../../../../shared/coins';
 import { onSession } from '../../lib/session';
 import { getState, setPanel, toast, useStore, type RemotePlayer } from '../../state/store';
 import { CalendarCheckIcon, CoinsIcon, GiftIcon, WalletIcon } from '../../ui/icons';
 import { registerPanel } from '../../ui/panels';
 import { registerPersonAction } from '../../ui/personActions';
-import { Celebrations } from './Celebrations';
 import { addBurst, balanceChanged, loadWallet, resetWallet, useCoins } from './state';
 import { WalletPanel } from './WalletPanel';
 import './coins.css';
@@ -20,6 +18,7 @@ registerPanel({
   icon: WalletIcon,
   Component: WalletPanel,
   order: 35,
+  inMore: true,
   badgeTone: 'neutral',
   useBadge: () => {
     const balance = useCoins((s) => s.balance);
@@ -80,29 +79,11 @@ onSession('coins', (session) => {
     else resetWallet();
   });
 
-  // The celebrations sit over the 3D world, under the panels: inside the office view, once it's there.
-  const host = document.createElement('div');
-  const root = createRoot(host);
-  root.render(<Celebrations />);
-  let frame = 0;
-  const mount = () => {
-    const office = document.querySelector('.office');
-    if (office) office.append(host);
-    else frame = requestAnimationFrame(mount);
-  };
-  mount();
-
   return () => {
     socket.off('coins:balance', onBalance);
     socket.off('coins:tipped', onTipped);
     socket.off('coins:office', onOffice);
     offJoined();
-    cancelAnimationFrame(frame);
-    // Not while React may be rendering (leaving can start from inside an update).
-    setTimeout(() => {
-      root.unmount();
-      host.remove();
-    });
     resetWallet();
     useCoins.setState({ enabled: true });
   };

@@ -20,6 +20,8 @@ export interface PresenceEntry {
   helpers: Map<string, HelperReport>;
   share: boolean;
   others: boolean;
+  /** The person's own client has sent an update (not only a desktop helper). */
+  fromClient: boolean;
   /** Last change, for forgetting people who don't come back. */
   touched: number;
 }
@@ -40,10 +42,6 @@ export class PresenceMap {
     return this.entries.get(key);
   }
 
-  keys(): string[] {
-    return [...this.entries.keys()];
-  }
-
   get size(): number {
     return this.entries.size;
   }
@@ -52,7 +50,7 @@ export class PresenceMap {
     let e = this.entries.get(key);
     if (!e) {
       // The helper's app stays hidden until the person's client says sharing is on.
-      e = { manual: null, helpers: new Map(), share: false, others: true, touched: this.now() };
+      e = { manual: null, helpers: new Map(), share: false, others: true, fromClient: false, touched: this.now() };
       this.entries.set(key, e);
     }
     e.touched = this.now();
@@ -62,6 +60,7 @@ export class PresenceMap {
   /** Applies a (sanitized) update from the person's own client. */
   update(key: string, u: PresenceUpdate): void {
     const e = this.ensure(key);
+    e.fromClient = true;
     if (u.manual !== undefined) {
       const now = this.now();
       const until = u.manual?.until == null ? null : Math.min(u.manual.until, now + MANUAL_MAX_MS);

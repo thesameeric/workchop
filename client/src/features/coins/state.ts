@@ -33,7 +33,9 @@ const set = useCoins.setState;
 const get = useCoins.getState;
 
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(30_000) }).catch(() => {
+    throw new Error('Couldn’t reach the server');
+  });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
   return body;
