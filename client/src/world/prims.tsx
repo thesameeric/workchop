@@ -131,3 +131,20 @@ export function Ball({ rad = 1, s, ...props }: PrimProps & { rad?: number; s?: V
     />
   );
 }
+
+/** Any geometry, scaled by `s`. */
+export function Shape({ geometry, s = [1, 1, 1], ...props }: PrimProps & { geometry: THREE.BufferGeometry; s?: V3 }) {
+  const { material, opaque } = useMaterial(props);
+  const shadow = props.shadow !== false && opaque;
+  return (
+    <mesh
+      geometry={geometry}
+      material={material}
+      position={props.p}
+      rotation={props.r}
+      scale={s}
+      castShadow={shadow}
+      receiveShadow={opaque}
+    />
+  );
+}

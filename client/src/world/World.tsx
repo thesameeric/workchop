@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { local } from '../lib/positions';
 import { useStore } from '../state/store';
 import { BuildGrid, Floor, Lights, PerimeterWalls, useSceneColors, Zones } from './Environment';
+import { useWorldLayers } from './extensions';
 import { Ground } from './Ground';
 import { Items } from './Items';
 import { LocalPlayer, RemotePlayers } from './Players';
@@ -81,6 +82,19 @@ function Scene() {
       <RemotePlayers />
       <CameraRig />
       <Projector />
+      <WorldLayers />
+    </>
+  );
+}
+
+/** Scene content added by features (world/extensions.ts). */
+function WorldLayers() {
+  const layers = useWorldLayers();
+  return (
+    <>
+      {layers.map((l) => (
+        <l.Component key={l.id} />
+      ))}
     </>
   );
 }

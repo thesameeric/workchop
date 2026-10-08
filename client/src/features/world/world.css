@@ -1,0 +1,492 @@
+/* World micro-interactions: the card next to a clicked plant or desk, and the "My desk" panel.
+   Like the rest of the office HUD, the card is dark glass in both themes. */
+
+.world-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Over the video tiles and the hint; under the side panel and the dock. */
+  z-index: 26;
+  width: 320px;
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  padding: 12px 14px 12px;
+  border-radius: 16px;
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+  color: var(--glass-ink);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  will-change: transform;
+  animation: world-card-in 0.16s ease-out;
+}
+
+@keyframes world-card-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.wc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.wc-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: color-mix(in srgb, #3ddc84 22%, transparent);
+  color: #8ff0b7;
+}
+
+.desk-card .wc-icon {
+  background: var(--glass-raised);
+  color: var(--glass-ink);
+}
+
+.wc-avatar {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.wc-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.wc-title h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.wc-title p {
+  margin: 1px 0 0;
+  color: var(--glass-muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wc-head .icon-btn {
+  align-self: flex-start;
+  color: var(--glass-muted);
+}
+
+.wc-origin,
+.wc-air,
+.wc-text {
+  margin: 0 0 10px;
+  color: var(--glass-muted);
+}
+
+.wc-origin .hgi,
+.wc-air .hgi {
+  margin-right: 2px;
+}
+
+.wc-text {
+  color: var(--glass-ink);
+}
+
+.care-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.care {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--glass-soft);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.care-icon {
+  margin-top: 1px;
+}
+
+.care-icon.sun {
+  color: #ffd166;
+}
+
+.care-icon.water {
+  color: #6cc7ff;
+}
+
+.care-icon.humidity {
+  color: #9fd4ff;
+}
+
+.care-icon.gauge {
+  color: #c3b3ff;
+}
+
+.care-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--glass-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.meter {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.meter i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--glass-raised);
+}
+
+.meter i.on {
+  background: #ffd166;
+}
+
+.wc-pets,
+.wc-fact {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.wc-pets .hgi,
+.wc-fact .hgi {
+  margin-top: 2px;
+}
+
+.wc-pets.safe {
+  background: color-mix(in srgb, #3ddc84 16%, transparent);
+}
+
+.wc-pets.safe .hgi {
+  color: #7ee6a8;
+}
+
+.wc-pets.toxic {
+  background: color-mix(in srgb, #f5a524 16%, transparent);
+}
+
+.wc-pets.toxic .hgi {
+  color: #ffc46b;
+}
+
+.wc-fact {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.wc-fact .hgi {
+  color: #b9c1ff;
+}
+
+.wc-air {
+  font-size: 0.76rem;
+}
+
+.wc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wc-release {
+  display: block;
+  margin: 10px auto 0;
+  color: var(--glass-muted);
+  font-size: 0.78rem;
+}
+
+/* Leaving a note */
+.note-form textarea {
+  display: block;
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 4px 4px 12px 4px;
+  color: #23262f;
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  outline: none;
+  transition: background 0.15s;
+}
+
+.note-form textarea::placeholder {
+  color: rgba(35, 38, 47, 0.55);
+}
+
+.note-form textarea:focus-visible {
+  box-shadow: 0 0 0 2px var(--primary), 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.note-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.note-colors {
+  display: flex;
+  gap: 6px;
+}
+
+.note-color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.note-color.active {
+  border-color: #fff;
+}
+
+.note-color:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.note-count {
+  margin-left: auto;
+  color: var(--glass-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-count.near {
+  color: #ffc46b;
+}
+
+.office .form-error {
+  color: var(--glass-danger);
+}
+
+.my-notes {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-line);
+}
+
+.my-notes h4 {
+  margin: 0 0 6px;
+  color: var(--glass-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.my-notes ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.my-notes li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.note-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.my-note-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.my-notes .icon-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--glass-muted);
+}
+
+/* "My desk" panel */
+.desk-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--glass-line);
+}
+
+.desk-summary-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--glass-raised);
+}
+
+.desk-summary-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.desk-notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 0;
+  min-height: 40px;
+}
+
+.desk-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px 16px;
+}
+
+.desk-note {
+  position: relative;
+  padding: 12px 14px 8px;
+  border-radius: 4px 4px 14px 4px;
+  background: var(--note);
+  color: #23262f;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  transform: rotate(-0.6deg);
+}
+
+.desk-note:nth-child(even) {
+  transform: rotate(0.6deg);
+}
+
+.desk-note.unread::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  right: 14px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--glass-solid);
+}
+
+.desk-note-text {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.desk-note footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(35, 38, 47, 0.7);
+  font-size: 0.76rem;
+}
+
+.desk-note-by {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(35, 38, 47, 0.08);
+  color: #23262f;
+}
+
+.note-btn:hover {
+  background: rgba(35, 38, 47, 0.16);
+}
+
+.desk-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 12px;
+  color: var(--glass-muted);
+  text-align: center;
+}
+
+.desk-empty p {
+  margin: 0;
+  max-width: 240px;
+}
+
+.desk-release {
+  align-self: center;
+  margin: 0 0 16px;
+  color: var(--glass-muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  /* A sheet above the dock instead of a card next to the item. */
+  .world-card {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 76px;
+    width: auto;
+    max-height: 62vh;
+    transform: none !important;
+    visibility: visible !important;
+    z-index: 29;
+  }
+}

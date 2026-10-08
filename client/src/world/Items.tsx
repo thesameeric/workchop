@@ -8,6 +8,7 @@ import { itemFootprint } from '../../../shared/geometry';
 import type { OfficeItem } from '../../../shared/types';
 import { local } from '../lib/positions';
 import { canBuild, getState, setState, useStore } from '../state/store';
+import { getItemInteraction, useItemDecor } from './extensions';
 import { ItemModel } from './models';
 import { walkTo } from './movement';
 import { OpacityContext } from './prims';
@@ -35,6 +36,12 @@ function onItemPointerDown(e: ThreeEvent<PointerEvent>, item: OfficeItem) {
 
 function onItemClick(e: ThreeEvent<MouseEvent>, item: OfficeItem) {
   if (getState().mode !== 'play' || e.delta > 5) return;
+  const interaction = getItemInteraction(item.type);
+  if (interaction) {
+    e.stopPropagation();
+    interaction.onClick(item);
+    return;
+  }
   if (getEntry(item.type)?.music) {
     e.stopPropagation();
     setState({ panel: 'music', musicItemId: item.id, mode: 'play' });
@@ -94,19 +101,29 @@ export const ItemView = memo(function ItemView({
 }) {
   const building = useStore((s) => s.mode === 'build');
   const entry = getEntry(item.type);
-  const sittable = !!entry?.seats || !!entry?.music;
+  const interaction = getItemInteraction(item.type);
+  const decor = useItemDecor().filter((d) => d.types.includes(item.type));
+  const sittable = !!entry?.seats || !!entry?.music || !!interaction;
   const hoverable = interactive && (building || sittable);
+  const hover = (e: ThreeEvent<PointerEvent>, on: boolean) => {
+    setCursor(on ? (building ? 'grab' : 'pointer') : '');
+    if (building || !interaction?.onHover) return;
+    // Only the nearest item under the pointer counts as hovered (e.g. a plant on a desk).
+    e.stopPropagation();
+    interaction.onHover(item, on);
+  };
   return (
     <group
       position={[item.x, 0, item.z]}
       rotation={[0, (item.rot * Math.PI) / 2, 0]}
       onPointerDown={interactive && building ? (e) => onItemPointerDown(e, item) : undefined}
       onClick={interactive && !building && sittable ? (e) => onItemClick(e, item) : undefined}
-      onPointerOver={hoverable ? () => setCursor(building ? 'grab' : 'pointer') : undefined}
-      onPointerOut={hoverable ? () => setCursor('') : undefined}
+      onPointerOver={hoverable ? (e) => hover(e, true) : undefined}
+      onPointerOut={hoverable ? (e) => hover(e, false) : undefined}
     >
       <OpacityContext.Provider value={(faded ? 0.18 : 1) * opacity}>
-        <ItemModel type={item.type} color={item.color} itemId={item.id} data={item.data} />
+        <ItemModel type={item.type} color={item.color} itemId={item.id} data={item.data} item={item} />
+        {interactive && decor.map((d) => <d.Component key={d.id} item={item} />)}
       </OpacityContext.Provider>
       {interactive && building && <HitBox type={item.type} />}
       {selected && <SelectionBox item={item} />}

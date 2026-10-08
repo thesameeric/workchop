@@ -64,7 +64,8 @@ export interface OfficeItem {
   color?: string;
   /**
    * Item-specific settings, checked by the item type's `sanitizeData` (shared/catalog.ts). Narrow it
-   * by type: a jukebox's is JukeboxData (see isJukebox in shared/music.ts).
+   * by type: a jukebox's is JukeboxData (see isJukebox in shared/music.ts), a lamp's or light
+   * switch's LightData and a claimed desk's DeskData (shared/world.ts).
    */
   data?: ItemData;
 }

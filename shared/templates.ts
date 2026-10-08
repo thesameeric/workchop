@@ -46,7 +46,7 @@ function startup(id: string, name: string): Office {
   }
   specs.push(['chair', 2.5, 4, 1], ['chair', 7.5, 4, 3]);
   specs.push(['tv', 5, 0.25, 0], ['whiteboard', 0.25, 4, 1]);
-  specs.push(['plant', 9.5, 0.5], ['plant', 0.5, 7.5]);
+  specs.push(['plant', 9.5, 0.5], ['plant', 0.5, 7.5], ['bonsai', 5.25, 4.25], ['light-switch', 9.75, 7.25, 3]);
 
   // Open plan desk pods.
   const pod = (x: number, z: number, chairColor?: string) => {
@@ -60,19 +60,22 @@ function startup(id: string, name: string): Office {
   pod(28, 4);
   pod(15, 9, '#2a9d8f');
   pod(22, 9);
+  // A few things on the desks.
+  specs.push(['desk-lamp', 15.75, 4.25, 2], ['cactus', 24.75, 4.75], ['desk-lamp', 22.75, 9.75, 0, '#4cc9f0'], ['lavender', 28.75, 4.25]);
 
   // Back wall decor.
   specs.push(
-    ['bookshelf', 13, 0.25], ['bookshelf', 15, 0.25], ['plant', 17, 0.5], ['art', 19, 0.05, 0, '#ff924c'],
-    ['whiteboard', 22, 0.25], ['art', 25, 0.05, 0, '#4cc9f0'], ['tall-plant', 27, 0.5], ['bookshelf', 29, 0.25, 0, '#6d4c41'],
-    ['plant', 31, 0.5],
+    ['bookshelf', 13, 0.25], ['bookshelf', 15, 0.25], ['monstera', 17, 0.5], ['art', 19, 0.05, 0, '#ff924c'],
+    ['whiteboard', 22, 0.25], ['art', 25, 0.05, 0, '#4cc9f0'], ['fiddle-leaf', 27, 0.5], ['bookshelf', 29, 0.25, 0, '#6d4c41'],
+    ['snake-plant', 31, 0.5], ['pothos', 13.75, 0.25],
   );
-  specs.push(['printer', 31.4, 9, 3], ['water-cooler', 31.25, 11.25], ['tall-plant', 28.5, 9.5]);
+  specs.push(['printer', 31.4, 9, 3], ['water-cooler', 31.25, 11.25], ['rubber-plant', 28.5, 9.5]);
 
   // Lounge.
   specs.push(
     ['rug', 5.5, 16, 0, '#e76f51'], ['coffee-table', 5.5, 16], ['sofa', 5.5, 14, 0], ['sofa', 5.5, 18, 2, '#264653'],
-    ['armchair', 3, 16, 1, '#e9c46a'], ['armchair', 8, 16, 3, '#e9c46a'], ['floor-lamp', 2.25, 13.25], ['tall-plant', 9, 13],
+    ['armchair', 3, 16, 1, '#e9c46a'], ['armchair', 8, 16, 3, '#e9c46a'], ['floor-lamp', 2.25, 13.25], ['bird-of-paradise', 9, 13],
+    ['zz-plant', 1.5, 12.5], ['peace-lily', 6.25, 16.25], ['light-switch', 0.25, 18.75, 1], ['floor-lamp', 9.25, 17.75],
     ['bookshelf', 0.25, 16, 1], ['beanbag', 2, 21.5, 1, '#9b5de5'], ['beanbag', 3.5, 22, 0, '#ef476f'],
     ['arcade', 7, 23.5, 2], ['arcade', 8, 23.5, 2, '#4cc9f0'],
     ['jukebox', 9, 19, 3],

@@ -32,13 +32,13 @@ describe('items', () => {
     expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: { note: 'hi' } }, bounds)).not.toHaveProperty('data');
 
     // A feature gives its item type a sanitizer; undefined means "no data".
-    const desk = getEntry('desk')!;
-    desk.sanitizeData = (raw) => (raw && typeof (raw as { note?: unknown }).note === 'string' ? { note: (raw as { note: string }).note.slice(0, 5) } : undefined);
+    const sofa = getEntry('sofa')!;
+    sofa.sanitizeData = (raw) => (raw && typeof (raw as { note?: unknown }).note === 'string' ? { note: (raw as { note: string }).note.slice(0, 5) } : undefined);
     try {
-      expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: { note: 'hello world', x: 1 } }, bounds)?.data).toEqual({ note: 'hello' });
-      expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: 42 }, bounds)).not.toHaveProperty('data');
+      expect(sanitizeItem({ id: 'd', type: 'sofa', x: 5, z: 5, rot: 0, data: { note: 'hello world', x: 1 } }, bounds)?.data).toEqual({ note: 'hello' });
+      expect(sanitizeItem({ id: 'd', type: 'sofa', x: 5, z: 5, rot: 0, data: 42 }, bounds)).not.toHaveProperty('data');
     } finally {
-      delete desk.sanitizeData;
+      delete sofa.sanitizeData;
     }
   });
 });
