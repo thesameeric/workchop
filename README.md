@@ -24,6 +24,10 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Office settings: name, floor size, floor style and colour, wall colour, and spawn point. The owner can lock building to themselves.
 - Every edit is synced live to everyone in the office and saved on the server.
 
+**GitHub notifications**
+- People who sign in can connect their GitHub account (optional, needs a GitHub OAuth App, see [GitHub](#github)). The GitHub panel sorts their unread notifications into Mentions, Reviews, Actions and Activity, with a badge for unread mentions, review requests and failed runs. Click one to open it on GitHub. Marking items read or done in the panel does the same on GitHub.
+- A failed Actions run you started pops up as a message with a link to it.
+
 **Lounge music**
 - A **jukebox** (in the startup lounge, or add one from Build → Fun) plays music for everyone in the private area it stands in, or within about 7 m if it's out in the open. Click it, the 🎵 dock button, or the "now playing" chip to open it. Everyone has their own volume and mute.
 - **Radio:** two built-in stations, *Workchop Lo-fi* and *Workchop Ambient*, are composed live in each browser from the server clock, so everyone hears the same notes at the same moment, with nothing to license or stream. Editors can also add **the office's own tracks** (audio files, looped in sync for everyone) or **a live stream** (an https Icecast/Shoutcast URL). Anyone can switch stations.
@@ -115,6 +119,7 @@ Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose
 
 - **Where the data lives:** in the `db-data` Docker volume (offices, accounts and, unless you set up a bucket, uploaded files), and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
 - **Sign-in (optional):** see [Accounts and sign-in](#accounts-and-sign-in). Compose sets `PUBLIC_URL` to `https://<DOMAIN>`.
+- **GitHub notifications (optional):** set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` in `.env`, see [GitHub](#github).
 - **TURN (optional):** people behind strict corporate firewalls may need a relay for calls to connect. The simplest is [Cloudflare's TURN service](#cloudflare-turn-for-calls). To run your own instead, set `TURN_URL=turn:<DOMAIN>:3478`, `TURN_USERNAME` and `TURN_CREDENTIAL` in `.env`, open TCP/UDP 3478 and UDP 49160–49200, and start with `docker compose --profile turn up -d --build`.
 
 ### Hosting on Cloudflare
@@ -157,7 +162,7 @@ npx wrangler secret put DATABASE_URL        # e.g. postgresql://…neon.tech/neo
 npm run deploy                              # builds the app and the image, then deploys
 ```
 
-The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, `OPEN_METEO_API_KEY` (for the [weather](#weather) in commercial use), and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
+The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, `OPEN_METEO_API_KEY` (for the [weather](#weather) in commercial use), `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (for [GitHub](#github)), and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
 
 How it behaves:
 - **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running. [Desktop helpers](#current-app-and-the-desktop-helper) don't: their reports never start the container or keep it running.
@@ -186,6 +191,8 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | --- | --- |
 | Offices: layout, furniture, private areas, settings, owner key | The database: Postgres when `DATABASE_URL` is set, otherwise PGlite in `DATA_DIR/db` |
 | Accounts (people who signed in): name, email, character and settings, sign-in methods, sessions, which offices they belong to | The database. Sessions are stored as a SHA-256 of the cookie's token |
+| GitHub connections: the GitHub account's id and login, access and refresh tokens, their scopes and expiry | The database, with the tokens encrypted (AES-256-GCM, `TOKEN_ENCRYPTION_KEY`). Tokens never reach browsers. The notifications are kept in memory only, while their owner is in an office and for 10 minutes after they leave |
+| GitHub connections being made: who started them, the PKCE verifier, the page to go back to, a SHA-256 of the `state` | The database. Each can be used once, within 10 minutes; a clean-up every hour deletes unfinished ones |
 | Uploaded files | An S3/R2 bucket when `S3_*` is set, otherwise the database with Postgres, or `DATA_DIR/uploads` with PGlite (`UPLOADS_STORAGE` picks one) |
 | Names and characters of guests | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
@@ -227,6 +234,8 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | – | Turns on "Sign in with Google" (see [Accounts and sign-in](#accounts-and-sign-in)) |
 | `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | – | Turns on "Sign in with Apple": the Services ID, team ID, key ID and the `.p8` key (PEM, with `\n` for line breaks, or base64) |
 | `DEV_LOGIN` | – | `true` allows signing in with just a name and email, for development. Ignored by the built server (`npm start`, Docker) and when `NODE_ENV=production`, unless `DEV_LOGIN_IN_PRODUCTION=true` |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | – | Turns on [GitHub notifications](#github): the OAuth App's client ID and secret. GitHub also needs `TOKEN_ENCRYPTION_KEY`, `PUBLIC_URL` and a way to sign in |
+| `TOKEN_ENCRYPTION_KEY` | – | Encrypts the saved GitHub tokens: 32 random bytes in base64 (`openssl rand -base64 32`). Without a valid key, GitHub stays off and the log says why. Keep it: with a new key, everyone has to connect GitHub again |
 | `UPLOADS_STORAGE` | see above | Where uploaded files go: `s3`, `db` or `fs`. Each file remembers where it went, so switching keeps old files readable |
 | `UPLOAD_MAX_BYTES`, `UPLOADS_QUOTA_MB` | `10485760`, `1024` | Largest file, and the total each office may keep |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | –, `auto` | An S3-compatible bucket for uploads (Cloudflare R2: `https://<account id>.r2.cloudflarestorage.com`); path-style URLs |
@@ -264,6 +273,49 @@ Chat works out of the box; it keeps its messages in the database and attached fi
 Deleting a message deletes its files too. Set `CHAT_RETENTION_DAYS` to have messages deleted automatically, with their threads and files, once nobody has written in them (or in their thread) for that many days; files sent in live messages go after that long too. The server checks at most hourly, when someone comes in.
 
 A message's link (its "Copy link" action) opens the office at that message, for anyone who can see it.
+
+### GitHub
+
+People who sign in can connect their own GitHub account and follow their GitHub notifications without leaving the office. The GitHub panel (the GitHub button in the dock) shows what's unread in their GitHub inbox, in four tabs:
+
+- **Mentions:** you, or a team you're on, were @mentioned, or you were assigned.
+- **Reviews:** someone asked for your review. The tab also shows how many open pull requests are waiting for your review; that count stays until you've reviewed them, even once the notifications are read.
+- **Actions:** workflow runs you started (green: succeeded, red: failed, grey: cancelled or skipped), and deployments waiting for your approval (amber).
+- **Activity:** everything else, such as comments on issues and pull requests you opened or follow.
+
+The dock badge counts unread mentions, review requests and failed runs. Clicking an item opens it on GitHub and marks it read; *Mark read*, *Done* and *Mark all read* change your inbox on GitHub too (*Mark all read* leaves unread what arrived after the panel last checked). A new failed run also pops up as a message with an *Open* button. People connect and disconnect in *Settings > Integrations*; guests see "Sign in to connect GitHub". On a server without the settings below, or where nobody can sign in, GitHub doesn't appear at all.
+
+**Setting it up.** GitHub needs people to sign in, so set up [Google or Apple sign-in](#accounts-and-sign-in) (or `DEV_LOGIN` for development) and `PUBLIC_URL` first. Then:
+1. Create an **OAuth App** (not a GitHub App: GitHub's notifications API doesn't accept GitHub App tokens). Create it under your company's GitHub organization (*Organization settings > Developer settings > OAuth Apps > New OAuth App*), because apps an organization owns get access to its data automatically. A personal one (<https://github.com/settings/applications/new>) works too, but then each organization that restricts OAuth Apps has to approve it first (see below).
+2. Name it (people see the name when they connect) and use your Workchop address as the *Homepage URL*. Set the *Authorization callback URL* to `${PUBLIC_URL}/api/integrations/github/callback`, e.g. `https://office.example.com/api/integrations/github/callback`. It must match exactly. An app can have up to 10 callback URLs, so development (`http://localhost:5173/api/integrations/github/callback`) and production can share one app. Leave *Enable Device Flow* off.
+3. Keep *Expire user access tokens* on (the default). Access tokens then last 8 hours, and Workchop renews them with the refresh token GitHub gives it, which lasts 6 months without use.
+4. Generate a client secret and copy it right away (GitHub shows it only once).
+5. Generate the encryption key with `openssl rand -base64 32`.
+6. Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` (in `.env` for Compose, or with `npx wrangler secret put NAME` on Cloudflare Containers) and restart. If the key is missing or invalid, or `PUBLIC_URL` isn't set (in production), GitHub stays off and the server's log says why. A `PUBLIC_URL` that isn't an http(s) address stops the server from starting. One that differs from the address people use, or from the callback URL above, makes connecting fail at GitHub.
+
+Keep `TOKEN_ENCRYPTION_KEY` safe and don't change it. The saved tokens can only be read with it, so with a new key everyone has to connect GitHub again, and anyone who has both the key and the database can use the tokens.
+
+**Scopes.** Connecting asks GitHub only for the `notifications` scope: reading your notifications and marking them read or done. It gives no access to code. Links then go to the pull request, issue, Actions or repository page, worked out from the notification. *Include private repos & Actions* in *Settings > Integrations* connects again with the `repo` scope as well. Workchop then asks GitHub for the exact page (such as the latest comment) of up to 10 new notifications per poll; the others keep the link worked out from the notification. With `repo`, the review and assignment counts include private repositories too. **`repo` gives full read and write access to all your repositories**, public and private, because GitHub has no read-only alternative for OAuth Apps. Workchop only reads with it, but turn it on only if you're comfortable with that. Connecting again replaces the previous token and revokes it at GitHub (renewing it first if it has expired, so there's a live token to revoke).
+
+**What each person should turn on.** The panel shows what GitHub puts in your inbox at <https://github.com/notifications>, so:
+- In GitHub's [notification settings](https://github.com/settings/notifications), choose *On GitHub* for *Participating* and *Watching*, and under *System > Actions* choose *On GitHub* (optionally only for failed workflows). Without it, Actions runs, and maybe everything else, are missing. GitHub only notifies you about workflow runs you started.
+- **Organizations** restrict OAuth Apps by default: until an owner approves Workchop's app, nothing from that organization's private repositories comes through. Ask for approval at `https://github.com/settings/connections/applications/<client id>` (Workchop's settings link there). Apps the organization owns are approved automatically.
+- **SAML single sign-on:** for organizations that use it, you need an active SSO session with each of them when you connect, or their notifications are missing. Sign in to the organization on GitHub, then connect again.
+
+**Polling and rate limits.** The server asks GitHub for new notifications only for people who are in an office right now, and stops when they leave. It sends `If-Modified-Since`, so a "nothing new" answer doesn't count against GitHub's rate limit, and between polls it waits as long as GitHub's `X-Poll-Interval` asks, at least a minute. Each poll reads the newest 100 unread notifications at most (two pages of 50). Every 5 minutes, two searches count the open pull requests waiting for your review and the open issues and pull requests assigned to you (in public repositories only, unless `repo` is on). These requests use the person's own GitHub rate limit: 5,000 requests an hour, shared with every other app and token acting for them, and 30 searches a minute. Workchop uses a small part of it. When GitHub says to slow down (403 or 429), the server waits as long as GitHub asks (at most an hour); after other errors it waits longer each time, up to 15 minutes. Each person can start connecting at most 5 times in 10 minutes, because every connection makes a new token: GitHub asks people to authorize again after 10 new tokens in an hour, and keeps only 10 per app and scope, revoking the oldest.
+
+**What's stored.** The GitHub account's id and login, the access and refresh tokens, their scopes and expiry times, in the database. The tokens are encrypted with AES-256-GCM using `TOKEN_ENCRYPTION_KEY`, never sent to browsers and never logged; browsers only get the notifications. The notifications themselves are kept in memory only, while you're in an office and for 10 minutes after you leave (so a reload doesn't fetch them all again). A connection being made is stored with who started it, its PKCE verifier, the page to go back to and a SHA-256 of its `state`; it can be used once, within 10 minutes, and a clean-up every hour deletes unfinished ones. Connecting only starts from Workchop's own pages: when another site sends someone to it, it's refused. A GitHub account can be connected to one Workchop account at a time: connecting it from another one moves it there.
+
+**Disconnecting and expiry.** *Disconnect* deletes the saved connection, stops polling and revokes the token at GitHub. If the access token has expired, Workchop renews it first, so there's a live token to revoke. If GitHub can't be reached then, the connection is still deleted; revoke the app on GitHub to be sure. It revokes only this server's token, so other Workchop servers that share the OAuth App stay connected. To remove Workchop's access completely, revoke the app at <https://github.com/settings/applications>. Workchop renews access tokens itself, in the last 5 minutes before they expire. When GitHub stops accepting the saved tokens (revoked on GitHub, a refresh token unused for 6 months, or a changed `TOKEN_ENCRYPTION_KEY`), polling stops and Workchop asks you to reconnect.
+
+**Trying it locally.** A mock GitHub stands in for github.com and its API, with sample notifications in every tab:
+
+```bash
+npx tsx tests/helpers/github.ts               # on port 3999 (or PORT); prints the settings to use
+DEV_LOGIN=true <those settings> npm run dev   # in a second terminal
+```
+
+Sign in with the dev login, open an office and connect GitHub: the mock asks which test account to authorize. Add notifications at `http://localhost:3999/_mock`; they show up with the next poll, within about a minute. The mock keeps everything in memory, so connect again after restarting it. To try the real GitHub, add `http://localhost:5173/api/integrations/github/callback` to your OAuth App's callback URLs and start `DEV_LOGIN=true npm run dev` with its `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` and a `TOKEN_ENCRYPTION_KEY`.
 
 ### Music and Spotify
 
@@ -362,6 +414,7 @@ client/   React + react-three-fiber app (Vite)
     presence/  Current app: status picker, app chips, desk labels, desktop helper settings
     coins/     Wallet panel, tips and their celebrations
     weather/   Local weather: settings, top-bar chip, sky, light and weather effects
+    github/    GitHub panel, its settings and live notifications
 server/   Express + Socket.IO
   realtime.ts  Presence, movement, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   turn.ts      Short-lived Cloudflare TURN credentials
@@ -379,6 +432,7 @@ server/   Express + Socket.IO
   features/presence/  Current app from the status picker or the desktop helper (table api_tokens)
   features/coins/  Wallets, the coin ledger, daily and presence coins, tips (tables wallets, coin_*)
   features/weather/  Open-Meteo proxy with a cache per ~11 km cell, location from proxy headers
+  features/github/  Connecting GitHub (an OAuth App), encrypted tokens, the notifications poller
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers and passes on visitors'
@@ -395,6 +449,7 @@ helper/   The optional desktop helper for the current-app indicator (workchop-pr
 - **Chat is stored, except what's live.** Channel messages and direct messages between signed-in people are rows in `chat_messages`; the server checks every mention (a member of the office, a guest who is here, or `@here`) before saving and notifying anyone, keeps mentions for people who are away, and remembers how far each signed-in person has read. Nearby messages and direct messages with guests only pass through the server.
 - **Weather is each viewer's own.** Each browser asks the server for the weather at its own rounded location and draws the sky, light and weather itself; none of it is part of the office. The server only fetches and caches Open-Meteo's answers.
 - **Everything in the world is generated in code** (furniture, characters, floor textures), so there are no asset files to load.
+- **GitHub tokens stay on the server.** It polls GitHub for each connected person who is in an office and sends the changes to that person's sockets only. Browsers get notifications, never tokens.
 
 ## Development
 
@@ -421,6 +476,8 @@ Tests use an in-memory PGlite. They run against real Postgres instead when `TEST
 - Item types can keep their own data: give the catalog entry (`shared/catalog.ts`) a `sanitizeData(raw)`, and change the data through your feature's own socket events. Build edits never change it: a moved item keeps its data, a new or copied one starts from `sanitizeData(undefined)`.
 
 Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicons/`. The app ships only the glyphs it uses: to add one, put its name (from `icons.css`) in `client/src/ui/icon-names.json`, export a component for it in `client/src/ui/icons.tsx` and run `npm run icons`. That regenerates `client/src/ui/hugeicons.ts` and the cut-down font `client/src/assets/hgi-subset.woff2`, and needs fontTools (`pip install fonttools brotli`).
+
+`GITHUB_OAUTH_BASE` and `GITHUB_API_BASE` (by default `https://github.com` and `https://api.github.com`) point the [GitHub](#github) integration at another server. They're only for the tests and the mock GitHub (`npx tsx tests/helpers/github.ts`); don't set them anywhere else.
 
 ## Limits
 

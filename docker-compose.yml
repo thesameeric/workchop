@@ -31,6 +31,10 @@ services:
       APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
       APPLE_KEY_ID: ${APPLE_KEY_ID:-}
       APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      # GitHub notifications: the OAuth App, and the key that encrypts saved GitHub tokens.
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
       # Uploaded files go into Postgres unless an S3/R2 bucket is set up.
       UPLOADS_STORAGE: ${UPLOADS_STORAGE:-}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-}
