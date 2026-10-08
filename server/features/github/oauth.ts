@@ -1,6 +1,7 @@
 import { normalizeScopes, type Tokens } from './links';
 
-// GitHub's OAuth App endpoints (web flow with PKCE, refresh, revoke). Errors never include tokens.
+// GitHub's OAuth App endpoints (web flow with PKCE, refresh, revoke). Errors never include tokens, and
+// redirects aren't followed: they could carry the client secret or a token to another host.
 
 export const TIMEOUT_MS = 10_000;
 
@@ -47,6 +48,7 @@ export function createOAuth(config: OAuthConfig) {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Workchop' },
       body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...params }),
+      redirect: 'error',
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -90,6 +92,7 @@ export function createOAuth(config: OAuthConfig) {
     async user(accessToken: string): Promise<{ id: string; login: string }> {
       const res = await config.fetch(`${apiBase}/user`, {
         headers: apiHeaders(`Bearer ${accessToken}`),
+        redirect: 'error',
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       const body = (await res.json().catch(() => null)) as { id?: unknown; login?: unknown } | null;
@@ -106,6 +109,7 @@ export function createOAuth(config: OAuthConfig) {
         method: 'DELETE',
         headers: apiHeaders(basic, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ access_token: accessToken }),
+        redirect: 'error',
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       await drain(res);

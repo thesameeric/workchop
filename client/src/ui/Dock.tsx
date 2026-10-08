@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { appInfo } from '../../../shared/apps';
 import { REACTIONS } from '../../../shared/avatar';
@@ -153,17 +153,43 @@ function MeButton() {
   );
 }
 
+/** Something to look at (not a plain count like the people here). */
+function isAlert(panel: PanelDef, badge: number | string | null): badge is number | string {
+  return badge !== null && badge !== 0 && badge !== '' && panel.badgeTone !== 'neutral';
+}
+
+/** On narrow screens the dock scrolls sideways: a button that gets an alert out of sight scrolls into view. */
+function useAlertInView(ref: RefObject<HTMLElement | null>, alert: boolean): void {
+  useEffect(() => {
+    const dock = ref.current?.closest<HTMLElement>('.dock');
+    if (!alert || !ref.current || !dock) return;
+    const button = ref.current.getBoundingClientRect();
+    const visible = dock.getBoundingClientRect();
+    // With room for the badge, which sticks out past the corner.
+    const past = button.right + 8 - visible.right;
+    const before = button.left - 8 - visible.left;
+    if (past > 0) dock.scrollBy({ left: past, behavior: 'smooth' });
+    else if (before < 0) dock.scrollBy({ left: before, behavior: 'smooth' });
+  }, [ref, alert]);
+}
+
 function PanelButton({ panel, open }: { panel: PanelDef; open: boolean }) {
   const badge = panel.useBadge?.() ?? null;
+  const shown = badge !== null && badge !== 0 && badge !== '';
+  const ref = useRef<HTMLButtonElement>(null);
+  useAlertInView(ref, isAlert(panel, badge));
   const { icon: Icon } = panel;
   return (
     <button
+      ref={ref}
       className={`dock-btn${panel.hideOnMobile ? ' hide-mobile' : ''}${open ? ' on' : ''}`}
       onClick={() => setPanel(panel.id)}
       title={panel.shortcut ? `${panel.title} (${panel.shortcut})` : panel.title}
+      // Otherwise screen readers would name it by its badge alone ("3").
+      aria-label={shown ? `${panel.title}, ${badge}` : panel.title}
     >
       <Icon />
-      {badge !== null && badge !== 0 && badge !== '' && <span className={`badge-count${panel.badgeTone === 'neutral' ? ' neutral' : ''}`}>{badge}</span>}
+      {shown && <span className={`badge-count${panel.badgeTone === 'neutral' ? ' neutral' : ''}`}>{badge}</span>}
     </button>
   );
 }
@@ -182,9 +208,29 @@ function PanelItem({ panel, onPick }: { panel: PanelDef; onPick: () => void }) {
     >
       <Icon size={18} />
       {panel.title}
-      {badge !== null && badge !== 0 && badge !== '' && <span className="more-badge">{badge}</span>}
+      {badge !== null && badge !== 0 && badge !== '' && <span className={`more-badge${isAlert(panel, badge) ? ' alert' : ''}`}>{badge}</span>}
     </button>
   );
+}
+
+/** Reports a panel's alert badge to the More button (hooks can't run in a loop over a changing list). */
+function AlertProbe({ panel, report }: { panel: PanelDef; report: (title: string, badge: number | string | null) => void }) {
+  const badge = panel.useBadge?.() ?? null;
+  const alert = isAlert(panel, badge) ? badge : null;
+  useEffect(() => {
+    report(panel.title, alert);
+    return () => report(panel.title, null);
+  }, [panel.title, alert, report]);
+  return null;
+}
+
+/** The More button's badge for the alerts of the panels in its menu: one as it is, several added up. */
+function combineAlerts(badges: (number | string)[]): number | string | null {
+  if (badges.length <= 1) return badges[0] ?? null;
+  const counts = badges.map((b) => (typeof b === 'number' ? b : parseInt(b, 10)));
+  if (counts.some(Number.isNaN)) return '!';
+  const total = counts.reduce((a, b) => a + b, 0);
+  return total > 9 || badges.some((b) => typeof b === 'string') ? `${Math.min(total, 9)}+` : total;
 }
 
 /** On narrow screens: the dock's other buttons, in a menu above it ("Working in…" opens in its place). */
@@ -195,6 +241,19 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
   const focus = useStore((s) => s.focus);
   const screen = useMediaState().screen;
   const app = usePresence((s) => s.self?.app ?? null);
+  // Alerts in the menu (say, GitHub's) show on the button, so they aren't missed.
+  const [alerts, setAlerts] = useState<Record<string, number | string>>({});
+  const report = useCallback((title: string, badge: number | string | null) => {
+    setAlerts((all) => {
+      if (badge === null ? !(title in all) : all[title] === badge) return all;
+      const next = { ...all };
+      if (badge === null) delete next[title];
+      else next[title] = badge;
+      return next;
+    });
+  }, []);
+  const alert = combineAlerts(Object.values(alerts));
+  useAlertInView(buttonRef, alert !== null);
   const toggle = () => {
     const r = ref.current!.getBoundingClientRect();
     setAt({ right: Math.max(8, window.innerWidth - r.right), bottom: window.innerHeight - r.top + 12 });
@@ -212,8 +271,20 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
   };
   return (
     <div ref={ref}>
-      <button ref={buttonRef} className={`dock-btn${open ? ' on' : ''}`} onClick={toggle} title="More" aria-haspopup="menu" aria-expanded={open}>
+      {panels.map((p) => (
+        <AlertProbe key={panelKey(p)} panel={p} report={report} />
+      ))}
+      <button
+        ref={buttonRef}
+        className={`dock-btn${open ? ' on' : ''}`}
+        onClick={toggle}
+        title="More"
+        aria-label={alert !== null ? `More, ${Object.entries(alerts).map(([title, badge]) => `${title} ${badge}`).join(', ')}` : 'More'}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         <MoreIcon />
+        {alert !== null && <span className="badge-count">{alert}</span>}
       </button>
       {open &&
         createPortal(

@@ -127,9 +127,9 @@ async function connectGithub(jar: Jar, ghId: number, query?: string) {
 }
 
 /** A socket (with the jar's session) that has joined an office, recording every event from the start. */
-async function joinOffice(jar: Jar | null, officeId: string, name = 'Dev') {
+async function joinOffice(jar: Jar | null, officeId: string, name = 'Dev', at = base) {
   const cookie = jar?.header();
-  const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
+  const socket: Client = connect(at, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
   sockets.push(socket);
   const events: [string, ...unknown[]][] = [];
   socket.onAny((event: string, ...args: unknown[]) => events.push([event, ...args]));
@@ -144,15 +144,60 @@ async function joinOffice(jar: Jar | null, officeId: string, name = 'Dev') {
 
 const tokenOf = async (userId: string) => (await links().get(userId))?.accessToken ?? null;
 
+/** What a server's status route answers, to a guest or to a signed-in person. */
+async function offStatus(s: Server, signedIn: boolean) {
+  const jar = new Jar();
+  if (signedIn) await jar.fetch(`http://127.0.0.1:${s.port}/api/auth/dev`, json({ name: 'Off' }));
+  const res = await jar.fetch(`http://127.0.0.1:${s.port}/api/integrations/github/status`);
+  return [res.status, await res.json()];
+}
+
 describe('GitHub switched off', () => {
-  it('registers nothing without a client id and secret', async () => {
+  it('registers nothing but the status, which says so, without a client id and secret', async () => {
+    const warnings = vi.spyOn(console, 'warn');
     const off = await start({ clientId: null, clientSecret: null, tokenKey });
     extra.push(off);
     const at = `http://127.0.0.1:${off.port}/api/integrations/github`;
     const jar = new Jar();
     await jar.fetch(`http://127.0.0.1:${off.port}/api/auth/dev`, json({ name: 'Off' }));
-    for (const path of ['/status', '/connect?scope=basic', '/callback?code=x&state=y']) expect((await jar.fetch(`${at}${path}`)).status).toBe(404);
+    // Every page load asks: a 200, so browsers don't log an error.
+    expect(await offStatus(off, true)).toEqual([200, { available: false }]);
+    expect(await offStatus(off, false)).toEqual([200, { available: false }]);
+    for (const path of ['/connect?scope=basic', '/callback?code=x&state=y']) expect((await jar.fetch(`${at}${path}`)).status).toBe(404);
     expect((await jar.fetch(`${at}/disconnect`, { method: 'POST' })).status).toBe(404);
+    // Not set at all is how GitHub is switched off: nothing to warn about.
+    expect(warnings).not.toHaveBeenCalled();
+  });
+
+  it('warns when only one of the client id and secret is set', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = [await start({ ...configured(), clientSecret: null }), await start({ ...configured(), clientId: null })];
+    extra.push(...servers);
+    for (const s of servers) expect(await offStatus(s, true)).toEqual([200, { available: false }]);
+    expect(warnings.mock.calls.map((c) => String(c[0]))).toEqual([
+      '[github] GitHub needs both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET; it is off',
+      '[github] GitHub needs both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET; it is off',
+    ]);
+    expect(JSON.stringify(warnings.mock.calls)).not.toContain(mock.clientSecret);
+  });
+
+  it('says when it is on, unless quiet', async () => {
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const on = await startServer({
+      port: 0,
+      host: '127.0.0.1',
+      db,
+      iceServers: [],
+      publicUrl: 'http://localhost:5173',
+      features: [githubFeature(configured())],
+      auth: { google: null, apple: null, devLogin: true },
+    });
+    extra.push(on);
+    const said = logs.mock.calls.map((c) => String(c[0]));
+    expect(said).toContain('[github] GitHub notifications are on (callback http://localhost:5173/api/integrations/github/callback)');
+    logs.mockClear();
+    extra.push(await start(configured()));
+    expect(logs).not.toHaveBeenCalled();
   });
 
   it('stays off, saying why, without a valid TOKEN_ENCRYPTION_KEY or PUBLIC_URL', async () => {
@@ -166,11 +211,7 @@ describe('GitHub switched off', () => {
       await start(configured(), null),
     ];
     extra.push(...servers);
-    for (const s of servers) {
-      const jar = new Jar();
-      await jar.fetch(`http://127.0.0.1:${s.port}/api/auth/dev`, json({ name: 'Off' }));
-      expect((await jar.fetch(`http://127.0.0.1:${s.port}/api/integrations/github/status`)).status).toBe(404);
-    }
+    for (const s of servers) expect(await offStatus(s, true)).toEqual([200, { available: false }]);
     const logged = errors.mock.calls.map((c) => String(c[0]));
     expect(logged.filter((m) => m.includes('TOKEN_ENCRYPTION_KEY'))).toHaveLength(3);
     expect(logged.some((m) => m.includes('GITHUB_API_BASE'))).toBe(true);
@@ -180,12 +221,12 @@ describe('GitHub switched off', () => {
 });
 
 describe('connecting GitHub', () => {
-  it('answers the status only to signed-in people', async () => {
+  it('tells guests that GitHub is here, and signed-in people how they are connected', async () => {
     const guest = await fetch(`${base}/api/integrations/github/status`);
-    expect(guest.status).toBe(401);
-    expect(await guest.json()).toEqual({ error: expect.any(String) });
+    expect(guest.status).toBe(200);
+    expect(await guest.json()).toEqual({ available: true, guest: true });
     const { jar } = await person();
-    expect(await status(jar)).toEqual({ connected: false, private: false, needsReconnect: false, clientId: mock.clientId });
+    expect(await status(jar)).toEqual({ available: true, connected: false, private: false, needsReconnect: false, clientId: mock.clientId });
   });
 
   it('sends guests back to sign in, only ever to same-site paths', async () => {
@@ -236,6 +277,7 @@ describe('connecting GitHub', () => {
     const before = mock.requests.length;
     expect(await connectGithub(jar, ghId)).toBe('/github-callback.html?github=connected');
     expect(await status(jar)).toEqual({
+      available: true,
       connected: true,
       login,
       avatarUrl: `https://avatars.githubusercontent.com/u/${ghId}?v=4`,
@@ -383,7 +425,8 @@ describe('connecting GitHub', () => {
     for (let i = 0; i < 5; i++) await startConnect(jar);
     const res = await openConnect(jar, 'scope=basic&return=/here');
     expect(res.status).toBe(302);
-    expect(location(res)).toBe('/here?github=failed');
+    // Not "failed": trying again at once wouldn't help.
+    expect(location(res)).toBe('/here?github=busy');
   });
 });
 
@@ -555,5 +598,47 @@ describe('GitHub in the office', () => {
     expect(tab.github()[5]).toEqual(['github:status', expect.objectContaining({ connected: false })]);
     // Disconnected: no more polling.
     expect(timers.every((t) => t.cancelled)).toBe(true);
+  });
+});
+
+describe('closing the server', () => {
+  it('stops the cleanup and every poll', async () => {
+    const setInterval = vi.spyOn(globalThis, 'setInterval');
+    const clearInterval = vi.spyOn(globalThis, 'clearInterval');
+    const own: typeof timers = [];
+    const s = await start({
+      ...configured(),
+      schedule: (fn, ms) => {
+        const timer = { fn, ms, cancelled: false };
+        own.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    const at = `http://127.0.0.1:${s.port}`;
+    const hourly = setInterval.mock.calls.flatMap((c, i) => (c[1] === 3600_000 ? [setInterval.mock.results[i].value] : []));
+    expect(hourly.length).toBeGreaterThan(0);
+
+    // Someone polling (and so, after the server closes their socket, lingering).
+    const jar = new Jar();
+    const { user } = (await (await jar.fetch(`${at}/api/auth/dev`, json({ name: 'Closing' }))).json()) as { user: AccountUser };
+    const ghId = 9800;
+    mock.addUser(ghId, 'gh-closing');
+    const issued = mock.issue(ghId);
+    await links().link(user.id, { id: String(ghId), login: 'gh-closing' }, {
+      accessToken: issued.access_token,
+      refreshToken: issued.refresh_token ?? null,
+      accessExpiresAt: Date.now() + 3600_000,
+      refreshExpiresAt: null,
+      scopes: 'notifications',
+    });
+    const tab = await joinOffice(jar, (await createOffice(at)).id, 'Closing', at);
+    await until(() => tab.github().length > 0);
+    expect(own.some((t) => !t.cancelled)).toBe(true);
+
+    await s.close();
+    for (const handle of hourly) expect(clearInterval).toHaveBeenCalledWith(handle);
+    expect(own.filter((t) => !t.cancelled)).toEqual([]);
   });
 });

@@ -1727,6 +1727,11 @@ body:has(.emote-menu) .hint {
   font-weight: 700;
 }
 
+.more-badge.alert {
+  background: var(--danger);
+  color: #fff;
+}
+
 .dock-menu .more-menu button.danger {
   color: var(--glass-danger);
 }

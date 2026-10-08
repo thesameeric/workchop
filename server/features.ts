@@ -31,6 +31,10 @@ export interface ServerContext {
    * that is set (behind a proxy), otherwise the connection's.
    */
   clientIp(req: express.Request): string;
+  /** Leave out messages that only say things are working (tests). */
+  quiet: boolean;
+  /** Runs `fn` when the server closes, before the database does (to stop timers, say). */
+  onClose(fn: () => void | Promise<void>): void;
 }
 
 /**

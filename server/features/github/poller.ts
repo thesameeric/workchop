@@ -51,6 +51,8 @@ interface UserPoll {
   /** Seconds between polls (X-Poll-Interval, at least 60). */
   pollInterval: number;
   items: Map<string, GithubItem>;
+  /** GitHub has more unread threads than the pages read. */
+  more: boolean;
   counts: GithubCounts;
   countsDueAt: number;
   failures: number;
@@ -117,7 +119,12 @@ export function createPoller(deps: PollerDeps) {
   const { api, bases, now, schedule } = deps;
   const polls = new Map<string, UserPoll>();
 
-  const inboxOf = (p: UserPoll): GithubInbox => ({ items: [...p.items.values()], counts: { ...p.counts }, ...(p.problem && { problem: p.problem }) });
+  const inboxOf = (p: UserPoll): GithubInbox => ({
+    items: [...p.items.values()],
+    counts: { ...p.counts },
+    ...(p.more && { more: true }),
+    ...(p.problem && { problem: p.problem }),
+  });
 
   /** Applies the marks made here to an item from GitHub's list; false when it was marked done (and hasn't changed since). */
   function applyMarks(p: UserPoll, item: GithubItem): boolean {
@@ -227,7 +234,12 @@ export function createPoller(deps: PollerDeps) {
       next = nextPage(res.headers.get('link'), bases.apiBase);
     }
     if (p.stopped) return;
+    const more = next !== null;
+    const moreChanged = more !== p.more;
+    p.more = more;
     await apply(p, threads);
+    // Items and removals don't carry it: the whole inbox does.
+    if (moreChanged && p.loaded && !p.stopped) deps.emitToUser(p.userId, 'github:inbox', inboxOf(p));
     p.lastModified = first.headers.get('last-modified');
     const newest = Math.max(0, ...[...p.items.values()].map((item) => item.updatedAt));
     p.seenUntil = newest || Date.parse(p.lastModified ?? '') || Date.parse(first.headers.get('date') ?? '') || now();
@@ -279,9 +291,11 @@ export function createPoller(deps: PollerDeps) {
         return;
       }
       p.failures++;
-      if (err instanceof RateLimited) wait = err.until - now();
+      // Failures in a row double the wait, up to 15 minutes; a rate limit waits at least as long as it asks.
+      const backoff = Math.min(MAX_BACKOFF, p.pollInterval * 1000 * 2 ** Math.min(p.failures - 1, 4));
+      if (err instanceof RateLimited) wait = Math.max(err.until - now(), backoff);
       else {
-        wait = Math.min(MAX_BACKOFF, p.pollInterval * 1000 * 2 ** Math.min(p.failures - 1, 4));
+        wait = backoff;
         if (p.failures === 1) console.warn('[github] could not get notifications:', (err as Error).message);
       }
       // No list yet: the panel says why instead of waiting.
@@ -326,6 +340,7 @@ export function createPoller(deps: PollerDeps) {
         seenUntil: null,
         pollInterval: MIN_POLL_S,
         items: new Map(),
+        more: false,
         counts: { reviewRequests: null, assigned: null },
         countsDueAt: 0,
         failures: 0,
@@ -354,6 +369,11 @@ export function createPoller(deps: PollerDeps) {
 
     /** Stops polling and forgets the inbox (disconnected, or needs reconnecting). */
     stop: (userId: string) => stop(userId),
+
+    /** Stops polling for everyone, timers included (the server is closing). */
+    stopAll() {
+      for (const userId of [...polls.keys()]) stop(userId);
+    },
 
     /** The user's inbox once the first poll is done (or failed); null before that or when not polling. */
     inbox(userId: string): GithubInbox | null {

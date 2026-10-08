@@ -179,6 +179,18 @@
   text-decoration: underline;
 }
 
+.gh-foot {
+  margin: 10px 10px 0;
+  color: var(--glass-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.gh-foot a {
+  color: inherit;
+}
+
 .gh-list {
   margin: 0;
   padding: 0;

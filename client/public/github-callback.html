@@ -12,7 +12,7 @@
   <body>
     <p>Connecting GitHub…</p>
     <script>
-      // Hand the result (?github=connected, cancelled, failed or signin) back to the Workchop tab that
+      // Hand the result (?github=connected, cancelled, failed, signin or busy) back to the Workchop tab that
       // opened this window, then close.
       const result = new URLSearchParams(location.search).get('github');
       if (window.opener) {

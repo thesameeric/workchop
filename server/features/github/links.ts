@@ -36,7 +36,17 @@ export const migrations: Migration[] = [
       );
       CREATE INDEX github_oauth_tx_expires_idx ON github_oauth_tx (expires_at);`,
   },
+  {
+    id: 502,
+    name: 'github_links_refresh_lease',
+    sql: `
+      -- Until when a token refresh is under way (on any server sharing the database): the others wait for it.
+      ALTER TABLE github_links ADD COLUMN refresh_lease_until timestamptz;`,
+  },
 ];
+
+/** How long a refresh may keep its lease: GitHub answers (or times out) well within that. */
+const LEASE_SECONDS = 30;
 
 /** A user's GitHub connection, tokens decrypted. */
 export interface Link {
@@ -133,15 +143,36 @@ export class Links {
   }
 
   /**
-   * Runs `fn` holding this user's GitHub lock, which every server sharing the database respects:
-   * refresh tokens die when used, so only one refresh may run at a time. Do nothing slow inside on
-   * PGlite (it has a single connection).
+   * Runs `fn` holding this user's GitHub lock, which every server sharing the database respects. It
+   * holds a database connection: do nothing slow inside (like waiting for GitHub).
    */
   withLock<T>(userId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`github:${userId}`]);
       return fn(tx);
     });
+  }
+
+  /**
+   * Takes this user's refresh lease, which every server sharing the database respects (refresh tokens
+   * die when used, so only one refresh may run at a time) without holding a connection while GitHub
+   * answers: an id to release it with, null while another refresh has it, or 'gone' without a link.
+   */
+  async leaseRefresh(userId: string): Promise<string | null | 'gone'> {
+    const res = await this.db.query<{ lease: string }>(
+      `UPDATE github_links SET refresh_lease_until = now() + make_interval(secs => $2)
+       WHERE user_id = $1 AND (refresh_lease_until IS NULL OR refresh_lease_until <= now())
+       RETURNING refresh_lease_until::text AS lease`,
+      [userId, LEASE_SECONDS],
+    );
+    if (res.rows[0]) return res.rows[0].lease;
+    const linked = await this.db.query('SELECT 1 FROM github_links WHERE user_id = $1', [userId]);
+    return linked.rowCount ? null : 'gone';
+  }
+
+  /** Ends a lease from leaseRefresh (unless it ran out and another refresh has one now). */
+  async releaseRefresh(userId: string, lease: string): Promise<void> {
+    await this.db.query('UPDATE github_links SET refresh_lease_until = NULL WHERE user_id = $1 AND refresh_lease_until = $2::timestamptz', [userId, lease]);
   }
 
   /**

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type express from 'express';
 import type { AccountUser } from '../../../shared/account';
-import type { GithubStatus } from '../../../shared/github';
+import type { GithubStatus, GithubStatusAnswer } from '../../../shared/github';
 import { safeReturnPath } from '../../auth';
 import type { Feature } from '../../features';
 import { windowLimiter } from '../../limits';
@@ -16,7 +16,7 @@ import { createPoller, defaultSchedule, type Schedule } from './poller';
 // (/api/integrations/github/*), the poller, and the panel's socket events. Tokens stay on the server.
 
 export interface GithubOptions {
-  /** Default: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET; without both, GitHub is off (its routes answer 404). */
+  /** Default: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET; without both, GitHub is off (only its status route answers). */
   clientId?: string | null;
   clientSecret?: string | null;
   /** Encrypts stored tokens: base64 of 32 random bytes. Default: TOKEN_ENCRYPTION_KEY. */
@@ -58,7 +58,7 @@ function returnPath(raw: unknown): string {
 }
 
 /** `path` with ?github=<result>, which the client reads and removes. */
-function withResult(path: string, result: 'connected' | 'cancelled' | 'failed' | 'signin'): string {
+function withResult(path: string, result: 'connected' | 'cancelled' | 'failed' | 'signin' | 'busy'): string {
   const url = new URL(path, 'http://same.invalid');
   url.searchParams.set('github', result);
   return url.pathname + url.search + url.hash;
@@ -70,24 +70,38 @@ export function githubFeature(options: GithubOptions = {}): Feature {
     name: 'github',
     migrations,
     register(ctx) {
+      /** Every page asks: a server without GitHub says so (an error status would be logged in the browser). */
+      const off = () => {
+        ctx.app.get('/integrations/github/status', (_req, res) => {
+          res.set('Cache-Control', 'no-store');
+          res.json({ available: false } satisfies GithubStatusAnswer);
+        });
+      };
       const env = process.env;
       const setting = (option: string | null | undefined, name: string) => (option !== undefined ? option : env[name])?.trim() || null;
       const clientId = setting(options.clientId, 'GITHUB_CLIENT_ID');
       const clientSecret = setting(options.clientSecret, 'GITHUB_CLIENT_SECRET');
-      if (!clientId || !clientSecret) return;
+      if (!clientId || !clientSecret) {
+        if (clientId || clientSecret) console.warn('[github] GitHub needs both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET; it is off');
+        off();
+        return;
+      }
       const key = parseTokenKey(setting(options.tokenKey, 'TOKEN_ENCRYPTION_KEY'));
       if (!key) {
         console.error('[github] TOKEN_ENCRYPTION_KEY must be 32 random bytes in base64 (openssl rand -base64 32); GitHub is off');
+        off();
         return;
       }
       if (!ctx.publicOrigin) {
         console.warn('[github] GitHub needs PUBLIC_URL (the address people open Workchop at); it is off');
+        off();
         return;
       }
       const oauthBase = baseUrl(setting(options.oauthBase, 'GITHUB_OAUTH_BASE') ?? 'https://github.com');
       const apiBase = baseUrl(setting(options.apiBase, 'GITHUB_API_BASE') ?? 'https://api.github.com');
       if (!oauthBase || !apiBase) {
         console.error('[github] GITHUB_OAUTH_BASE and GITHUB_API_BASE must be http(s) addresses; GitHub is off');
+        off();
         return;
       }
       const now = options.now ?? Date.now;
@@ -166,9 +180,11 @@ export function githubFeature(options: GithubOptions = {}): Feature {
         if (ctx.realtime.playersOfUser(userId).length) poller.start(userId);
       };
 
-      ctx.app.get('/integrations/github/status', ctx.auth.requireUser, async (_req, res) => {
+      // Guests get an answer too: the app offers them to sign in for GitHub.
+      ctx.app.get('/integrations/github/status', async (req, res) => {
         res.set('Cache-Control', 'no-store');
-        res.json(await statusOf((res.locals.user as AccountUser).id));
+        const user = await ctx.auth.userFromRequest(req);
+        res.json((user ? { available: true, ...(await statusOf(user.id)) } : { available: true, guest: true }) satisfies GithubStatusAnswer);
       });
 
       // Each attempt mints a new token if it succeeds, and GitHub re-prompts and revokes tokens past
@@ -201,7 +217,7 @@ export function githubFeature(options: GithubOptions = {}): Feature {
           return;
         }
         if (!mayConnect(user.id)) {
-          res.redirect(withResult(returnTo, 'failed'));
+          res.redirect(withResult(returnTo, 'busy'));
           return;
         }
         const state = crypto.randomBytes(32).toString('base64url');
@@ -321,7 +337,13 @@ export function githubFeature(options: GithubOptions = {}): Feature {
       // Connections people started and never finished.
       const cleanup = () => links.cleanupTx().catch((err) => console.error('[github] cleanup failed:', (err as Error).message));
       void cleanup();
-      setInterval(cleanup, 3600_000).unref();
+      const cleaning = setInterval(cleanup, 3600_000);
+      cleaning.unref();
+      ctx.onClose(() => {
+        clearInterval(cleaning);
+        poller.stopAll();
+      });
+      if (!ctx.quiet) console.log(`[github] GitHub notifications are on (callback ${ctx.publicOrigin}/api/integrations/github/callback)`);
     },
   };
 }
