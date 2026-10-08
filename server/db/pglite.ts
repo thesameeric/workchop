@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,8 @@ const LOCK_FILE = '.workchop.lock';
 /** The lock file's mtime is refreshed this often, so servers on other hosts can tell it's in use. */
 const HEARTBEAT_MS = 10_000;
 const STALE_MS = 30_000;
+/** How long a new lock is left alone before checking that nobody replaced it (see `lock`). */
+const SETTLE_MS = 250;
 /** Lock files this process holds: a second open of the same directory must fail, not take over. */
 const lockedHere = new Set<string>();
 
@@ -140,15 +143,42 @@ function staleReason(holder: LockHolder): string | null {
 
 /** Takes the directory's lock file; resolves to a function that releases it. */
 async function lock(dir: string): Promise<() => Promise<void>> {
-  const file = path.join(dir, LOCK_FILE);
+  // The same folder can be reached by different paths (symlinks), and must still be opened only once.
+  const file = path.join(await fs.realpath(dir), LOCK_FILE);
   if (lockedHere.has(file)) throw new Error(`The database in ${dir} is already open in this process`);
+  // Claimed before looking at the lock file, which takes a file with our own pid for one left by a
+  // previous run (see staleReason): a second open from this process must never get that far.
+  lockedHere.add(file);
+  try {
+    await takeLock(dir, file);
+  } catch (err) {
+    lockedHere.delete(file);
+    throw err;
+  }
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    fs.utimes(file, now, now).catch(() => {});
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
+  return async () => {
+    clearInterval(heartbeat);
+    lockedHere.delete(file);
+    await fs.rm(file, { force: true });
+  };
+}
+
+async function takeLock(dir: string, file: string): Promise<void> {
   const started = Date.now();
   let waiting = false;
   for (;;) {
+    const mine = JSON.stringify({ pid: process.pid, hostname: os.hostname(), startedAt: new Date().toISOString(), nonce: crypto.randomUUID() });
     try {
-      const me = { pid: process.pid, hostname: os.hostname(), startedAt: new Date().toISOString() };
-      await fs.writeFile(file, JSON.stringify(me), { flag: 'wx' });
-      break;
+      await fs.writeFile(file, mine, { flag: 'wx' });
+      // Two servers that both found a stale lock may each remove it and write their own, one
+      // removing the other's. Whoever's lock was replaced starts over (and then finds the other).
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      if ((await fs.readFile(file, 'utf8').catch(() => '')) === mine) return;
+      continue;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
@@ -175,15 +205,4 @@ async function lock(dir: string): Promise<() => Promise<void>> {
         `directory. If no other server is running, delete ${file}.`,
     );
   }
-  lockedHere.add(file);
-  const heartbeat = setInterval(() => {
-    const now = new Date();
-    fs.utimes(file, now, now).catch(() => {});
-  }, HEARTBEAT_MS);
-  heartbeat.unref();
-  return async () => {
-    clearInterval(heartbeat);
-    lockedHere.delete(file);
-    await fs.rm(file, { force: true });
-  };
 }

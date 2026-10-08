@@ -1,8 +1,10 @@
+import crypto from 'node:crypto';
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
 import { EMOTES, sanitizeAvatar, sanitizeName, sanitizeStatus } from '../shared/avatar';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
+import { clip } from '../shared/text';
 import type {
   AnimState,
   ChatMessage,
@@ -32,6 +34,11 @@ export interface SocketData {
   user: SocketUser | null;
   /** SHA-256 of the session token, for disconnecting the session's sockets on logout. */
   sessionHash?: string;
+  /**
+   * A secret sent only to this socket (in its join answer) that it shows when uploading files.
+   * Socket ids can't serve for that: everyone in the office sees them.
+   */
+  uploadKey?: string;
 }
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
@@ -55,6 +62,10 @@ export interface SocketContext {
   limiter(rate: number, burst: number): () => boolean;
 }
 
+/**
+ * Handlers may be async; a handler that throws or rejects is logged and the others still run. Errors
+ * in your own `socket.on(…)` handlers are yours to catch: an async one that rejects stops the server.
+ */
 export interface RealtimeApi {
   /** Called for every new connection, after the core handlers are set up: add `socket.on(…)` handlers here. */
   onSocket(handler: (s: SocketContext) => void): void;
@@ -106,13 +117,16 @@ export function spawnSpot(office: Office, others: Iterable<PlayerState>): { x: n
   return findFreeSpot(spawn.x, spawn.z, colliders, office.settings);
 }
 
-/** Runs feature callbacks so that one failing doesn't break the others or the core. */
+/** Runs feature callbacks (async ones too) so that one failing doesn't break the others or the core. */
 function each<A extends unknown[]>(handlers: ((...args: A) => void)[], ...args: A) {
+  const failed = (err: unknown) => console.error('[realtime] a feature handler failed:', err);
   for (const handler of handlers) {
     try {
-      handler(...args);
+      // An async handler's promise (typed as void, as TypeScript allows).
+      const result = handler(...args) as unknown;
+      if (result instanceof Promise) result.catch(failed);
     } catch (err) {
-      console.error('[realtime] a feature handler failed:', err);
+      failed(err);
     }
   }
 }
@@ -174,6 +188,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     let room: Room | null = null;
     let isOwner = false;
     const user = socket.data.user ?? null;
+    socket.data.uploadKey = crypto.randomBytes(24).toString('base64url');
     if (user) void socket.join(socket.data.sessionHash ? [userRoom(user.id), sessionRoom(socket.data.sessionHash)] : [userRoom(user.id)]);
 
     const office = () => (room ? store.peek(room.officeId)?.office : undefined);
@@ -225,15 +240,22 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if (typeof ack !== 'function') return;
       if (!req || typeof req !== 'object') return ack({ ok: false, error: 'Bad request' });
       leave();
-      let stored;
-      try {
-        stored = await store.get(String(req.officeId));
-      } catch (err) {
-        console.error('[store] could not load office:', err);
-        return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
-      }
+      const officeId = String(req.officeId);
+      const load = async () => {
+        try {
+          return { stored: await store.get(officeId) };
+        } catch (err) {
+          console.error('[store] could not load office:', err);
+          return null;
+        }
+      };
+      const full = (id: string) => (rooms.get(id)?.players.size ?? 0) >= MAX_PLAYERS_PER_ROOM;
+      let loaded = await load();
+      if (!loaded) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+      let stored = loaded.stored;
       if (!stored) return ack({ ok: false, error: 'This office does not exist.' });
       const id = stored.office.id;
+      if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       const keyOwner = typeof req.ownerKey === 'string' && req.ownerKey === stored.ownerKey;
       // Signed-in people become members (owners with the owner key); being signed in is never required.
       let role: 'owner' | 'member' | null = null;
@@ -244,13 +266,22 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
           console.error('[accounts] could not record a visit:', err);
         }
       }
+      // While we waited, the office's last visitor may have left and the office been dropped from
+      // memory: then load it again, or edits would go to a copy nobody saves.
+      while (store.peek(id) !== stored) {
+        if (socket.disconnected) return;
+        loaded = await load();
+        if (!loaded?.stored) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+        stored = loaded.stored;
+      }
       if (socket.disconnected) return;
+      // Checked before recording the visit too; this catches people who arrived in the meantime.
+      if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
       if (!r) {
         r = new Room(id);
         rooms.set(id, r);
       }
-      if (r.players.size >= MAX_PLAYERS_PER_ROOM) return ack({ ok: false, error: 'This office is full.' });
 
       isOwner = keyOwner || role === 'owner';
       const spot = spawnSpot(stored.office, r.players.values());
@@ -279,6 +310,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
         chat: r.chat.filter((m) => m.scope === 'all'),
         isOwner,
         spotify: [...r.spotify.values()],
+        uploadKey: socket.data.uploadKey!,
       });
       socket.to(roomName(id)).emit('player:joined', player);
       emitLinks(r.recompute(stored.office.zones, [socket.id]));
@@ -312,7 +344,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     socket.on('chat', (text, scope, to) => {
       const p = me();
       if (!p || !room || typeof text !== 'string' || !canChat()) return;
-      const body = text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 1000);
+      const body = clip(text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim(), 1000);
       if (!body) return;
       const msg: ChatMessage = { id: randomId(12), from: p.id, name: p.name, text: body, scope: 'all', ts: Date.now() };
       if (scope === 'nearby') {

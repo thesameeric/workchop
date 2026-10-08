@@ -1,4 +1,5 @@
 import { sanitizeAvatar, sanitizeName, sanitizeStatus } from './avatar';
+import { clip } from './text';
 import type { AvatarConfig, Status } from './types';
 
 // Accounts: people who signed in (Google, Apple, or the dev login). Guests have none.
@@ -49,7 +50,7 @@ export function sanitizeProfile(raw: unknown): UserProfile {
     for (const [key, value] of Object.entries(r.settings).slice(0, MAX_SETTINGS)) {
       if (!SETTING_KEY.test(key)) continue;
       if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) settings[key] = value;
-      else if (typeof value === 'string') settings[key] = value.slice(0, 200);
+      else if (typeof value === 'string') settings[key] = clip(value.replace(/\u0000/g, ''), 200);
     }
     out.settings = settings;
   }

@@ -61,9 +61,10 @@ export class Sessions {
     await this.db.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
   }
 
-  /** Drop expired sessions and abandoned sign-ins. */
-  async cleanup(): Promise<void> {
-    await this.db.query('DELETE FROM sessions WHERE expires_at < now()');
+  /** Drops expired sessions and abandoned sign-ins; returns the hashes of the sessions dropped. */
+  async cleanup(): Promise<string[]> {
+    const expired = await this.db.query<{ token_hash: string }>('DELETE FROM sessions WHERE expires_at <= now() RETURNING token_hash');
     await this.db.query('DELETE FROM auth_tx WHERE expires_at < now()');
+    return expired.rows.map((r) => r.token_hash);
   }
 }

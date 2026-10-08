@@ -6,7 +6,9 @@ import { pipeline } from 'node:stream/promises';
 import { AwsClient } from 'aws4fetch';
 import express from 'express';
 import { isValidId } from '../shared/office';
+import { clip } from '../shared/text';
 import type { Db, Tx } from './db';
+import { windowLimiter } from './limits';
 
 export type UploadStorage = 'db' | 'fs' | 's3';
 
@@ -136,7 +138,8 @@ class S3BlobStore implements BlobStore {
   private readonly client: AwsClient;
 
   constructor(private readonly opts: S3Options) {
-    this.client = new AwsClient({ accessKeyId: opts.accessKeyId, secretAccessKey: opts.secretAccessKey, service: 's3', region: opts.region });
+    // aws4fetch retries 5xx answers 10 times by default, which keeps a download waiting for half a minute.
+    this.client = new AwsClient({ accessKeyId: opts.accessKeyId, secretAccessKey: opts.secretAccessKey, service: 's3', region: opts.region, retries: 2 });
     this.description = `the S3 bucket ${opts.bucket}`;
   }
 
@@ -175,10 +178,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const INLINE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const CONTENT_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
 
+/** Control characters, and the bidi controls that can make "fdp.exe" read as "exe.pdf". */
+const UNSAFE_IN_NAMES = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
 export function sanitizeFilename(v: unknown): string {
   if (typeof v !== 'string') return 'file';
   const base = v.split(/[/\\]/).pop() ?? '';
-  const clean = base.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  const clean = clip(base.replace(UNSAFE_IN_NAMES, '').replace(/\s+/g, ' ').trim(), 200).trim();
   return clean && clean !== '.' && clean !== '..' ? clean : 'file';
 }
 
@@ -213,9 +219,18 @@ class UploadError extends Error {
 export interface UploadDeps {
   db: Db;
   options: UploadOptions;
-  /** The person behind this socket if it is connected and in that office. */
-  uploaderOf(socketId: string, officeId: string): Uploader | null;
+  /** The person behind this socket if it is connected and in that office, and `uploadKey` is its key. */
+  uploaderOf(socketId: string, uploadKey: string, officeId: string): Uploader | null;
+  /** The visitor's address, to share the server's capacity fairly. */
+  clientIp(req: express.Request): string;
 }
+
+/** Uploads one visitor (address) may have in progress at once, and start per PER_VISITOR_WINDOW. */
+const PER_VISITOR_AT_ONCE = 3;
+const PER_VISITOR_FILES = 60;
+const PER_VISITOR_WINDOW = 10 * 60 * 1000;
+/** Bodies are kept in memory until stored: at most this many of the largest files at once, server-wide. */
+const BUFFERED_FILES = 4;
 
 export type Uploads = ReturnType<typeof createUploads>;
 
@@ -233,6 +248,10 @@ export function createUploads(deps: UploadDeps) {
   if (!store) throw new Error(S3_MISSING);
   const parseBody = express.raw({ type: () => true, limit: options.maxBytes });
   const maxMb = Math.round((options.maxBytes / MB) * 10) / 10;
+  const quotaFull = () => new UploadError(413, `This office has used up its ${Math.round(options.quotaBytes / MB)} MB of file storage.`);
+  const mayStart = windowLimiter(PER_VISITOR_FILES, PER_VISITOR_WINDOW);
+  const inProgress = new Map<string, number>();
+  let buffered = 0;
 
   const readBody = (req: express.Request, res: express.Response) =>
     new Promise<Buffer>((resolve, reject) => {
@@ -244,16 +263,53 @@ export function createUploads(deps: UploadDeps) {
       });
     });
 
-  /** POST /api/offices/:id/uploads: the raw file as the body, its name in X-Filename (URL-encoded). */
+  /** Bytes the office's files take up. */
+  const usedBy = async (q: Tx, officeId: string) =>
+    Number((await q.query<{ used: string }>('SELECT COALESCE(SUM(byte_size), 0)::bigint AS used FROM uploads WHERE office_id = $1', [officeId])).rows[0].used);
+
+  /**
+   * POST /api/offices/:id/uploads: the raw file as the body, its name in X-Filename (URL-encoded),
+   * from someone in the office: X-Workchop-Socket is their socket id, X-Workchop-Upload-Key the key
+   * their join answer gave them. Busy answers (429, 503) come with Retry-After.
+   */
   const upload: express.RequestHandler = async (req, res) => {
     res.set('Cache-Control', 'no-store');
+    let release = () => {};
     try {
       const officeId = String(req.params.id);
       const socketId = req.get('x-workchop-socket');
-      const who = socketId && isValidId(officeId) ? deps.uploaderOf(socketId, officeId) : null;
+      const uploadKey = req.get('x-workchop-upload-key');
+      const who = socketId && uploadKey && isValidId(officeId) ? deps.uploaderOf(socketId, uploadKey, officeId) : null;
       if (!who) throw new UploadError(403, 'Join the office before uploading files.');
       // Refuse big files before reading them.
-      if (Number(req.get('content-length')) > options.maxBytes) throw new UploadError(413, `Files can be at most ${maxMb} MB.`);
+      const declared = Number(req.get('content-length'));
+      if (declared > options.maxBytes) throw new UploadError(413, `Files can be at most ${maxMb} MB.`);
+      const ip = deps.clientIp(req);
+      // Without a Content-Length (a chunked body), the file may be as big as allowed.
+      const known = Number.isSafeInteger(declared) && declared >= 0;
+      const reserved = known ? declared : options.maxBytes;
+      if ((inProgress.get(ip) ?? 0) >= PER_VISITOR_AT_ONCE) {
+        res.set('Retry-After', '5');
+        throw new UploadError(429, 'Too many uploads at once. Please wait for the others to finish.');
+      }
+      if (buffered + reserved > BUFFERED_FILES * options.maxBytes) {
+        res.set('Retry-After', '5');
+        throw new UploadError(503, 'The server is busy with other uploads. Please try again in a moment.');
+      }
+      if (!mayStart(ip)) {
+        res.set('Retry-After', '60');
+        throw new UploadError(429, 'Too many uploads. Please try again in a few minutes.');
+      }
+      inProgress.set(ip, (inProgress.get(ip) ?? 0) + 1);
+      buffered += reserved;
+      release = () => {
+        buffered -= reserved;
+        const n = (inProgress.get(ip) ?? 1) - 1;
+        if (n > 0) inProgress.set(ip, n);
+        else inProgress.delete(ip);
+      };
+      // A full office is told so before it sends the file (checked again, exactly, when saving).
+      if ((await usedBy(db, officeId)) + (known ? declared : 1) > options.quotaBytes) throw quotaFull();
       const data = await readBody(req, res);
       if (!data.length) throw new UploadError(400, 'The file is empty.');
       let name = 'file';
@@ -267,6 +323,8 @@ export function createUploads(deps: UploadDeps) {
       const id = crypto.randomUUID();
       const key = store.kind === 'db' ? id : `${officeId}/${id}`;
       const sha256 = crypto.createHash('sha256').update(data).digest('hex');
+      // Built before saving: nothing may fail once the file is stored.
+      const file: UploadedFile = { id, url: `/api/uploads/${id}/${encodeURIComponent(name)}`, name, contentType, size: data.length };
 
       // Bytes stored elsewhere go first, so a row never points at a missing file.
       if (store.kind !== 'db') await store.put(key, data, contentType, db);
@@ -274,10 +332,7 @@ export function createUploads(deps: UploadDeps) {
         await db.transaction(async (tx) => {
           // One upload per office at a time, so two can't both slip under the quota.
           await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`uploads:${officeId}`]);
-          const used = await tx.query<{ used: string }>('SELECT COALESCE(SUM(byte_size), 0)::bigint AS used FROM uploads WHERE office_id = $1', [officeId]);
-          if (Number(used.rows[0].used) + data.length > options.quotaBytes) {
-            throw new UploadError(413, `This office has used up its ${Math.round(options.quotaBytes / MB)} MB of file storage.`);
-          }
+          if ((await usedBy(tx, officeId)) + data.length > options.quotaBytes) throw quotaFull();
           await tx.query(
             `INSERT INTO uploads (id, office_id, uploader_user_id, uploader_name, filename, content_type, byte_size, sha256, storage, storage_key)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -289,7 +344,6 @@ export function createUploads(deps: UploadDeps) {
         if (store.kind !== 'db') await store.delete(key).catch(() => {});
         throw err;
       }
-      const file: UploadedFile = { id, url: `/api/uploads/${id}/${encodeURIComponent(name)}`, name, contentType, size: data.length };
       res.status(201).json(file);
     } catch (err) {
       if (!(err instanceof UploadError)) {
@@ -300,6 +354,8 @@ export function createUploads(deps: UploadDeps) {
       // The rest of a refused body isn't read, so don't reuse the connection.
       if (!req.complete) res.set('Connection', 'close');
       res.status(err.status).json({ error: err.message });
+    } finally {
+      release();
     }
   };
 
@@ -325,25 +381,37 @@ export function createUploads(deps: UploadDeps) {
       return;
     }
     const etag = `"${row.sha256}"`;
+    // Files never change under the same id.
+    const cacheForever = () => {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('ETag', etag);
+    };
+    if (req.get('if-none-match') === etag) {
+      cacheForever();
+      res.status(304).end();
+      return;
+    }
+    // Only a file actually sent may be cached: a failure must not stick in browsers for a year.
+    res.setHeader('Cache-Control', 'no-store');
+    let data: Buffer | Readable | null;
+    try {
+      data = await from.get(row.storage_key);
+    } catch (err) {
+      console.error(`[uploads] could not read upload ${id} from ${from.description}:`, (err as Error).message);
+      res.status(503).json({ error: 'This file is unavailable right now. Please try again.' });
+      return;
+    }
+    if (!data) {
+      console.error(`[uploads] the bytes of upload ${id} are missing from ${from.description}`);
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+    cacheForever();
     // setHeader, not res.set: Express would add a charset the file may not have.
     res.setHeader('Content-Type', row.content_type);
     res.setHeader('Content-Disposition', contentDisposition(INLINE_TYPES.has(row.content_type) ? 'inline' : 'attachment', row.filename));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
-    // Files never change under the same id.
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader('ETag', etag);
-    if (req.get('if-none-match') === etag) {
-      res.status(304).end();
-      return;
-    }
-    const data = await from.get(row.storage_key);
-    if (!data) {
-      console.error(`[uploads] the bytes of upload ${id} are missing from ${from.description}`);
-      res.removeHeader('Cache-Control');
-      res.status(404).json({ error: 'File not found' });
-      return;
-    }
     res.setHeader('Content-Length', row.byte_size);
     if (Buffer.isBuffer(data)) res.end(data);
     else {

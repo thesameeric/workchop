@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createFromTemplate } from '../shared/templates';
+import { jsonb } from '../server/db';
 import { importLegacyOffices } from '../server/db/legacy';
 import { collectMigrations, coreMigrations, migrate, type Migration } from '../server/db/migrations';
 import { openPGlite } from '../server/db/pglite';
@@ -132,6 +133,31 @@ describe('importing office JSON files from earlier versions', () => {
     log.mockRestore();
     warn.mockRestore();
   });
+
+  it('imports offices with text Postgres refuses in JSON, cleaned up', async () => {
+    const db = await createTestDb();
+    await resetTestDb(db);
+    const dataDir = tempDir();
+    // Earlier versions cut names at 48 UTF-16 units, which can leave half an emoji; JSON files kept it.
+    const office = createFromTemplate('blank', 'halfemoji1', 'x');
+    office.settings.name = 'a'.repeat(47) + '\ud83d';
+    writeFileSync(path.join(dataDir, 'halfemoji1.json'), JSON.stringify({ office: { ...office, notes: 'nul \u0000 here' }, ownerKey: 'k' }));
+    writeOffice(dataDir, 'fine1', 'Fine');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect((await importLegacyOffices(db, dataDir)).sort()).toEqual([`fine1 (Fine)`, `halfemoji1 (${'a'.repeat(47)})`]);
+    log.mockRestore();
+    const { rows } = await db.query<{ name: string }>("SELECT data->'settings'->>'name' AS name FROM offices WHERE id = 'halfemoji1'");
+    expect(rows[0].name).toBe('a'.repeat(47));
+  });
+});
+
+describe('jsonb()', () => {
+  it('drops what Postgres refuses in jsonb and keeps the rest', async () => {
+    const db = await createTestDb();
+    const value = { name: 'cut \ud83d', ok: '😀 fine', nul: 'a\u0000b', list: ['\udc00x', 1, null], ['key\ud800']: true };
+    const res = await db.query<{ v: unknown }>('SELECT $1::jsonb AS v', [jsonb(value)]);
+    expect(res.rows[0].v).toEqual({ name: 'cut ', ok: '😀 fine', nul: 'ab', list: ['x', 1, null], key: true });
+  });
 });
 
 describe('PGlite data directory lock', () => {
@@ -139,6 +165,10 @@ describe('PGlite data directory lock', () => {
     const dir = path.join(tempDir(), 'db');
     const db = await openPGlite(dir);
     await expect(openPGlite(dir)).rejects.toThrow(/already open in this process/);
+    // Also by another path to the same folder.
+    const link = path.join(tempDir(), 'link');
+    symlinkSync(dir, link);
+    await expect(openPGlite(link)).rejects.toThrow(/already open in this process/);
     await db.close();
     expect(existsSync(path.join(dir, '.workchop.lock'))).toBe(false);
 

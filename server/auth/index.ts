@@ -3,6 +3,7 @@ import { parseCookie, stringifySetCookie } from 'cookie';
 import express from 'express';
 import * as client from 'openid-client';
 import { sanitizeProfile, sanitizeUserName, type AccountUser } from '../../shared/account';
+import { clip } from '../../shared/text';
 import type { Accounts } from '../accounts';
 import type { Db } from '../db';
 import type { ClientSocket } from '../realtime';
@@ -16,7 +17,8 @@ export interface AuthOptions {
   devLogin: boolean;
 }
 
-export function authOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOptions {
+/** `production`: the built server, which may run without NODE_ENV (e.g. `npm start`). */
+export function authOptionsFromEnv(env: NodeJS.ProcessEnv = process.env, production = env.NODE_ENV === 'production'): AuthOptions {
   const google = env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
     ? { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, issuer: env.GOOGLE_ISSUER || GOOGLE_ISSUER }
     : null;
@@ -31,7 +33,7 @@ export function authOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthOp
     };
   }
   let devLogin = env.DEV_LOGIN === 'true';
-  if (devLogin && env.NODE_ENV === 'production' && env.DEV_LOGIN_IN_PRODUCTION !== 'true') {
+  if (devLogin && production && env.DEV_LOGIN_IN_PRODUCTION !== 'true') {
     console.warn('[auth] DEV_LOGIN is ignored in production (anyone could sign in as anyone)');
     devLogin = false;
   }
@@ -43,7 +45,9 @@ export function safeReturnPath(v: unknown): string {
   if (typeof v !== 'string' || !v.startsWith('/') || v.startsWith('//') || v.startsWith('/\\') || v.length > 1000) return '/';
   try {
     const url = new URL(v, 'http://same.invalid');
-    return url.origin === 'http://same.invalid' ? url.pathname + url.search + url.hash : '/';
+    const out = url.pathname + url.search + url.hash;
+    // Dot segments can turn into a protocol-relative "//other.site" only once resolved.
+    return url.origin === 'http://same.invalid' && !out.startsWith('//') ? out : '/';
   } catch {
     return '/';
   }
@@ -278,7 +282,7 @@ export function createAuth(deps: AuthDeps) {
       return;
     }
     const name = sanitizeUserName(req.body?.name);
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 254) : '';
+    const email = typeof req.body?.email === 'string' ? clip(req.body.email.replace(/[\u0000-\u001f\u007f]/g, '').trim().toLowerCase(), 254) : '';
     if (!name && !email) {
       res.status(400).json({ error: 'Enter a name or an email address.' });
       return;
@@ -302,7 +306,8 @@ export function createAuth(deps: AuthDeps) {
       await sessions.delete(session.tokenHash);
       deps.onLogout?.(session.tokenHash);
     }
-    setSession(res, null);
+    // Only a request that carries the cookie clears it: other sites can post here, without it.
+    if (cookiesOf(req.headers.cookie)[sessionCookie] !== undefined) setSession(res, null);
     res.json({ ok: true });
   });
 
@@ -345,10 +350,15 @@ export function createAuth(deps: AuthDeps) {
     next();
   };
 
-  // Expired sessions and abandoned sign-ins pile up otherwise.
-  const cleanup = () => sessions.cleanup().catch((err) => console.error('[auth] cleanup failed:', (err as Error).message));
+  // Expired sessions and abandoned sign-ins pile up otherwise; sockets still open on an expired
+  // session are signed out with it.
+  const cleanup = () =>
+    sessions
+      .cleanup()
+      .then((expired) => expired.forEach((hash) => deps.onLogout?.(hash)))
+      .catch((err) => console.error('[auth] cleanup failed:', (err as Error).message));
   let cleaning = cleanup();
-  const cleanupTimer = setInterval(() => (cleaning = cleanup()), 6 * 3600 * 1000);
+  const cleanupTimer = setInterval(() => (cleaning = cleanup()), 3600 * 1000);
   cleanupTimer.unref();
 
   return {

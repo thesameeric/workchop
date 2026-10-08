@@ -1,5 +1,5 @@
 import type { Office } from '../shared/types';
-import type { Db } from './db';
+import { jsonb, type Db } from './db';
 
 export interface StoredOffice {
   office: Office;
@@ -51,7 +51,7 @@ export class SqlOfficeRepo implements OfficeRepo {
     await this.db.query(
       `INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, owner_key = EXCLUDED.owner_key, updated_at = now()`,
-      [stored.office.id, stored.ownerKey, JSON.stringify(stored.office)],
+      [stored.office.id, stored.ownerKey, jsonb(stored.office)],
     );
   }
 

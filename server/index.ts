@@ -1,4 +1,5 @@
 import express from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -15,6 +16,7 @@ import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
 import { registerFeatures, type Feature, type ServerContext } from './features';
 import { features as defaultFeatures } from './features/index';
+import { windowLimiter } from './limits';
 import { OfficeStore } from './officeStore';
 import { attachRealtime, sessionRoom, type IO } from './realtime';
 import { SqlOfficeRepo } from './repos';
@@ -58,27 +60,6 @@ export interface ServerOptions {
   quiet?: boolean;
 }
 
-/** Allows `limit` events per key within a sliding window; forgets keys that went quiet. */
-function windowLimiter(limit: number, windowMs: number) {
-  const hits = new Map<string, number[]>();
-  let lastSweep = Date.now();
-  return (key: string): boolean => {
-    const now = Date.now();
-    if (now - lastSweep > windowMs) {
-      lastSweep = now;
-      for (const [k, times] of hits) if (now - times[times.length - 1] >= windowMs) hits.delete(k);
-    }
-    const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
-    if (recent.length >= limit) {
-      hits.set(key, recent);
-      return false;
-    }
-    recent.push(now);
-    hits.set(key, recent);
-    return true;
-  };
-}
-
 export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceServerLike[] {
   if (env.ICE_SERVERS) {
     try {
@@ -93,6 +74,14 @@ export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceS
     servers.push({ urls: env.TURN_URL.split(','), username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL });
   }
   return servers;
+}
+
+/** Compares secrets in constant time. */
+function sameSecret(given: string, expected: string | undefined): boolean {
+  if (!expected) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** PUBLIC_URL's origin, or null when unknown. */
@@ -153,14 +142,22 @@ export async function startServer(opts: ServerOptions = {}) {
   });
   io.use(auth.socketMiddleware);
   const realtime = attachRealtime(io, store, { accounts });
+
+  const ipHeader = (opts.clientIpHeader !== undefined ? opts.clientIpHeader : process.env.CLIENT_IP_HEADER)?.trim().toLowerCase() || null;
+  const clientIp = (req: express.Request): string => {
+    const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
+    return forwarded || req.ip || 'unknown';
+  };
+
   const uploads = createUploads({
     db,
     options: uploadOptions,
-    // Anyone in the office right now may upload, guests included.
-    uploaderOf(socketId, officeId) {
+    clientIp,
+    // Anyone in the office right now may upload, guests included, with the key only their socket got.
+    uploaderOf(socketId, uploadKey, officeId) {
       const ctx = realtime.contextOf(socketId);
       const player = ctx?.me();
-      if (!ctx?.socket.connected || ctx.room()?.officeId !== officeId || !player) return null;
+      if (!ctx?.socket.connected || ctx.room()?.officeId !== officeId || !player || !sameSecret(uploadKey, ctx.socket.data.uploadKey)) return null;
       return { userId: ctx.user?.id ?? null, name: player.name };
     },
   });
@@ -168,11 +165,18 @@ export async function startServer(opts: ServerOptions = {}) {
 
   const iceServers = opts.iceServers ?? iceServersFromEnv();
   const turn = opts.cloudflareTurn !== undefined ? opts.cloudflareTurn : cloudflareTurnFromEnv();
-  const ipHeader = (opts.clientIpHeader !== undefined ? opts.clientIpHeader : process.env.CLIENT_IP_HEADER)?.trim().toLowerCase() || null;
-  const clientIp = (req: express.Request): string => {
-    const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
-    return forwarded || req.ip || 'unknown';
-  };
+
+  // Changes may only be asked for by this app's own pages (or by non-browser clients), not by other
+  // sites, not even ones on the same domain, whose requests carry the session cookie. Apple's
+  // sign-in answer is the one cross-site form post.
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS' || req.path === '/auth/apple/callback') return next();
+    // Browsers say where a request comes from in Sec-Fetch-Site; older ones only in Origin.
+    const site = req.get('sec-fetch-site');
+    const origin = req.get('origin');
+    if (site ? site === 'same-origin' || site === 'none' : !origin || !publicOrigin || origin === publicOrigin) return next();
+    res.status(403).json({ error: 'Requests from other sites are not allowed.' });
+  });
 
   // Before express.json, which would otherwise swallow uploads sent as application/json.
   app.post('/api/offices/:id/uploads', uploads.upload);
@@ -371,6 +375,7 @@ if (isMain) {
     databaseSsl: process.env.DATABASE_SSL === 'require' || process.env.DATABASE_SSL === 'no-verify' ? process.env.DATABASE_SSL : undefined,
     // The built app is served on its own port, not Vite's: there's no sensible default address.
     publicUrl: process.env.PUBLIC_URL || (production ? null : undefined),
+    auth: authOptionsFromEnv(process.env, production),
     clientDir: production ? (process.env.CLIENT_DIR ?? path.resolve(here, '../client')) : null,
   }).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'EADDRINUSE') throw err;

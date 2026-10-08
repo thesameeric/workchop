@@ -89,6 +89,28 @@ describe('REST API', () => {
     expect((await fetch(`${base}/api/offices/..%2F..%2Fetc`)).status).toBe(404);
   });
 
+  it('saves names cut in the middle of an emoji', async () => {
+    // Names are cut at a length limit; half an emoji left at the end can't be stored as JSON in Postgres.
+    const res = await fetch(`${base}/api/offices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'a'.repeat(47) + '😀 party' }),
+    });
+    expect(res.status).toBe(201);
+    const { id, ownerKey } = (await res.json()) as { id: string; ownerKey: string };
+    expect(((await (await fetch(`${base}/api/offices/${id}`)).json()) as { name: string }).name).toBe('a'.repeat(47));
+    const owner = await join(id, 'Owner', ownerKey);
+    const renamed = next(owner.socket, 'office:op');
+    owner.socket.emit('office:op', { t: 'settings', settings: { name: 'b'.repeat(47) + '🎉 x' } });
+    await renamed;
+    owner.socket.emit('office:op', { t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5, z: 5, rot: 0 } });
+    await next(owner.socket, 'office:op');
+    await server.store.flush();
+    const stored = (await saved(id)).office as unknown as { settings: { name: string }; items: { id: string }[] };
+    expect(stored.settings.name).toBe('b'.repeat(47));
+    expect(stored.items.some((i) => i.id === 'sofa1')).toBe(true);
+  });
+
   it('serves ICE configuration', async () => {
     const cfg = await (await fetch(`${base}/api/config`)).json();
     expect(cfg).toEqual({ iceServers: [], turn: false, spotifyClientId: null });

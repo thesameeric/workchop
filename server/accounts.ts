@@ -1,5 +1,5 @@
 import type { AccountUser, AuthProvider, UserProfile } from '../shared/account';
-import type { Db } from './db';
+import { jsonb, type Db } from './db';
 import { randomId } from './officeStore';
 
 /** What a sign-in method tells us about someone. */
@@ -91,7 +91,7 @@ export class Accounts {
   async update(id: string, patch: { name?: string; profile?: UserProfile }): Promise<AccountUser | null> {
     const res = await this.db.query<UserRow>(
       `UPDATE users SET name = COALESCE($2, name), profile = profile || $3::jsonb WHERE id = $1 RETURNING ${USER_COLUMNS}`,
-      [id, patch.name ?? null, JSON.stringify(patch.profile ?? {})],
+      [id, patch.name ?? null, jsonb(patch.profile ?? {})],
     );
     return res.rowCount ? toAccountUser(res.rows[0]) : null;
   }

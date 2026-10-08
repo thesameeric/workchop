@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { wellFormed } from '../../shared/text';
 import { PgDb, type DatabaseSsl } from './pg';
 
 export type { DatabaseSsl } from './pg';
@@ -10,7 +11,7 @@ export interface QueryResult<T> {
 
 /** What both a database and an open transaction can do. */
 export interface Tx {
-  /** One statement with $1, $2… parameters. Pass jsonb as JSON.stringify(value) with a $n::jsonb cast. */
+  /** One statement with $1, $2… parameters. Pass jsonb as jsonb(value) with a $n::jsonb cast. */
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<QueryResult<T>>;
   /** Several statements, no parameters (migrations). */
   exec(sql: string): Promise<void>;
@@ -29,6 +30,25 @@ export interface Db extends Tx {
   close(): Promise<void>;
   readonly kind: 'postgres' | 'pglite';
   readonly description: string;
+}
+
+/** Text Postgres refuses inside jsonb: NUL characters and lone surrogates (half an emoji). */
+const NOT_IN_JSONB = /\u0000/g;
+const jsonbText = (s: string) => wellFormed(s.replace(NOT_IN_JSONB, ''));
+
+/**
+ * `value` as a jsonb parameter (use it with a $n::jsonb cast). Like JSON.stringify, except that
+ * strings Postgres would refuse are cleaned up, so one bad character can't make a save fail.
+ */
+export function jsonb(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (typeof v === 'string') return jsonbText(v);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const keys = Object.keys(v);
+      if (keys.some((k) => jsonbText(k) !== k)) return Object.fromEntries(keys.map((k) => [jsonbText(k), (v as Record<string, unknown>)[k]]));
+    }
+    return v;
+  });
 }
 
 export interface DbOptions {

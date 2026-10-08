@@ -8,11 +8,13 @@ import { io as connect } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AccountUser, Space } from '../shared/account';
 import { DEFAULT_AVATAR } from '../shared/avatar';
-import { authOptionsFromEnv, safeReturnPath } from '../server/auth';
+import { Accounts } from '../server/accounts';
+import { authOptionsFromEnv, createAuth, safeReturnPath } from '../server/auth';
 import { parsePrivateKey } from '../server/auth/oidc';
+import type { Db } from '../server/db';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
-import { createOffice, disconnectAll, Jar, join, json } from './helpers/http';
+import { createOffice, disconnectAll, Jar, join, json, until } from './helpers/http';
 
 let oauth: OAuth2Server;
 let server: Awaited<ReturnType<typeof startServer>>;
@@ -229,10 +231,46 @@ describe('sign-in', () => {
     const quiet = console.warn;
     console.warn = () => {};
     expect(authOptionsFromEnv({ DEV_LOGIN: 'true', NODE_ENV: 'production' }).devLogin).toBe(false);
+    // The built server counts as production even without NODE_ENV (npm start).
+    expect(authOptionsFromEnv({ DEV_LOGIN: 'true' }, true).devLogin).toBe(false);
     console.warn = quiet;
     expect(authOptionsFromEnv({ DEV_LOGIN: 'true', NODE_ENV: 'production', DEV_LOGIN_IN_PRODUCTION: 'true' }).devLogin).toBe(true);
-    for (const bad of ['https://evil.example/', '//evil.example', '/\\evil.example', 'relative', '']) expect(safeReturnPath(bad)).toBe('/');
+    const bad = ['https://evil.example/', '//evil.example', '/\\evil.example', 'relative', ''];
+    // Dot segments that only become "//evil.example" once resolved.
+    bad.push('/.//evil.example', '/..//evil.example', '/a/..//evil.example', '/./\\evil.example', '/%2e//evil.example', '/x/../\\evil.example');
+    for (const path of bad) expect(safeReturnPath(path), path).toBe('/');
     expect(safeReturnPath('/o/abc?x=1#y')).toBe('/o/abc?x=1#y');
+    expect(safeReturnPath('/a/../o/abc')).toBe('/o/abc');
+  });
+
+  it('refuses changes asked for by other sites, and lets them sign no one out', async () => {
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Ola' }));
+    const post = (headers: Record<string, string>) =>
+      jar.fetch(`${base}/api/offices`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}' });
+    expect((await post({ 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    expect((await post({ 'Sec-Fetch-Site': 'same-site' })).status).toBe(403);
+    expect((await post({ Origin: 'https://evil.example' })).status).toBe(403);
+    expect((await post({ 'Sec-Fetch-Site': 'same-origin', Origin: 'http://localhost:5173' })).status).toBe(201);
+    expect((await post({ Origin: 'http://localhost:5173' })).status).toBe(201);
+    // A form posted from another site carries no SameSite=Lax cookie; it must not clear it either.
+    const logout = await fetch(`${base}/api/auth/logout`, { method: 'POST' });
+    expect(logout.status).toBe(200);
+    expect(logout.headers.getSetCookie()).toEqual([]);
+    expect((await me(jar))?.name).toBe('Ola');
+  });
+
+  it('signs out sockets whose session expired', async () => {
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Eve' }));
+    const hash = sha256(jar.cookies.get('wc_session')!);
+    await server.db.query("UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [hash]);
+    // The periodic cleanup, as a second server sharing the database would run it on start.
+    const ended: string[] = [];
+    const auth = createAuth({ db: server.db, accounts: new Accounts(server.db), publicOrigin: null, options: { google: null, apple: null, devLogin: false }, onLogout: (h) => ended.push(h), quiet: true });
+    await auth.close();
+    expect(ended).toContain(hash);
+    expect((await server.db.query('SELECT 1 FROM sessions WHERE token_hash = $1', [hash])).rowCount).toBe(0);
   });
 
   it('accepts the Apple key as PEM, with \\n escapes, or base64', () => {
@@ -287,6 +325,44 @@ describe('accounts in the office', () => {
     await jar.fetch(`${base}/api/auth/logout`, { method: 'POST' });
     expect(await dropped).toBe('io server disconnect');
     expect(guest.socket.connected).toBe(true);
+  });
+
+  it('keeps a signed-in visitor working who arrives just as the office empties', async () => {
+    // Recording the visit waits on the database; meanwhile the last person leaves and the office is
+    // dropped from memory. The newcomer must still end up in the office that gets saved.
+    let delay = 0;
+    const db = server.db;
+    const slow: Db = {
+      kind: db.kind,
+      description: db.description,
+      query: async <T,>(sql: string, params?: unknown[]) => {
+        if (delay && sql.includes('INSERT INTO memberships')) await new Promise((r) => setTimeout(r, delay));
+        return db.query<T>(sql, params);
+      },
+      exec: (sql) => db.exec(sql),
+      transaction: (fn) => db.transaction(fn),
+      close: async () => {},
+    };
+    const other = await startServer({ port: 0, host: '127.0.0.1', db: slow, quiet: true, iceServers: [], auth: { google: null, apple: null, devLogin: true } });
+    try {
+      const otherBase = `http://127.0.0.1:${other.port}`;
+      const office = await createOffice(otherBase);
+      const last = await join(otherBase, office.id, 'Last');
+      const jar = new Jar();
+      await jar.fetch(`${otherBase}/api/auth/dev`, json({ name: 'Newcomer' }));
+      delay = 200;
+      const joining = join(otherBase, office.id, 'Newcomer', { jar });
+      await new Promise((r) => setTimeout(r, 100));
+      last.socket.disconnect();
+      const { socket } = await joining;
+      delay = 0;
+      expect(other.store.peek(office.id)).toBeDefined();
+      socket.emit('office:op', { t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5, z: 5, rot: 0 } });
+      await until(() => !!other.store.peek(office.id)?.office.items.some((i) => i.id === 'sofa1'));
+      socket.disconnect();
+    } finally {
+      await other.close();
+    }
   });
 
   it('refuses socket connections from other sites', async () => {

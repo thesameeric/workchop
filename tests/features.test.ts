@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountUser } from '../shared/account';
 import type { Feature } from '../server/features';
 import { startServer } from '../server/index';
@@ -38,6 +38,10 @@ const ping: Feature = {
       res.json({ id: (res.locals.user as AccountUser).id });
     });
     ctx.realtime.onJoin((s) => seen.push(`join ${s.me()?.name}`));
+    // A failing async handler is logged, without stopping the server or the other handlers.
+    ctx.realtime.onJoin(async (s) => {
+      if (s.me()?.name === 'Flaky') await ctx.db.query('SELECT * FROM no_such_table');
+    });
     ctx.realtime.onLeave((_s, left) => seen.push(`leave ${left.player.name}`));
     ctx.realtime.onSocket((s) => {
       const canPing = s.limiter(1, 2);
@@ -123,6 +127,19 @@ describe('features', () => {
     b.socket.disconnect();
     await until(() => seen.includes('leave Bea'));
     expect(seen).toEqual(expect.arrayContaining(['join Pat', 'join Bea', 'join Pat 2', 'leave Bea']));
+  });
+
+  it('survive a feature handler that fails', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id } = await createOffice(base);
+      await join(base, id, 'Flaky');
+      await until(() => errors.mock.calls.some((c) => String(c[0]).includes('a feature handler failed')));
+      await join(base, id, 'Steady');
+      expect(seen).toContain('join Steady');
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('stop the server from starting when one fails', async () => {

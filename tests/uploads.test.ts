@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type ClientRequest, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '../server/index';
 import type { UploadedFile, UploadStorage } from '../server/uploads';
 import { createTestDb } from './helpers/db';
-import { createOffice, disconnectAll, join } from './helpers/http';
+import { createOffice, disconnectAll, join, until } from './helpers/http';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -24,7 +24,12 @@ function tempDir(): string {
 /** A stand-in S3 endpoint: keeps objects in memory and insists on a SigV4 signature. */
 async function fakeS3() {
   const objects = new Map<string, { body: Buffer; type: string }>();
+  const state = { failing: false };
   const server: Server = createServer((req, res) => {
+    if (state.failing) {
+      res.writeHead(500).end('<Error>InternalError</Error>');
+      return;
+    }
     if (!req.headers.authorization?.startsWith('AWS4-HMAC-SHA256 Credential=test-key/')) {
       res.writeHead(403).end('unsigned');
       return;
@@ -47,7 +52,19 @@ async function fakeS3() {
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { objects, server, endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  return { objects, state, server, endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+/** Starts an upload of `size` bytes and sends only its headers; resolves to the answer, if any. */
+function startUpload(url: string, headers: Record<string, string>, size: number) {
+  let req!: ClientRequest;
+  const answer = new Promise<IncomingMessage>((resolve, reject) => {
+    req = request(url, { method: 'POST', headers: { ...headers, 'Content-Length': String(size) } }, resolve);
+    req.on('error', reject);
+    req.flushHeaders();
+  });
+  answer.catch(() => {});
+  return { answer, abort: () => req.destroy() };
 }
 
 const MAX = 1000;
@@ -70,6 +87,8 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
         dataDir,
         quiet: true,
         iceServers: [],
+        // Lets the tests appear to come from several addresses.
+        clientIpHeader: 'x-test-ip',
         uploads: {
           storage,
           maxBytes: MAX,
@@ -85,13 +104,14 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
       s3?.server.close();
     });
 
-    /** Someone in a new office, ready to upload. */
-    async function inOffice() {
-      const office = await createOffice(base);
-      const { socket } = await join(base, office.id, 'Uploader');
+    /** Someone in a new office (or in `officeId`), ready to upload. */
+    async function inOffice(officeId?: string, name = 'Uploader') {
+      const office = officeId ? { id: officeId } : await createOffice(base);
+      const { socket, res } = await join(base, office.id, name);
+      const credentials = { 'X-Workchop-Socket': socket.id!, 'X-Workchop-Upload-Key': res.ok ? res.uploadKey : '' };
       const upload = (body: BodyInit, headers: Record<string, string> = {}) =>
-        fetch(`${base}/api/offices/${office.id}/uploads`, { method: 'POST', body, headers: { 'X-Workchop-Socket': socket.id!, ...headers } });
-      return { office, socket, upload };
+        fetch(`${base}/api/offices/${office.id}/uploads`, { method: 'POST', body, headers: { ...credentials, ...headers } });
+      return { office, socket, credentials, upload };
     }
 
     it('stores a file (even a JSON one) and serves it back as a download', async () => {
@@ -127,6 +147,23 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
       if (storage === 's3') expect(s3!.objects.get(`/files/${office.id}/${file.id}`)?.body.toString()).toBe(content);
     });
 
+    if (storage === 's3') it('does not let browsers cache a failed download', async () => {
+      const { upload } = await inOffice();
+      const file = (await (await upload('picture', { 'Content-Type': 'image/png', 'X-Filename': 'a.png' })).json()) as UploadedFile;
+      s3!.state.failing = true;
+      const quiet = console.error;
+      console.error = () => {};
+      const failed = await fetch(`${base}${file.url}`).finally(() => (console.error = quiet));
+      s3!.state.failing = false;
+      expect(failed.status).toBe(503);
+      expect(failed.headers.get('cache-control')).toBe('no-store');
+      const ok = await fetch(`${base}${file.url}`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get('cache-control')).toMatch(/immutable/);
+      // Revalidating must not turn the error into the file either.
+      expect(failed.headers.get('etag')).not.toBe(ok.headers.get('etag'));
+    });
+
     it('shows raster images inline and everything else, SVG included, as a download', async () => {
       const { upload } = await inOffice();
       const png = (await (await upload(Buffer.from([0x89, 0x50, 0x4e, 0x47]), { 'Content-Type': 'image/png', 'X-Filename': 'dot.png' })).json()) as UploadedFile;
@@ -141,7 +178,7 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
     });
 
     it('refuses files that are too big, before and while reading them', async () => {
-      const { office, socket, upload } = await inOffice();
+      const { office, credentials, upload } = await inOffice();
       const tooBig = await upload(Buffer.alloc(MAX + 1, 1), { 'Content-Type': 'application/octet-stream' });
       expect(tooBig.status).toBe(413);
       expect(((await tooBig.json()) as { error: string }).error).toMatch(/at most/);
@@ -155,7 +192,7 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
       const chunked = await fetch(`${base}/api/offices/${office.id}/uploads`, {
         method: 'POST',
         body: stream,
-        headers: { 'X-Workchop-Socket': socket.id!, 'Content-Type': 'application/octet-stream' },
+        headers: { ...credentials, 'Content-Type': 'application/octet-stream' },
         duplex: 'half',
       } as RequestInit);
       expect(chunked.status).toBe(413);
@@ -165,30 +202,68 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
     });
 
     it('keeps each office within its quota', async () => {
-      const { upload } = await inOffice();
+      const { office, credentials, upload } = await inOffice();
       const piece = Buffer.alloc(900, 7);
       expect((await upload(piece)).status).toBe(201);
       expect((await upload(piece)).status).toBe(201);
       const over = await upload(piece);
       expect(over.status).toBe(413);
       expect(((await over.json()) as { error: string }).error).toMatch(/used up/);
+      // Refused before the file is sent: only the headers go out here, and the answer still comes.
+      const early = startUpload(`${base}/api/offices/${office.id}/uploads`, credentials, 900);
+      expect((await early.answer).statusCode).toBe(413);
+      early.abort();
       // Other offices have their own.
       expect((await (await inOffice()).upload(piece)).status).toBe(201);
     });
 
-    it('only accepts uploads from someone in that office', async () => {
-      const { office, socket, upload } = await inOffice();
+    it('only accepts uploads from someone in that office, with the key their socket got', async () => {
+      const { office, socket, credentials, upload } = await inOffice();
       const elsewhere = await inOffice();
       const post = (headers: Record<string, string>) => fetch(`${base}/api/offices/${office.id}/uploads`, { method: 'POST', body: 'hi', headers });
       expect((await post({})).status).toBe(403);
-      expect((await post({ 'X-Workchop-Socket': 'made-up-socket-id' })).status).toBe(403);
-      expect((await post({ 'X-Workchop-Socket': elsewhere.socket.id! })).status).toBe(403);
+      expect((await post({ 'X-Workchop-Socket': 'made-up-socket-id', 'X-Workchop-Upload-Key': credentials['X-Workchop-Upload-Key'] })).status).toBe(403);
+      expect((await post(elsewhere.credentials)).status).toBe(403);
+      // Socket ids are public (everyone in the office sees them), so an id alone, or with someone else's key, is not enough.
+      const mallory = await inOffice(office.id, 'Mallory');
+      expect((await post({ 'X-Workchop-Socket': socket.id! })).status).toBe(403);
+      expect((await post({ 'X-Workchop-Socket': socket.id!, 'X-Workchop-Upload-Key': mallory.credentials['X-Workchop-Upload-Key'] })).status).toBe(403);
       expect((await upload('hi')).status).toBe(201);
-      socket.disconnect();
+      expect((await mallory.upload('hi')).status).toBe(201);
+      mallory.socket.disconnect();
       await new Promise((r) => setTimeout(r, 100));
-      expect((await post({ 'X-Workchop-Socket': socket.id ?? 'gone' })).status).toBe(403);
+      expect((await post(mallory.credentials)).status).toBe(403);
       expect((await fetch(`${base}/api/uploads/00000000-0000-4000-8000-000000000000/x`)).status).toBe(404);
       expect((await fetch(`${base}/api/uploads/not-a-uuid`)).status).toBe(404);
+    });
+
+    it('cleans up file names', async () => {
+      const { upload } = await inOffice();
+      const name = async (raw: string) => ((await (await upload('x', { 'X-Filename': encodeURIComponent(raw) })).json()) as UploadedFile).name;
+      // Bidi controls could make "fdp.exe" show as "exe.pdf".
+      expect(await name('invoice\u202Efdp.exe')).toBe('invoicefdp.exe');
+      // Cut at 200 characters without leaving half an emoji (which would break the URL).
+      expect(await name('a'.repeat(199) + '😀.txt')).toBe('a'.repeat(199));
+      expect(await name('👍 ok.txt')).toBe('👍 ok.txt');
+    });
+
+    it('shares the server among visitors', async () => {
+      const { office, credentials, upload } = await inOffice();
+      const url = `${base}/api/offices/${office.id}/uploads`;
+      // Three uploads in progress from one address, a fourth from another: the server holds as many
+      // of the largest files as it will, so a fifth waits, and one address can't have a fourth.
+      const slow = ['a', 'a', 'a', 'b'].map((ip) => startUpload(url, { ...credentials, 'X-Test-IP': ip }, MAX));
+      await new Promise((r) => setTimeout(r, 300));
+      const busy = await upload('x', { 'X-Test-IP': 'c' });
+      expect(busy.status).toBe(503);
+      expect(busy.headers.get('retry-after')).toBeTruthy();
+      for (const s of slow.slice(1)) s.abort();
+      await until(async () => (await upload('x', { 'X-Test-IP': 'c' })).status === 201);
+      expect((await upload('x', { 'X-Test-IP': 'a' })).status).toBe(201);
+      const more = [startUpload(url, { ...credentials, 'X-Test-IP': 'a' }, MAX), startUpload(url, { ...credentials, 'X-Test-IP': 'a' }, MAX)];
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await upload('x', { 'X-Test-IP': 'a' })).status).toBe(429);
+      for (const s of [slow[0], ...more]) s.abort();
     });
   });
 }
@@ -200,11 +275,11 @@ describe('switching upload storage', () => {
     const options = { port: 0, host: '127.0.0.1', db, dataDir, quiet: true, iceServers: [] };
     const first = await startServer({ ...options, uploads: { storage: 'fs' } });
     const office = await createOffice(`http://127.0.0.1:${first.port}`);
-    const { socket } = await join(`http://127.0.0.1:${first.port}`, office.id, 'A');
+    const { socket, res: joined } = await join(`http://127.0.0.1:${first.port}`, office.id, 'A');
     const res = await fetch(`http://127.0.0.1:${first.port}/api/offices/${office.id}/uploads`, {
       method: 'POST',
       body: 'kept on disk',
-      headers: { 'X-Workchop-Socket': socket.id!, 'Content-Type': 'text/plain' },
+      headers: { 'X-Workchop-Socket': socket.id!, 'X-Workchop-Upload-Key': joined.ok ? joined.uploadKey : '', 'Content-Type': 'text/plain' },
     });
     const file = (await res.json()) as UploadedFile;
     socket.disconnect();

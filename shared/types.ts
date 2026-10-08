@@ -140,6 +140,8 @@ export type JoinResponse =
       isOwner: boolean;
       /** Spotify listen-along sessions running in this office. */
       spotify: SpotifySession[];
+      /** Secret for uploading files while in this office (the X-Workchop-Upload-Key header); never shared. */
+      uploadKey: string;
     }
   | { ok: false; error: string };
 

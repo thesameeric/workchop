@@ -1,14 +1,14 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { isValidId, sanitizeOffice } from '../../shared/office';
-import type { Db } from './index';
+import type { Office } from '../../shared/types';
+import { jsonb, type Db } from './index';
 
 interface LegacyFile {
   file: string;
   id: string;
   ownerKey: string;
-  office: unknown;
-  name: string;
+  office: Office;
 }
 
 async function readOffices(dir: string): Promise<{ offices: LegacyFile[]; skipped: string[] }> {
@@ -28,7 +28,7 @@ async function readOffices(dir: string): Promise<{ offices: LegacyFile[]; skippe
       const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { office?: unknown; ownerKey?: unknown };
       const office = sanitizeOffice(raw?.office);
       if (!office || typeof raw.ownerKey !== 'string') throw new Error('not an office');
-      offices.push({ file, id, ownerKey: raw.ownerKey, office: raw.office, name: office.settings.name });
+      offices.push({ file, id, ownerKey: raw.ownerKey, office: { ...office, id } });
     } catch {
       skipped.push(file);
     }
@@ -61,16 +61,26 @@ export async function importLegacyOffices(db: Db, dataDir: string): Promise<stri
   if (!all.length && !fromNested.skipped.length) return [];
 
   const imported: string[] = [];
-  await db.transaction(async (tx) => {
-    for (const o of all) {
-      const res = await tx.query('INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb) ON CONFLICT (id) DO NOTHING', [
+  const failed: string[] = [];
+  // One at a time, so an office the database refuses doesn't stop the others (or the server).
+  for (const o of all) {
+    try {
+      const res = await db.query('INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb) ON CONFLICT (id) DO NOTHING', [
         o.id,
         o.ownerKey,
-        JSON.stringify(o.office),
+        jsonb(o.office),
       ]);
-      if (res.rowCount) imported.push(`${o.id} (${o.name})`);
+      if (res.rowCount) imported.push(`${o.id} (${o.office.settings.name})`);
+    } catch (err) {
+      failed.push(o.file);
+      console.error(`[db] could not import ${o.file}: ${(err as Error).message}`);
     }
-  });
+  }
+  if (failed.length) {
+    // Left where they are, to be tried again on the next start (imported ones are skipped then).
+    console.warn(`[db] imported ${imported.length} of ${all.length} office files; the files stay in place until all of them can be imported`);
+    return imported;
+  }
 
   const done = await freePath(path.join(dataDir, 'offices.imported'));
   try {
