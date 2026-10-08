@@ -29,8 +29,8 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Spotify listen-along** (optional, needs `SPOTIFY_CLIENT_ID`, see below): people connect their own Spotify Premium account, someone presses ▶ "Play for everyone", and everyone connected at that jukebox hears the same track at the same position on their own account. Workchop only syncs what's playing; it never streams audio from one person to another.
 
 **Chat**
-- **Channels** for the whole office: every office starts with #general, anyone can add more (with a topic), and people who may edit the office rename and archive them.
-- **Direct messages**, saved when both people are signed in (they wait for whoever is away). With guests they're live: they last while you're both in the office. **Nearby** is a live chat with the people you're talking with.
+- **Channels** for the whole office: every office starts with #general, anyone can add more (with a topic), and the owner and signed-in people who may edit the office rename and archive them.
+- **Direct messages**, saved when both people are signed in (they wait for whoever is away: start one with **+** next to Direct messages). With guests they're live: they last while you're both in the office, and what a guest sent you stays until you've read it. **Nearby** is a live chat with the people you're talking with.
 - **Threads** (reply to any message, optionally also in the channel), **@mentions** of people here or away and `@here` for everyone online, **reactions**, editing and deleting your messages, and light formatting: `**bold**`, `_italic_`, `` `code` ``, code blocks and links.
 - **Files:** attach, drag in or paste up to 5 per message. Images show as previews that open full size; other files as cards to download.
 - Unread channels are bold, with a count of your mentions. The dock's chat button counts your mentions and direct messages, and a mention or direct message also shows a notice that takes you to it.
@@ -214,7 +214,7 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `CLOUDFLARE_TURN_TTL` | `86400` | How long those credentials last, in seconds (600 to 172800) |
 | `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` directly behind the bundled Caddy (set in Compose), `cf-connecting-ip` when every request comes through Cloudflare (set automatically on Containers and with the Tunnel). Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
 | `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
-| `CHAT_RETENTION_DAYS` | – (keep) | Delete chat conversations (a message and its thread) that have been quiet for this many days, with their files (see [Chat](#chat)) |
+| `CHAT_RETENTION_DAYS` | – (keep) | Delete chat messages (with their threads) that have been quiet for this many days, with their files (see [Chat](#chat)) |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
 
@@ -233,10 +233,10 @@ Sessions last 30 days from the last visit, in an HttpOnly cookie (`__Host-wc_ses
 Chat works out of the box; it keeps its messages in the database and attached files with the other uploads (`UPLOAD_MAX_BYTES` per file, `UPLOADS_QUOTA_MB` per office). Who may do what:
 
 - Everyone in an office, guests included, can read and write in its channels, create channels, set a channel's topic, and edit or delete their own messages. Guests are known by their connection, so after a reload they can no longer edit what they wrote before.
-- People who may edit the office (everyone, unless the owner locked building to themselves) can also rename and archive channels and delete anyone's channel messages. #general can't be renamed or archived. Archived channels keep their history and can be unarchived.
+- The owner, and signed-in people who may edit the office (everyone, unless the owner locked building to themselves), can also rename and archive channels and delete anyone's channel messages. Guests can't, even where they may build. #general can't be renamed or archived. Archived channels keep their history and can be unarchived.
 - Direct messages are only ever sent to, and readable by, the two people in them.
 
-Deleting a message deletes its files too. Set `CHAT_RETENTION_DAYS` to have conversations deleted automatically once nobody has written in them (or in their thread) for that many days; the server checks at most hourly, when someone comes in.
+Deleting a message deletes its files too. Set `CHAT_RETENTION_DAYS` to have messages deleted automatically, with their threads and files, once nobody has written in them (or in their thread) for that many days; files sent in live messages go after that long too. The server checks at most hourly, when someone comes in.
 
 A message's link (its "Copy link" action) opens the office at that message, for anyone who can see it.
 

@@ -56,6 +56,8 @@ interface ChatState {
   jump: { id: string; at: number } | null;
   /** The message being edited. */
   editing: string | null;
+  /** Who live direct messages are with (by "p:<player id>"), to list them after the guest leaves. */
+  liveNames: Record<ConvKey, string>;
 }
 
 const initial = (): ChatState => ({
@@ -70,6 +72,7 @@ const initial = (): ChatState => ({
   counts: {},
   jump: null,
   editing: null,
+  liveNames: {},
 });
 
 export const useChat = create<ChatState>()(initial);
@@ -271,9 +274,15 @@ function nameOfUser(userId: string): string {
   return Object.values(getState().players).find((p) => p.userId === userId)?.name ?? get().people.find((p) => p.userId === userId)?.name ?? 'Someone';
 }
 
+/** Remembers who a live direct message is with, while they're here to ask. */
+function rememberLiveName(conv: ConvKey, name: string | undefined): void {
+  if (conv.startsWith('p:') && name && get().liveNames[conv] !== name) set((s) => ({ liveNames: { ...s.liveNames, [conv]: name } }));
+}
+
 export function onMessage(m: ChatMessage): void {
   place(m);
   const conv = convOf(m);
+  rememberLiveName(conv, isMine(m) ? getState().players[conv.slice(2)]?.name : m.name);
   if (m.dm && !get().dms.some((d) => `d:${d.userId}` === conv)) {
     const userId = conv.slice(2);
     set((s) => ({ dms: [{ userId, name: isMine(m) ? nameOfUser(userId) : m.name, lastMessageAt: m.createdAt }, ...s.dms] }));
@@ -476,6 +485,7 @@ export async function loadPeople(): Promise<void> {
 export function openConv(conv: ConvKey, opts: { show?: boolean } = {}): void {
   if (!conv) return;
   set({ current: conv, thread: null, editing: null });
+  rememberLiveName(conv, getState().players[conv.slice(2)]?.name);
   const officeId = getState().officeId;
   if (officeId && isSaved(conv)) {
     try {

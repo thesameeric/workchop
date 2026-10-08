@@ -179,7 +179,7 @@ declare module './types' {
 /** Mention tokens in a message's text: <@u:USER_ID>, <@p:PLAYER_ID> and <!here>. */
 export const MENTION_TOKEN = /<@([up]):([A-Za-z0-9_-]{1,40})>|<!here>/g;
 
-export function mentionToken(m: ChatMention): string {
+export function mentionToken(m: { kind: 'user' | 'player' | 'here'; id?: string }): string {
   return m.kind === 'here' ? '<!here>' : `<@${m.kind === 'user' ? 'u' : 'p'}:${m.id}>`;
 }
 

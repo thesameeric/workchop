@@ -10,6 +10,7 @@ import {
   type DmPartner,
 } from '../../../shared/chat';
 import { plainText } from '../../../shared/chatText';
+import { clip } from '../../../shared/text';
 import { jsonb, type Db, type Tx } from '../../db';
 
 /** A refusal to show as is ("This channel is archived."). */
@@ -78,14 +79,24 @@ export function toMessage(row: MessageRow): ChatMessage {
     deleted: !!row.deleted_at,
   };
   if (row.in_channel && row.parent_name != null) {
-    msg.parent = { name: row.parent_name, text: row.parent_text ? plainText(row.parent_text, row.parent_mentions ?? [], 90) : '' };
+    msg.parent = { name: row.parent_name, text: row.parent_text ? parentPreview(row.parent_text, row.parent_mentions ?? []) : '' };
   }
   return msg;
 }
 
+/** Of a parent message, this much text is enough for its one-line preview. */
+const PREVIEW_SOURCE = 600;
+
+/** The start of a thread's parent, as shown with replies also sent to the channel. */
+export function parentPreview(text: string, mentions: ChatMention[]): string {
+  // Only the start is parsed; a mention token cut in half there is dropped.
+  const start = text.length > PREVIEW_SOURCE ? clip(text, PREVIEW_SOURCE).replace(/<[@!][^>]*$/, '') : text;
+  return plainText(start, mentions, 90);
+}
+
 /** Messages with, for replies also sent to the channel, the start of their parent. */
 const SELECT_MESSAGES = `
-  SELECT m.*, p.author_name AS parent_name, p.text AS parent_text, p.mentions AS parent_mentions
+  SELECT m.*, p.author_name AS parent_name, left(p.text, ${PREVIEW_SOURCE}) AS parent_text, p.mentions AS parent_mentions
   FROM chat_messages m LEFT JOIN chat_messages p ON m.in_channel AND p.id = m.parent_id`;
 
 /** Messages older than the one with id $n (the "before" cursor): by created_at, then id. */
@@ -274,8 +285,8 @@ export class ChatStore {
 
   /**
    * Uploads that may be attached to a new message: in this office, from this person (signed in) or
-   * a guest (not), from the last day, and not attached to anything yet. Only the uploader learns an
-   * upload's id until it's attached, so for guests' files the id is proof enough.
+   * a guest (not), from the last day, and not attached to anything yet (live messages included).
+   * Only the uploader learns an upload's id until it's sent, so for guests' files the id is proof enough.
    */
   async attachable(officeId: string, ids: string[], userId: string | null): Promise<Map<string, { name: string; contentType: string; size: number }>> {
     if (!ids.length) return new Map();
@@ -287,6 +298,17 @@ export class ChatStore {
       [ids, officeId, userId],
     );
     return new Map(res.rows.map((r) => [r.id, { name: r.filename, contentType: r.content_type, size: r.byte_size }]));
+  }
+
+  /** Marks files sent in a live (unsaved) message as used, so they can't be attached again. */
+  async claimLive(uploadIds: string[]): Promise<void> {
+    if (!uploadIds.length) return;
+    try {
+      await this.db.query('INSERT INTO chat_attachments (upload_id) SELECT unnest($1::uuid[])', [uploadIds]);
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ChatError('That file is already attached to another message.');
+      throw err;
+    }
   }
 
   /** Saves a message (and updates its thread's parent); returns both. */
@@ -403,11 +425,12 @@ export class ChatStore {
   }
 
   /**
-   * Deletes conversations (with their threads) that have been quiet for `days`, a batch at a time,
-   * and returns the upload ids of their files.
+   * Deletes messages (with their threads) that have been quiet for `days`, a batch at a time, and
+   * direct message conversations left empty; returns how many threads went, and the upload ids of
+   * their files and of files sent that long ago in live messages.
    */
-  async sweep(days: number, batch = 500): Promise<{ messages: number; uploads: string[] }> {
-    let messages = 0;
+  async sweep(days: number, batch = 500): Promise<{ threads: number; uploads: string[] }> {
+    let threads = 0;
     const uploads: string[] = [];
     for (;;) {
       const done = await this.db.transaction(async (tx) => {
@@ -422,10 +445,21 @@ export class ChatStore {
           [ids],
         );
         uploads.push(...files.rows.map((r) => r.upload_id));
-        messages += (await tx.query('DELETE FROM chat_messages WHERE id = ANY($1::uuid[])', [ids])).rowCount;
+        threads += (await tx.query('DELETE FROM chat_messages WHERE id = ANY($1::uuid[])', [ids])).rowCount;
         return old.rowCount < batch;
       });
-      if (done) return { messages, uploads };
+      if (done) break;
     }
+    await this.db.query(
+      `DELETE FROM chat_dms d WHERE NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.office_id = d.office_id AND m.dm_key = d.dm_key)`,
+    );
+    const live = await this.db.query<{ upload_id: string }>(
+      `DELETE FROM chat_attachments a USING uploads u
+       WHERE a.message_id IS NULL AND u.id = a.upload_id AND u.created_at < now() - make_interval(days => $1)
+       RETURNING a.upload_id`,
+      [days],
+    );
+    uploads.push(...live.rows.map((r) => r.upload_id));
+    return { threads, uploads };
   }
 }

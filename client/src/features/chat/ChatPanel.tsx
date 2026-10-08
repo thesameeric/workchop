@@ -19,7 +19,7 @@ import { isTyping } from '../../world/input';
 import { Composer, composerHandle } from './Composer';
 import { editLast, Message } from './Message';
 import { MessageList } from './MessageList';
-import { Avatar, useMayEdit, useOverlayKeys } from './parts';
+import { Avatar, useMayModerate, useOverlayKeys } from './parts';
 import {
   archiveChannel,
   closeThread,
@@ -29,6 +29,7 @@ import {
   isDirect,
   loadConv,
   loadOlder,
+  loadPeople,
   loadThread,
   openConv,
   updateChannel,
@@ -43,11 +44,44 @@ interface DmEntry {
   name: string;
   online: boolean;
   guest: boolean;
+  /** A guest who has left (their live messages stay until you've read them). */
+  left?: boolean;
 }
 
-/** Direct message partners: saved conversations, and everyone in the office now. */
+const byPresence = (a: DmEntry, b: DmEntry) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name);
+
+/** People to message: everyone in the office now, and (signed in) the office's members who are away. */
+function usePeopleToMessage(): DmEntry[] {
+  const people = useChat((s) => s.people);
+  const players = useStore((s) => s.players);
+  const myUserId = useStore((s) => s.account?.id ?? null);
+  return useMemo(() => {
+    const out = new Map<ConvKey, DmEntry>();
+    for (const p of Object.values(players)) {
+      if (p.userId && p.userId === myUserId) continue;
+      const conv = convWithPlayer(p.id);
+      out.set(conv, { conv, name: p.name, online: true, guest: !p.userId });
+    }
+    if (myUserId) {
+      for (const p of people) {
+        const conv = `d:${p.userId}`;
+        if (p.userId !== myUserId && !out.has(conv)) out.set(conv, { conv, name: p.name, online: false, guest: false });
+      }
+    }
+    return [...out.values()].sort(byPresence);
+  }, [people, players, myUserId]);
+}
+
+/**
+ * Direct message partners: saved conversations, everyone in the office now, the conversation on
+ * screen, and guests who left while their messages are unread.
+ */
 function useDmEntries(): DmEntry[] {
   const dms = useChat((s) => s.dms);
+  const people = useChat((s) => s.people);
+  const current = useChat((s) => s.current);
+  const liveNames = useChat((s) => s.liveNames);
+  const counts = useChat((s) => s.counts);
   const players = useStore((s) => s.players);
   const myUserId = useStore((s) => s.account?.id ?? null);
   return useMemo(() => {
@@ -60,8 +94,14 @@ function useDmEntries(): DmEntry[] {
       if (known) out.set(conv, { ...known, name: p.name, online: true });
       else out.set(conv, { conv, name: p.name, online: true, guest: !p.userId });
     }
-    return [...out.values()].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
-  }, [dms, players, myUserId]);
+    // A first message to a member who is away.
+    const away = current.startsWith('d:') && !out.has(current) ? people.find((p) => `d:${p.userId}` === current) : undefined;
+    if (away) out.set(current, { conv: current, name: away.name, online: false, guest: false });
+    for (const [conv, name] of Object.entries(liveNames)) {
+      if (!out.has(conv) && (conv === current || counts[conv]?.unread)) out.set(conv, { conv, name, online: false, guest: true, left: true });
+    }
+    return [...out.values()].sort(byPresence);
+  }, [dms, people, current, liveNames, counts, players, myUserId]);
 }
 
 function RailItem({ conv, icon, label, title, onPick }: { conv: ConvKey; icon: ReactNode; label: ReactNode; title?: string; onPick: () => void }) {
@@ -88,7 +128,7 @@ function RailItem({ conv, icon, label, title, onPick }: { conv: ConvKey; icon: R
   );
 }
 
-function Rail({ onPick, onCreate }: { onPick: () => void; onCreate: () => void }) {
+function Rail({ onPick, onCreate, onMessage }: { onPick: () => void; onCreate: () => void; onMessage: () => void }) {
   const channels = useChat((s) => s.channels);
   const ready = useChat((s) => s.ready);
   const dms = useDmEntries();
@@ -111,6 +151,9 @@ function Rail({ onPick, onCreate }: { onPick: () => void; onCreate: () => void }
       ))}
       <div className="rail-section">
         <span>Direct messages</span>
+        <button type="button" className="rail-add" title="New message" onClick={onMessage}>
+          <AddIcon size={15} />
+        </button>
       </div>
       {dms.length === 0 && <p className="rail-empty">No one else is here yet.</p>}
       {dms.map((d) => (
@@ -126,10 +169,10 @@ function Rail({ onPick, onCreate }: { onPick: () => void; onCreate: () => void }
           label={
             <>
               {d.name}
-              {d.guest && <span className="rail-meta">guest</span>}
+              {d.guest && <span className="rail-meta">{d.left ? 'left' : 'guest'}</span>}
             </>
           }
-          title={d.online ? `${d.name} is here` : `${d.name} is away`}
+          title={d.online ? `${d.name} is here` : d.left ? `${d.name} left the office` : `${d.name} is away`}
           onPick={onPick}
         />
       ))}
@@ -154,7 +197,7 @@ function useOtherUnread(conv: ConvKey): boolean {
 
 function ChannelMenu({ channel, onEdit }: { channel: ChatChannel; onEdit: () => void }) {
   const { open, setOpen, close, ref, buttonRef } = usePopover();
-  const canManage = useMayEdit();
+  const canManage = useMayModerate();
   return (
     <div className="chat-menu-wrap" ref={ref}>
       <button type="button" ref={buttonRef} className="icon-btn" title="Channel settings" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -230,7 +273,11 @@ function ConvHeader({ conv, onRail, onEdit }: { conv: ConvKey; onRail: () => voi
         <span className="conv-name">{name}</span>
       </>
     );
-    sub = <span className="conv-sub">{!dm ? 'Left the office' : conv.startsWith('p:') ? 'Not saved: guests’ messages last while you’re both here' : dm.online ? 'Here now' : 'Away'}</span>;
+    sub = (
+      <span className="conv-sub">
+        {!dm || dm.left ? 'Left the office' : conv.startsWith('p:') ? 'Not saved: guests’ messages last while you’re both here' : dm.online ? 'Here now' : 'Away'}
+      </span>
+    );
   }
   return (
     <header className="conv-head">
@@ -277,7 +324,7 @@ function Intro({ conv }: { conv: ConvKey }) {
     <div className="chat-intro">
       <Avatar name={dm?.name ?? '?'} size={44} />
       <h3>{name}</h3>
-      <p>{conv.startsWith('p:') ? `Messages with guests aren’t saved: they’re gone when one of you leaves.` : `This is the start of your conversation with ${name}.`}</p>
+      <p>{conv.startsWith('p:') ? 'Messages with guests aren’t saved: they’re gone when you leave the office.' : `This is the start of your conversation with ${name}.`}</p>
     </div>
   );
 }
@@ -286,7 +333,7 @@ function ConversationView({ conv, onRail, onEdit }: { conv: ConvKey; onRail: () 
   const list = useChat((s) => s.convs[conv]) ?? emptyList();
   const channel = useChat((s) => (conv.startsWith('c:') ? s.channels.find((c) => `c:${c.id}` === conv) : undefined));
   const dm = useDmEntries().find((d) => d.conv === conv);
-  const canManage = useMayEdit();
+  const canManage = useMayModerate();
   useEffect(() => void loadConv(conv), [conv]);
   const placeholder = channel ? `Message #${channel.name}` : conv === 'nearby' ? 'Message the people nearby' : `Message ${dm?.name ?? ''}`;
   let footer: ReactNode = null;
@@ -302,7 +349,7 @@ function ConversationView({ conv, onRail, onEdit }: { conv: ConvKey; onRail: () 
         )}
       </div>
     );
-  } else if (conv.startsWith('p:') && !dm) {
+  } else if (conv.startsWith('p:') && (!dm || dm.left)) {
     footer = <div className="chat-footer-note">They’ve left the office.</div>;
   }
   return (
@@ -319,7 +366,7 @@ function ThreadView({ id, conv }: { id: string; conv: ConvKey }) {
   const channel = useChat((s) => (conv.startsWith('c:') ? s.channels.find((c) => `c:${c.id}` === conv) : undefined));
   const dm = useDmEntries().find((d) => d.conv === conv);
   const where = channel ? `#${channel.name}` : dm ? dm.name : 'the conversation';
-  const canManage = useMayEdit();
+  const canManage = useMayModerate();
   const parent = thread.parent;
   const closed = !!parent?.deleted || !!channel?.archived;
   return (
@@ -382,7 +429,8 @@ function ThreadView({ id, conv }: { id: string; conv: ConvKey }) {
 
 /** Creating a channel, or renaming one / setting its topic. */
 function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClose: () => void }) {
-  const canManage = useMayEdit();
+  const canManage = useMayModerate();
+  const guestEditor = useStore((s) => !s.account && s.office?.settings.buildPolicy === 'everyone');
   const canRename = !channel || (canManage && !channel.isDefault);
   const [name, setName] = useState(channel?.name ?? '');
   const [topic, setTopic] = useState(channel?.topic ?? '');
@@ -436,7 +484,11 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
           <span>Topic (optional)</span>
           <input value={topic} autoFocus={!canRename} maxLength={MAX_TOPIC} placeholder="What’s it about?" onChange={(e) => setTopic(e.target.value)} />
         </label>
-        {channel && !canRename && <p className="muted small">{channel.isDefault ? '#general keeps its name.' : 'Only people who can edit this office can rename channels.'}</p>}
+        {channel && !canRename && (
+          <p className="muted small">
+            {channel.isDefault ? '#general keeps its name.' : guestEditor ? 'Sign in to rename channels.' : 'Only people who can edit this office can rename channels.'}
+          </p>
+        )}
         {error && <p className="form-error">{error}</p>}
         <div className="chat-dialog-actions">
           <button type="button" className="btn" onClick={onClose}>
@@ -451,6 +503,61 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
   );
 }
 
+/** Starting a direct message with someone here, or (signed in) a member who is away. */
+function NewMessage({ onClose }: { onClose: () => void }) {
+  const everyone = usePeopleToMessage();
+  const signedIn = useStore((s) => !!s.account);
+  const [query, setQuery] = useState('');
+  useEffect(() => void loadPeople(), []);
+  useOverlayKeys((e) => {
+    if (e.key !== 'Escape') return false;
+    onClose();
+    return true;
+  });
+  const q = query.trim().toLowerCase();
+  const found = q ? everyone.filter((p) => p.name.toLowerCase().includes(q)) : everyone;
+  const pick = (conv: ConvKey) => {
+    openConv(conv);
+    onClose();
+  };
+  return (
+    <div className="chat-dialog-scrim" onPointerDown={onClose}>
+      <div className="chat-dialog new-message" role="dialog" aria-label="New message" onPointerDown={(e) => e.stopPropagation()}>
+        <h3>New message</h3>
+        <input
+          value={query}
+          autoFocus
+          placeholder="Find someone"
+          aria-label="Find someone"
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && found[0]) pick(found[0].conv);
+          }}
+        />
+        <div className="people-pick">
+          {found.map((p) => (
+            <button key={p.conv} type="button" onClick={() => pick(p.conv)}>
+              <span className="rail-person">
+                <Avatar name={p.name} size={24} />
+                <i className={`presence${p.online ? ' on' : ''}`} />
+              </span>
+              <span className="people-pick-name">{p.name}</span>
+              <span className="people-pick-hint">{p.online ? (p.guest ? 'Guest, here' : 'Here') : 'Away'}</span>
+            </button>
+          ))}
+          {!found.length && <p className="muted small">{q ? 'No one by that name.' : 'No one else has been here yet.'}</p>}
+        </div>
+        {!signedIn && <p className="muted small">Sign in to message people who are away.</p>}
+        <div className="chat-dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const hasFiles = (e: DragEvent) => [...e.dataTransfer.types].includes('Files');
 
 export function ChatPanel() {
@@ -458,6 +565,7 @@ export function ChatPanel() {
   const thread = useChat((s) => s.thread);
   const [railOpen, setRailOpen] = useState(false);
   const [form, setForm] = useState<{ channel: ChatChannel | null } | null>(null);
+  const [picking, setPicking] = useState(false);
   const [dragging, setDragging] = useState(false);
   const depth = useRef(0);
 
@@ -495,7 +603,17 @@ export function ChatPanel() {
         composerHandle.current?.addFiles([...e.dataTransfer.files]);
       }}
     >
-      <Rail onPick={() => setRailOpen(false)} onCreate={() => setForm({ channel: null })} />
+      <Rail
+        onPick={() => setRailOpen(false)}
+        onCreate={() => {
+          setRailOpen(false);
+          setForm({ channel: null });
+        }}
+        onMessage={() => {
+          setRailOpen(false);
+          setPicking(true);
+        }}
+      />
       {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
       <section className="chat-main" aria-label="Messages">
         {!current ? (
@@ -516,6 +634,7 @@ export function ChatPanel() {
         </div>
       )}
       {form && <ChannelForm channel={form.channel} onClose={() => setForm(null)} />}
+      {picking && <NewMessage onClose={() => setPicking(false)} />}
     </div>
   );
 }

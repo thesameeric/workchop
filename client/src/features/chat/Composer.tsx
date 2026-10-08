@@ -211,7 +211,8 @@ interface PendingFile {
   key: string;
   file: File;
   name: string;
-  status: 'uploading' | 'done' | 'error';
+  /** Waiting for a turn: only a few go up at once. */
+  status: 'waiting' | 'uploading' | 'done' | 'error';
   progress: number;
   error?: string;
   result?: UploadedFile;
@@ -223,6 +224,8 @@ interface PendingFile {
 }
 
 let fileKey = 0;
+/** Files uploading at once (the server takes 3 at a time from each visitor). */
+const PARALLEL = 3;
 
 /** Where you write: text with mentions and formatting, files (attach, drop, paste), Enter to send. */
 export function Composer({
@@ -257,6 +260,9 @@ export function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const filesRef = useRef(files);
   filesRef.current = files;
+  /** Keys of the files going up now. */
+  const running = useRef(new Set<string>());
+  const closed = useRef(false);
 
   useEffect(() => {
     if (text || picks.length) drafts.set(draftKey, { text, picks });
@@ -264,15 +270,16 @@ export function Composer({
   }, [draftKey, text, picks]);
 
   // Uploads still running when the composer goes away are cancelled.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    closed.current = false;
+    return () => {
+      closed.current = true;
       for (const f of filesRef.current) {
         f.abort.abort();
         if (f.preview) URL.revokeObjectURL(f.preview);
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   const update = (key: string, patch: Partial<PendingFile>) => setFiles((list) => list.map((f) => (f.key === key ? { ...f, ...patch } : f)));
 
@@ -282,6 +289,8 @@ export function Composer({
       update(f.key, { status: 'error', error: 'Not connected' });
       return;
     }
+    running.current.add(f.key);
+    update(f.key, { status: 'uploading', progress: 0 });
     session
       .upload(f.file, { name: f.name, signal: f.abort.signal, onProgress: (p) => update(f.key, { progress: p }) })
       .then((result) => update(f.key, { status: 'done', progress: 1, result }))
@@ -289,8 +298,21 @@ export function Composer({
         if (err.name === 'AbortError') return;
         update(f.key, { status: 'error', error: err.message });
         toast(`${f.name}: ${err.message}`, 'error');
+      })
+      .finally(() => {
+        running.current.delete(f.key);
+        startWaiting();
       });
   };
+
+  /** Starts waiting files while there's room. */
+  const startWaiting = () => {
+    for (const f of filesRef.current) {
+      if (closed.current || running.current.size >= PARALLEL) return;
+      if (f.status === 'waiting' && !running.current.has(f.key)) upload(f);
+    }
+  };
+  useEffect(startWaiting, [files]);
 
   const addFiles = (list: File[]) => {
     const room = MAX_ATTACHMENTS - filesRef.current.length;
@@ -298,7 +320,7 @@ export function Composer({
     const added = list.slice(0, Math.max(0, room)).map((file): PendingFile => {
       // Pasted screenshots are all called image.png.
       const name = /^image\.(png|jpe?g|gif|webp)$/i.test(file.name) ? `Pasted image ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.${file.name.split('.').pop()}` : file.name || 'file';
-      const f: PendingFile = { key: `f${++fileKey}`, file, name, status: 'uploading', progress: 0, abort: new AbortController() };
+      const f: PendingFile = { key: `f${++fileKey}`, file, name, status: 'waiting', progress: 0, abort: new AbortController() };
       if (/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
         f.preview = URL.createObjectURL(file);
         const img = new Image();
@@ -309,7 +331,6 @@ export function Composer({
     });
     if (!added.length) return;
     setFiles((cur) => [...cur, ...added]);
-    added.forEach(upload);
     input.current?.focus();
   };
 
@@ -335,7 +356,7 @@ export function Composer({
     if (matchMedia('(pointer: fine)').matches) input.current?.focus();
   }, [draftKey]);
 
-  const uploading = files.some((f) => f.status === 'uploading');
+  const uploading = files.some((f) => f.status === 'uploading' || f.status === 'waiting');
   const failed = files.some((f) => f.status === 'error');
   const body = text.trim();
   const canSend = (!!body || files.length > 0) && !uploading && !failed;
@@ -408,18 +429,22 @@ export function Composer({
                   {f.preview ? <img src={f.preview} alt="" /> : <span className="upload-icon"><Icon size={20} /></span>}
                   <span className="upload-text">
                     <strong>{f.name}</strong>
-                    <span>{f.status === 'uploading' ? `Uploading ${Math.round(f.progress * 100)}%` : f.status === 'error' ? f.error : formatBytes(f.file.size)}</span>
+                    <span>
+                      {f.status === 'waiting'
+                        ? 'Waiting…'
+                        : f.status === 'uploading'
+                          ? `Uploading ${Math.round(f.progress * 100)}%`
+                          : f.status === 'error'
+                            ? f.error
+                            : formatBytes(f.file.size)}
+                    </span>
                   </span>
                   {f.status === 'error' && (
                     <button
                       type="button"
                       className="upload-btn"
                       title="Try again"
-                      onClick={() => {
-                        const again = { ...f, status: 'uploading' as const, progress: 0, error: undefined, abort: new AbortController() };
-                        setFiles((list) => list.map((x) => (x.key === f.key ? again : x)));
-                        upload(again);
-                      }}
+                      onClick={() => update(f.key, { status: 'waiting', progress: 0, error: undefined, abort: new AbortController() })}
                     >
                       <RotateIcon size={14} />
                     </button>

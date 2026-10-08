@@ -69,6 +69,8 @@ export async function postFile(url: string, file: Blob, headers: Record<string, 
     }
     // Busy (too many uploads at once): wait as long as the server asks, if that's not long.
     if ((res.status === 429 || res.status === 503) && attempt < ATTEMPTS && res.retryAfter > 0 && res.retryAfter <= MAX_RETRY_WAIT_S) {
+      // The refused body went out: it starts again from nothing.
+      opts.onProgress?.(0);
       await wait(res.retryAfter * 1000, opts.signal);
       continue;
     }

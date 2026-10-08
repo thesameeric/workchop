@@ -4,9 +4,11 @@ import {
   cleanTopic,
   dmKey,
   dmPartner,
+  findMention,
   isReactionEmoji,
   MAX_ATTACHMENTS,
   MENTION_TOKEN,
+  mentionToken,
   normalizeChannelName,
   parseMentionTokens,
   reactorId,
@@ -15,12 +17,11 @@ import {
   type ChatMention,
   type ChatMessage,
 } from '../../../shared/chat';
-import { plainText } from '../../../shared/chatText';
 import type { PlayerState } from '../../../shared/types';
 import type { Feature, ServerContext } from '../../features';
 import { randomId } from '../../officeStore';
 import { migrations } from './migrations';
-import { ChatError, ChatStore, isUniqueViolation, toChannel, toMessage, type ChannelRow, type MessageRow } from './store';
+import { ChatError, ChatStore, isUniqueViolation, parentPreview, toChannel, toMessage, type ChannelRow, type MessageRow } from './store';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v);
@@ -100,9 +101,9 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
     const sweep = async () => {
       lastSweep = Date.now();
       try {
-        const { messages, uploads } = await store.sweep(retentionDays);
+        const { threads, uploads } = await store.sweep(retentionDays);
         await ctx.uploads.remove(uploads);
-        if (messages) console.log(`[chat] deleted ${messages} conversations quiet for over ${retentionDays} days`);
+        if (threads) console.log(`[chat] deleted ${threads} messages (with their threads) quiet for over ${retentionDays} days`);
       } catch (err) {
         console.error('[chat] could not delete old messages:', err);
       }
@@ -166,6 +167,12 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       if (!ok) throw new ChatError(why);
     };
     const isMine = (row: MessageRow) => (row.author_user_id ? row.author_user_id === s.user?.id : row.author_player_id === s.socket.id);
+    /**
+     * Renaming and archiving channels and deleting others' messages: the owner, and signed-in people
+     * who may edit the office (not anonymous guests, even where everyone may build).
+     */
+    const mayModerate = () => s.isOwner() || (!!s.user && s.mayEdit());
+    const moderators = (what: string) => new ChatError(s.mayEdit() ? `Sign in to ${what}.` : `Only people who can edit this office can ${what}.`);
     const mayView = (row: MessageRow, officeId: string) =>
       row.office_id === officeId && (!!row.channel_id || (!!s.user && !!row.dm_key?.split(':').includes(s.user.id)));
     /** The conversation a message is in, as this person names it. */
@@ -208,9 +215,15 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
     /**
      * Checks a message's mention tokens: people who are members of the office (or, in a direct
      * message, its two people), guests here now (whose tokens of signed-in people become theirs),
-     * and @here in channels. Anything else becomes plain "@unknown".
+     * and @here in channels. When editing, the mentions the message already has stay as they were
+     * (a guest mentioned earlier may have left). Anything else becomes plain "@unknown".
      */
-    const resolveMentions = async (text: string, h: Here, scope: { kind: 'channel' } | { kind: 'dm'; users: string[] } | { kind: 'live' }): Promise<Mentioned> => {
+    const resolveMentions = async (
+      text: string,
+      h: Here,
+      scope: { kind: 'channel' } | { kind: 'dm'; users: string[] } | { kind: 'live' },
+      kept: ChatMention[] = [],
+    ): Promise<Mentioned> => {
       const out: Mentioned = { text, mentions: [], users: [], players: [], here: false };
       const tokens = parseMentionTokens(text);
       if (!tokens.length) return out;
@@ -220,7 +233,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         scope.kind === 'live' ? new Map<string, string>() : await store.membersAmong(h.officeId, scope.kind === 'dm' ? wanted.filter((u) => scope.users.includes(u)) : wanted);
       const replace = new Map<string, string>();
       tokens.forEach((t, i) => {
-        const token = t.kind === 'here' ? '<!here>' : `<@${t.kind === 'user' ? 'u' : 'p'}:${t.id}>`;
+        const token = mentionToken(t);
         if (i >= MAX_MENTIONS) return void replace.set(token, '@unknown');
         if (t.kind === 'here') {
           if (scope.kind !== 'channel') return void replace.set(token, '@here');
@@ -243,6 +256,9 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           out.mentions.push({ kind: 'player', id: guest.id, name: guest.name });
           return;
         }
+        // Kept as it was, without notifying anyone again.
+        const before = findMention(kept, t.kind, t.id);
+        if (before) return void out.mentions.push(before);
         replace.set(token, '@unknown');
       });
       if (replace.size) out.text = text.replace(MENTION_TOKEN, (token) => replace.get(token) ?? token);
@@ -349,6 +365,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
 
         if (t.kind === 'nearby' || t.kind === 'live') {
           const m = await resolveMentions(text, h, { kind: 'live' });
+          await store.claimLive(attachments.map((a) => a.id));
           const msg: ChatMessage = {
             id: randomId(16),
             channelId: null,
@@ -394,7 +411,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           conv: t.conv,
         });
         const msg = toMessage(message);
-        if (parent && message.in_channel) msg.parent = { name: parent.author_name, text: plainText(parent.text, parent.mentions, 90) };
+        if (parent && message.in_channel) msg.parent = { name: parent.author_name, text: parentPreview(parent.text, parent.mentions) };
         if (nonce) msg.nonce = nonce;
         deliver(h.officeId, message, 'chat:message', msg);
         if (updatedParent) deliver(h.officeId, updatedParent, 'chat:updated');
@@ -411,7 +428,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         if (!isMine(row)) throw new ChatError('You can only edit your own messages.');
         const text = cleanMessageText(rawText);
         if (!text && !row.attachments.length) throw new ChatError('A message can’t be empty. Delete it instead.');
-        const m = await resolveMentions(text, h, row.channel_id ? { kind: 'channel' } : { kind: 'dm', users: row.dm_key!.split(':') });
+        const m = await resolveMentions(text, h, row.channel_id ? { kind: 'channel' } : { kind: 'dm', users: row.dm_key!.split(':') }, row.mentions);
         const mentionUsers = row.channel_id ? mentionUsersOf(h, m, row.author_user_id) : [];
         const { message, added } = await store.edit(row.id, m.text, m.mentions, mentionUsers, savedConv(row), (fresh) => {
           if (!isMine(fresh)) throw new ChatError('You can only edit your own messages.');
@@ -435,8 +452,8 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         const h = here();
         limit(canChange());
         const row = await visible(id, h.officeId);
-        // Your own, or in a channel anyone's for people who may edit the office.
-        const allowed = (r: MessageRow) => isMine(r) || (!!r.channel_id && s.mayEdit());
+        // Your own, or in a channel anyone's for moderators.
+        const allowed = (r: MessageRow) => isMine(r) || (!!r.channel_id && mayModerate());
         if (!allowed(row)) throw new ChatError('You can only delete your own messages.');
         const { message, parent, uploads } = await store.remove(row.id, (fresh) => {
           if (!allowed(fresh)) throw new ChatError('You can only delete your own messages.');
@@ -519,7 +536,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           const error = channelNameError(name);
           if (error) throw new ChatError(error);
           if (name !== row.name) {
-            if (!s.mayEdit()) throw new ChatError('Only people who can edit this office can rename channels.');
+            if (!mayModerate()) throw moderators('rename channels');
             if (row.is_default) throw new ChatError('#general can’t be renamed.');
             patch.name = name;
           }
@@ -544,7 +561,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         const h = here();
         limit(canManage());
         const row = await managed(id, h);
-        if (!s.mayEdit()) throw new ChatError('Only people who can edit this office can archive channels.');
+        if (!mayModerate()) throw moderators('archive channels');
         if (row.is_default) throw new ChatError('#general can’t be archived.');
         if (!archived && (await store.openChannelCount(h.officeId)) >= MAX_CHANNELS) throw new ChatError(`An office can have up to ${MAX_CHANNELS} channels.`);
         let updated: ChannelRow;

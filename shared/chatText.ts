@@ -15,18 +15,53 @@ export type Inline =
 export type Block = { t: 'p'; c: Inline[] } | { t: 'pre'; v: string };
 
 const CODE_BLOCK = /```([\s\S]*?)```/g;
-/** Code, a mention token, a link, **bold** or _italic_; the first that starts earliest wins. */
-const INLINE = /`([^`\n]+)`|<@([up]):([A-Za-z0-9_-]{1,40})>|(<!here>)|(https?:\/\/[^\s<>"]+)|\*\*(?=\S)([\s\S]*?\S)\*\*|_(?=[^\s_])([^_\n]*?[^\s_])_(?![\p{L}\p{N}_])/gu;
+/**
+ * Code, a mention token, a link, the start of **bold** or _italic_; the first that starts earliest
+ * wins. Bold's end is looked up separately (see boldEnds), which keeps parsing linear.
+ */
+const INLINE = /`([^`\n]+)`|<@([up]):([A-Za-z0-9_-]{1,40})>|(<!here>)|(https?:\/\/[^\s<>"]+)|(\*\*)(?=\S)|_(?=[^\s_])([^_\n]*?[^\s_])_(?![\p{L}\p{N}_])/gu;
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 const MAX_DEPTH = 4;
+/** Longer "links" stay plain text. */
+const MAX_LINK = 2048;
+const TRAILING = new Set([...'.,;:!?\'"]*_']);
 
-/** A link without the punctuation that usually ends the sentence around it. */
+/** A link without the punctuation that usually ends the sentence around it (in one pass). */
 function trimUrl(url: string): string {
-  for (;;) {
-    if (/[.,;:!?'"\]*_]$/.test(url)) url = url.slice(0, -1);
-    else if (url.endsWith(')') && url.split('(').length < url.split(')').length) url = url.slice(0, -1);
-    else return url;
+  let open = 0;
+  let close = 0;
+  for (const c of url) {
+    if (c === '(') open++;
+    else if (c === ')') close++;
   }
+  let end = url.length;
+  for (; end > 0; end--) {
+    const c = url[end - 1];
+    if (TRAILING.has(c)) continue;
+    // A ")" stays when it closes a "(" in the link, as in wikipedia.org/wiki/Foo_(bar).
+    if (c === ')' && open < close) close--;
+    else break;
+  }
+  return url.slice(0, end);
+}
+
+/** Where "**" can end bold text (after a non-space character), in order. */
+function boldEnds(s: string): number[] {
+  const out: number[] = [];
+  for (let i = s.indexOf('**', 1); i >= 0; i = s.indexOf('**', i + 1)) if (/\S/.test(s[i - 1])) out.push(i);
+  return out;
+}
+
+/** The first of these sorted positions that is at least `min`. */
+function firstFrom(sorted: number[], min: number): number | undefined {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] < min) lo = mid + 1;
+    else hi = mid;
+  }
+  return sorted[lo];
 }
 
 function pushText(out: Inline[], v: string): void {
@@ -43,6 +78,7 @@ function pushText(out: Inline[], v: string): void {
 export function parseInline(s: string, depth = 0): Inline[] {
   const out: Inline[] = [];
   const re = new RegExp(INLINE.source, INLINE.flags);
+  let ends: number[] | null = null;
   let at = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(s))) {
@@ -53,12 +89,24 @@ export function parseInline(s: string, depth = 0): Inline[] {
     else if (m[2] !== undefined) node = { t: 'mention', kind: m[2] === 'u' ? 'user' : 'player', id: m[3] };
     else if (m[4] !== undefined) node = { t: 'mention', kind: 'here' };
     else if (m[5] !== undefined) {
+      if (m[5].length > MAX_LINK) {
+        // Kept as text, and not looked through again.
+        re.lastIndex = end;
+        continue;
+      }
       const href = trimUrl(m[5]);
       if (href.length > 'https://'.length) {
         node = { t: 'link', href };
         end = start + href.length;
       }
-    } else if (m[6] !== undefined) node = depth < MAX_DEPTH ? { t: 'b', c: parseInline(m[6], depth + 1) } : null;
+    } else if (m[6] !== undefined) {
+      // **bold** runs to the first "**" that can end it, with at least one character in between.
+      const close = depth < MAX_DEPTH ? firstFrom((ends ??= boldEnds(s)), start + 3) : undefined;
+      if (close !== undefined) {
+        node = { t: 'b', c: parseInline(s.slice(start + 2, close), depth + 1) };
+        end = close + 2;
+      }
+    }
     // _italic_ only at a word's edge, so snake_case_names stay as they are.
     else if (m[7] !== undefined && (start === 0 || !WORD_CHAR.test(s[start - 1]))) node = depth < MAX_DEPTH ? { t: 'i', c: parseInline(m[7], depth + 1) } : null;
     if (!node) {

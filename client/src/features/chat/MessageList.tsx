@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { JumpButton } from './Attachments';
 import { Message } from './Message';
-import { dayLabel, sameDay, useMayEdit } from './parts';
+import { dayLabel, sameDay, useMayModerate } from './parts';
 import { isMine, reveal, useChat, type ListState, type UiMessage } from './state';
 
 /** Messages by the same person this close together share one avatar and name. */
@@ -56,11 +56,12 @@ export function MessageList({
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const lastTop = useRef(0);
   const [unseen, setUnseen] = useState(0);
   const [showJump, setShowJump] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const jump = useChat((s) => s.jump);
-  const canModerate = useMayEdit();
+  const canModerate = useMayModerate();
   const prev = useRef<{ first?: string; last?: string; height: number; count: number }>({ height: 0, count: 0 });
   const { messages } = list;
 
@@ -85,7 +86,8 @@ export function MessageList({
     prev.current = { first, last: last?.id, height: el.scrollHeight, count: messages.length };
   }, [messages]);
 
-  // Images loading (and other late layout changes) keep a pinned list at the bottom.
+  // Images loading (and other late layout changes), or the list itself getting shorter (the panel
+  // making room for video tiles, a phone's keyboard), keep a pinned list at the bottom.
   useEffect(() => {
     const el = scroller.current;
     const inner = content.current;
@@ -95,6 +97,7 @@ export function MessageList({
       prev.current.height = el.scrollHeight;
     });
     ro.observe(inner);
+    ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
@@ -126,7 +129,10 @@ export function MessageList({
     const el = scroller.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    pinned.current = atBottom;
+    // Only scrolling up lets go of the bottom, not content growing below before it's caught up with.
+    if (atBottom) pinned.current = true;
+    else if (el.scrollTop < lastTop.current) pinned.current = false;
+    lastTop.current = el.scrollTop;
     if (atBottom) {
       setUnseen(0);
       setShowJump(false);

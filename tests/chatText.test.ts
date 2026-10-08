@@ -82,6 +82,22 @@ describe('message formatting', () => {
     expect(plainText('x'.repeat(200), [], 10)).toBe('xxxxxxxxx…');
   });
 
+  it('stays quick on long, unusual messages, and leaves overlong links as text', () => {
+    const tricky = ['http://a' + ')'.repeat(3990), '**x '.repeat(1000), '**a'.repeat(1333), '**_**_**_**_'.repeat(333), ('http://a(' + ')'.repeat(10)).repeat(200)];
+    const started = performance.now();
+    for (const text of tricky) {
+      parseMessage(text);
+      plainText(text, []);
+    }
+    // Each took up to hundreds of milliseconds when link endings were trimmed one ")" at a time.
+    expect(performance.now() - started).toBeLessThan(150);
+    expect(parseInline('see http://a.io/x)))')).toEqual([{ t: 'text', v: 'see ' }, { t: 'link', href: 'http://a.io/x' }, { t: 'text', v: ')))' }]);
+    const long = `https://example.com/${'a'.repeat(2100)}`;
+    expect(parseInline(`${long} **ok**`)).toEqual([{ t: 'text', v: `${long} ` }, { t: 'b', c: [{ t: 'text', v: 'ok' }] }]);
+    expect(parseInline('**a** b **c**')).toEqual([{ t: 'b', c: [{ t: 'text', v: 'a' }] }, { t: 'text', v: ' b ' }, { t: 'b', c: [{ t: 'text', v: 'c' }] }]);
+    expect(parseInline('**no end')).toEqual([{ t: 'text', v: '**no end' }]);
+  });
+
   it('spots emoji-only messages', () => {
     expect(isJumbo('🎉')).toBe(true);
     expect(isJumbo('👍🏽 ❤️')).toBe(true);

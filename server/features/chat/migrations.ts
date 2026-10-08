@@ -50,12 +50,14 @@ export const migrations: Migration[] = [
       CREATE INDEX chat_messages_channel_idx ON chat_messages (channel_id, created_at, id);
       CREATE INDEX chat_messages_parent_idx ON chat_messages (parent_id, created_at, id);
       CREATE INDEX chat_messages_dm_idx ON chat_messages (office_id, dm_key, created_at, id) WHERE dm_key IS NOT NULL;
-      CREATE INDEX chat_messages_office_idx ON chat_messages (office_id, created_at);
+      -- For the foreign key (an office's messages go with it).
+      CREATE INDEX chat_messages_office_idx ON chat_messages (office_id);
 
-      -- Which message each uploaded file belongs to (a file is attached once).
+      -- Which message each uploaded file belongs to (a file is attached once). Files sent in live
+      -- messages, which aren't saved, have no message.
       CREATE TABLE chat_attachments (
         upload_id  uuid PRIMARY KEY REFERENCES uploads ON DELETE CASCADE,
-        message_id uuid NOT NULL REFERENCES chat_messages ON DELETE CASCADE
+        message_id uuid REFERENCES chat_messages ON DELETE CASCADE
       );
       CREATE INDEX chat_attachments_message_idx ON chat_attachments (message_id);
 
@@ -91,6 +93,7 @@ export const migrations: Migration[] = [
         PRIMARY KEY (user_id, message_id)
       );
       CREATE INDEX chat_mentions_unread_idx ON chat_mentions (user_id, office_id) WHERE read_at IS NULL;
+      CREATE INDEX chat_mentions_message_idx ON chat_mentions (message_id);
 
       -- Every office starts with #general.
       INSERT INTO chat_channels (office_id, name, is_default) SELECT id, 'general', true FROM offices;`,

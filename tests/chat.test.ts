@@ -191,6 +191,27 @@ describe('chat messages', () => {
     expect(failed(await ann.socket.emitWithAck('chat:edit', long.id, 'back'))).toMatch(/deleted/);
   });
 
+  it('in an open office are moderated by the owner and signed-in people, not by guests', async () => {
+    const { id, ownerKey } = await createOffice(base);
+    const owner = await join(base, id, 'Owner', { ownerKey });
+    const ann = await join(base, id, 'Ann');
+    const gus = await join(base, id, 'Gus');
+    const mia = await join(base, id, 'Mia', { jar: (await signIn('Mia')).jar });
+    const conv = `c:${(await general(ann.socket)).id}`;
+    const first = ok(await send(ann.socket, { conv, text: 'hello' })).message;
+    const second = ok(await send(ann.socket, { conv, text: 'again' })).message;
+    const side = ok(await gus.socket.emitWithAck('channel:create', { name: 'side' })).channel;
+
+    // Everyone may build here, but a guest can't take down others' messages or channels.
+    expect(failed(await gus.socket.emitWithAck('chat:delete', first.id))).toMatch(/your own/);
+    expect(failed(await gus.socket.emitWithAck('channel:archive', side.id, true))).toMatch(/Sign in to archive/);
+    expect(failed(await gus.socket.emitWithAck('channel:update', { id: side.id, name: 'other' }))).toMatch(/Sign in to rename/);
+    expect(ok(await mia.socket.emitWithAck('channel:update', { id: side.id, name: 'other' })).channel.name).toBe('other');
+    ok(await mia.socket.emitWithAck('channel:archive', side.id, true));
+    ok(await mia.socket.emitWithAck('chat:delete', first.id));
+    ok(await owner.socket.emitWithAck('chat:delete', second.id));
+  });
+
   it('keep threads with reply counts, and replies also sent to the channel', async () => {
     const { id } = await createOffice(base);
     const ann = await join(base, id, 'Ann');
@@ -289,13 +310,15 @@ describe('chat messages', () => {
     const ann = await join(base, id, 'Ann');
     const bob = await join(base, id, 'Bob');
     const cat = await join(base, id, 'Cat');
-    // Ann and Bob stand together; Cat is far away.
-    const linked = collect(ann.socket, 'peer:connect');
+    // Everyone starts out at the same spot: first they move apart, then Ann and Bob stand together.
+    const annsPeers = () => server.realtime.linkedPeers(id, ann.socket.id!);
+    ann.socket.emit('move', 1, 1, 0, 'idle');
+    bob.socket.emit('move', 19, 1, 0, 'idle');
+    cat.socket.emit('move', 18, 14, 0, 'idle');
+    await until(() => annsPeers().length === 0 && server.realtime.linkedPeers(id, bob.socket.id!).length === 0);
     ann.socket.emit('move', 5, 5, 0, 'idle');
     bob.socket.emit('move', 5.5, 5, 0, 'idle');
-    cat.socket.emit('move', 18, 14, 0, 'idle');
-    await until(() => linked.some(([peer]) => peer === bob.socket.id));
-    await wait(100);
+    await until(() => annsPeers().join() === bob.socket.id);
     const toBob = collect(bob.socket, 'chat:message');
     const toCat = collect(cat.socket, 'chat:message');
     const msg = ok(await send(ann.socket, { conv: 'nearby', text: 'psst <!here>' })).message;
@@ -367,6 +390,15 @@ describe('chat mentions', () => {
     ok(await m.socket.emitWithAck('chat:edit', plain.id, `now <@u:${ava.user.id}>!`));
     await wait(150);
     expect(toAva).toHaveLength(2);
+    // A guest mentioned earlier stays mentioned (without a new notice) when the message is edited after they left.
+    const thanks = ok(await send(m.socket, { conv, text: `thanks <@p:${g.socket.id}> for the notes` })).message;
+    await until(() => toGus.length === 2);
+    const gusId = g.socket.id!;
+    g.socket.disconnect();
+    await until(() => server.realtime.onlineCount(id) === 3);
+    const fixed = ok(await m.socket.emitWithAck('chat:edit', thanks.id, `thanks <@p:${gusId}> for the notes!`)).message;
+    expect(fixed.text).toBe(`thanks <@p:${gusId}> for the notes!`);
+    expect(fixed.mentions).toEqual([{ kind: 'player', id: gusId, name: 'Gus' }]);
     // Deleting a message takes its mentions back.
     ok(await m.socket.emitWithAck('chat:delete', plain.id));
     a.socket.emit('chat:read', conv);
@@ -466,6 +498,11 @@ describe('chat attachments', () => {
     expect(failed(await send(bob.socket, { conv, text: 'fake', attachments: [{ id: 'not-a-uuid' }] }))).toBe('Bad request');
     expect(failed(await send(bob.socket, { conv, text: 'many', attachments: Array.from({ length: 6 }, () => ({ id: bobs.id })) }))).toMatch(/Up to 5/);
 
+    // Files sent in a live message are used up too.
+    const shown = await upload(ann.socket, keyOf(ann.res), id, 'live.png', Buffer.from('live'));
+    ok(await send(ann.socket, { conv: 'nearby', text: 'look', attachments: [{ id: shown.id }] }));
+    expect(failed(await send(ann.socket, { conv, text: 'again', attachments: [{ id: shown.id }] }))).toMatch(/upload them again/);
+
     // Edits keep the files; deleting the message deletes them.
     expect(ok(await ann.socket.emitWithAck('chat:edit', msg.id, 'a cat')).message.attachments).toHaveLength(2);
     expect((await fetch(`${base}${png.url}`)).status).toBe(200);
@@ -481,6 +518,15 @@ describe('chat retention', () => {
     const ann = await join(base, id, 'Ann');
     const conv = `c:${(await general(ann.socket)).id}`;
     const file = await upload(ann.socket, keyOf(ann.res), id, 'old.png', Buffer.from('old'));
+    const liveFile = await upload(ann.socket, keyOf(ann.res), id, 'shown.png', Buffer.from('shown'));
+    ok(await send(ann.socket, { conv: 'nearby', text: 'look', attachments: [{ id: liveFile.id }] }));
+    await server.db.query(`UPDATE uploads SET created_at = now() - interval '40 days' WHERE id = $1`, [liveFile.id]);
+    const ava = await signIn('Ava');
+    const zed = await signIn('Zed');
+    const a = await join(base, id, 'Ava', { jar: ava.jar });
+    await join(base, id, 'Zed', { jar: zed.jar });
+    const dm = ok(await send(a.socket, { conv: `d:${zed.user.id}`, text: 'old news' })).message;
+    await server.db.query(`UPDATE chat_messages SET created_at = now() - interval '40 days' WHERE id = $1`, [dm.id]);
     const old = ok(await send(ann.socket, { conv, text: 'long ago', attachments: [{ id: file.id }] })).message;
     const reply = ok(await send(ann.socket, { conv, text: 'also long ago', parentId: old.id })).message;
     const recentThread = ok(await send(ann.socket, { conv, text: 'old start, recent reply' })).message;
@@ -494,6 +540,9 @@ describe('chat retention', () => {
     await until(async () => ok(await ann.socket.emitWithAck('chat:history', { conv })).messages.length === 1);
     expect(ok(await ann.socket.emitWithAck('chat:history', { conv })).messages[0].id).toBe(recentThread.id);
     await until(async () => (await fetch(`${base}${file.url}`)).status === 404);
+    // Files sent in live messages that long ago, and direct message conversations left empty, go too.
+    await until(async () => (await fetch(`${base}${liveFile.url}`)).status === 404);
+    expect((await channels(a.socket)).dms).toEqual([]);
   });
 
   it('is read from CHAT_RETENTION_DAYS', async () => {

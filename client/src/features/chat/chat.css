@@ -1,5 +1,6 @@
 /* Chat panel. Like the rest of the office HUD it sits on dark glass in both themes, so it uses
-   the --glass-* colours; overlays outside the office (lightbox, emoji picker) do too. */
+   the --glass-* colours; overlays outside the office (lightbox, emoji picker) do too. Hover and
+   focus changes fade quickly (0.1-0.15s); nothing moves with reduced motion. */
 
 .office:has(> .side-panel.chat) {
   --panel-w: min(620px, calc(100vw - 24px));
@@ -8,6 +9,17 @@
 @media (max-width: 1100px) {
   .office:has(> .side-panel.chat) {
     --panel-w: min(420px, calc(100vw - 24px));
+  }
+}
+
+/* Beside the wide chat panel the video tiles are a bit smaller, so two fit next to it at 1280 px. */
+@media (min-width: 961px) {
+  .office:has(> .side-panel.chat) .video-strip {
+    max-width: calc(100vw - var(--panel-w) - 370px);
+  }
+
+  .office:has(> .side-panel.chat) .video-strip .tile {
+    width: 132px;
   }
 }
 
@@ -68,6 +80,7 @@ button.rail-section {
 }
 
 .rail-toggle .hgi {
+  transition: transform 0.15s;
 }
 
 .rail-toggle.open .hgi {
@@ -83,6 +96,7 @@ button.rail-section {
   border-radius: 6px;
   background: transparent;
   color: var(--glass-muted);
+  transition: background-color 0.12s, color 0.12s;
 }
 
 .rail-add:hover {
@@ -101,6 +115,7 @@ button.rail-section {
   background: transparent;
   color: var(--glass-muted);
   text-align: left;
+  transition: background-color 0.12s, color 0.12s;
 }
 
 .rail-item:hover {
@@ -258,6 +273,7 @@ button.rail-section {
   border: 0;
   background: none;
   text-align: left;
+  transition: color 0.12s;
 }
 
 .conv-topic:hover {
@@ -308,6 +324,7 @@ button.rail-section {
   border-radius: 8px;
   background: transparent;
   text-align: left;
+  transition: background-color 0.12s;
 }
 
 .chat-menu button:hover,
@@ -328,11 +345,14 @@ button.rail-section {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  /* The list keeps its place itself when older messages come in above. */
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--glass-raised) transparent;
 }
 
 .chat-content {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 100%;
@@ -366,12 +386,28 @@ button.rail-section {
   color: var(--chat-accent);
 }
 
-.chat-loading-older,
 .chat-error {
   padding: 10px;
   color: var(--glass-muted);
   font-size: 0.8rem;
   text-align: center;
+}
+
+/* Over the messages, so they don't move when it comes and goes. */
+.chat-loading-older {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-line);
+  background: var(--glass-solid);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  color: var(--glass-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .chat-error p {
@@ -467,6 +503,7 @@ button.rail-section {
   grid-template-columns: 34px minmax(0, 1fr);
   column-gap: 10px;
   padding: 6px 14px 4px;
+  transition: background-color 0.12s;
 }
 
 .msg.grouped {
@@ -722,6 +759,7 @@ button.rail-section {
   border-radius: 7px;
   background: transparent;
   color: var(--glass-muted);
+  transition: background-color 0.12s, color 0.12s;
 }
 
 .msg-actions > button:hover {
@@ -775,6 +813,7 @@ button.rail-section {
   border: 1px solid var(--glass-line);
   background: var(--glass-soft);
   font-size: 0.8rem;
+  transition: background-color 0.12s, border-color 0.12s, transform 0.08s;
 }
 
 .reaction:hover:not(:disabled) {
@@ -809,6 +848,7 @@ button.rail-section {
 .reaction.add {
   color: var(--glass-muted);
   opacity: 0;
+  transition: opacity 0.12s;
 }
 
 .msg:hover .reaction.add,
@@ -850,6 +890,7 @@ button.rail-section {
   border: 1px solid transparent;
   background: transparent;
   font-size: 0.78rem;
+  transition: background-color 0.12s, border-color 0.12s;
 }
 
 .thread-summary:hover {
@@ -975,6 +1016,7 @@ button.rail-section {
   background: var(--glass-soft);
   color: inherit;
   text-decoration: none;
+  transition: background-color 0.12s, border-color 0.12s;
 }
 
 .att-file:hover {
@@ -1091,6 +1133,7 @@ button.rail-section {
   border-radius: 12px;
   border: 1px solid var(--glass-line);
   background: var(--glass-fill);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .composer-box:focus-within {
@@ -1147,6 +1190,7 @@ button.rail-section {
   border-radius: 8px;
   background: transparent;
   text-align: left;
+  transition: background-color 0.1s;
 }
 
 .mention-menu button.active {
@@ -1242,6 +1286,7 @@ button.rail-section {
   border-radius: 8px;
   background: var(--glass-raised);
   color: var(--glass-muted);
+  transition: background-color 0.15s, color 0.15s;
 }
 
 .composer-send.ready {
@@ -1327,6 +1372,7 @@ button.rail-section {
   border-radius: 6px;
   background: transparent;
   color: var(--glass-muted);
+  transition: background-color 0.12s, color 0.12s;
 }
 
 .upload-btn:hover {
@@ -1342,6 +1388,7 @@ button.rail-section {
   height: 2px;
   background: var(--primary);
   transform-origin: left;
+  transition: transform 0.2s ease-out;
 }
 
 .edit-box {
@@ -1485,6 +1532,57 @@ button.rail-section {
   margin-top: 16px;
 }
 
+/* New message: people to pick */
+.new-message > input {
+  width: 100%;
+  margin: 10px 0 6px;
+}
+
+.people-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(320px, 45vh);
+  margin: 0 -6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.people-pick button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  transition: background-color 0.1s;
+}
+
+.people-pick button:hover,
+.people-pick button:focus-visible {
+  background: var(--glass-raised);
+}
+
+.people-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.people-pick-hint {
+  color: var(--glass-muted);
+  font-size: 0.75rem;
+}
+
+.people-pick p {
+  margin: 8px 6px;
+}
+
 /* ---------- Overlays on the page (portals) ---------- */
 
 .emoji-picker {
@@ -1513,6 +1611,7 @@ button.rail-section {
   background: transparent;
   font-size: 1.3rem;
   line-height: 1;
+  transition: background-color 0.1s, transform 0.1s;
 }
 
 .emoji-grid button:hover {
@@ -1591,6 +1690,7 @@ button.rail-section {
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
   text-decoration: none;
+  transition: background-color 0.12s;
 }
 
 .lightbox-btn:hover,
@@ -1659,8 +1759,15 @@ button.rail-section {
 }
 
 @media (max-width: 720px) {
+  /* Solid, so nothing behind it shows through its small text. */
   .side-panel.chat {
     height: min(78vh, calc(100dvh - 96px));
+    background: var(--glass-solid);
+  }
+
+  /* In a call it ends below the video tiles. */
+  .office:has(> .video-strip) .side-panel.chat {
+    height: min(78vh, calc(100dvh - 236px));
   }
 
   .msg {
@@ -1692,7 +1799,10 @@ button.rail-section {
 @media (prefers-reduced-motion: reduce) {
   .chat-panel *,
   .emoji-picker,
-  .lightbox {
+  .emoji-picker *,
+  .lightbox,
+  .lightbox * {
     animation: none !important;
+    transition: none !important;
   }
 }
