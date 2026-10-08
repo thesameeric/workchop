@@ -60,6 +60,8 @@ interface State {
   players: Record<string, RemotePlayer>;
 
   me: { name: string; avatar: AvatarConfig; status: Status };
+  /** Headphones on: you hear nobody and no music (until you take them off or leave the office). */
+  focus: boolean;
   media: { mic: boolean; cam: boolean; screen: boolean; version: number; error: string | null };
 
   /** People we currently have a call link with. */
@@ -129,6 +131,11 @@ export function setMusicPrefs(prefs: { volume?: number; muted?: boolean }): void
   }
 }
 
+/** How loud music plays for you (0..1): your own volume, or silence when muted or wearing headphones. */
+export function personalMusicVolume(st: Pick<State, 'music' | 'focus'> = getState()): number {
+  return st.music.muted || st.focus ? 0 : st.music.volume;
+}
+
 export const initialBuild: State['build'] = { tool: 'select', placeType: null, rot: 0, selectedId: null, selectedZoneId: null };
 
 export const useStore = create<State>()(() => ({
@@ -143,6 +150,7 @@ export const useStore = create<State>()(() => ({
   office: null,
   players: {},
   me: { name: profile.name, avatar: profile.avatar, status: 'available' },
+  focus: false,
   media: { mic: false, cam: false, screen: false, version: 0, error: null },
   linked: {},
   streams: {},

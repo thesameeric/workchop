@@ -10,10 +10,12 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Screen sharing, mute and camera toggles, device selection (mic, camera, speakers), and a talking indicator on video tiles and characters.
 - Click a video tile to enlarge it, e.g. to follow a screen share.
 - A "Do not disturb" status keeps you out of conversations except inside private areas.
+- **Noise-cancelling headphones** (🎧 dock button or `H`): put them on to focus. You stop hearing everyone and the lounge music, even inside a private area, while people can still hear you (unless you're muted). Everyone sees the headphones on your character, name tag, video tile and in the people list. People who walk up see "wearing headphones" and can **tap you on the shoulder** (click your character, or the tap button in the people list): you get a toast and a soft knock, at most once every 30 s from each person. Taking them off brings everything back at once; they come off when you leave the office.
+- **Noise suppression** (Settings → Audio & video): *Standard* is the browser's built-in filter. *Enhanced* also runs [RNNoise](https://github.com/xiph/rnnoise) in your browser to remove typing, fans and background chatter (loaded only when chosen; it falls back to Standard by itself if the browser or device can't run it).
 
 **Your character**
 - A procedurally built 3D character: skin tone, 7 hairstyles (or bald) and hair colour, T-shirt / hoodie / suit / dress, colours for top, bottoms and shoes, hats (cap, beanie, top hat, crown, headphones), glasses, and facial hair. You can also pick custom colours.
-- Walking animation, sitting on chairs, sofas and stools, and reactions (👋 waves, ✋ raises a hand).
+- Walking animation, sitting on chairs, sofas and stools, and 10 reactions everyone sees (`1`–`9`, `0`): 👋 waves, ❤️ sends hearts floating up, 😂, 👍, 🎉 pops 3D confetti (and showers your own screen a little), ✋ raises a hand, 💃 dances for a few seconds (until you walk off), 👏 claps, 🔥 lights little flames and 🙌 throws both arms up.
 - Your look and name are saved in the browser and can be changed at any time, even inside an office.
 
 **The office**
@@ -38,8 +40,9 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 | --- | --- |
 | `W` `A` `S` `D` / arrows | Move (`Shift` to run) |
 | `E` | Sit / stand |
-| `1`–`6` | Reactions |
+| `1`–`9`, `0` | Reactions |
 | `M` / `V` | Toggle microphone / camera |
+| `H` | Noise-cancelling headphones (focus mode) |
 | `B` | Build mode |
 | `Enter` | Open chat |
 | `R`, `Del`, `Ctrl+D`, `Esc` | Rotate, delete, duplicate, cancel (build mode) |
@@ -167,6 +170,8 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
 | Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
+| Headphones (focus mode) | In memory only, while you're in the office |
+| Noise suppression choice, devices | Each person's browser (local storage) |
 | Who's online, positions, calls | In memory only (live state) |
 
 **Postgres or PGlite?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in an `offices` table; the tables are created and upgraded automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. Without `DATABASE_URL`, the server runs PGlite, Postgres compiled to WebAssembly, inside its own process: no setup, fine for development and a single small server with a persistent disk, but it needs about 300–500 MB of memory and every query briefly pauses the server. Switching between the two doesn't move data over.
@@ -229,6 +234,10 @@ The built-in radio stations work out of the box. Two things to know before addin
   2. Set `SPOTIFY_CLIENT_ID` (in `.env` for Docker Compose) and restart. No client secret is needed (sign-in uses PKCE).
   3. Every listener needs **Spotify Premium** and a desktop browser. Apps in Spotify's *development mode* work only for accounts you add under *User Management* (currently up to 5). Spotify grants wider access only to established organisations, and its developer policy doesn't allow apps aimed at businesses. So treat listen-along as a feature for small teams and friends, and use the board's links and Jams for everyone else.
 
+### Headphones and noise suppression
+
+Nothing to set up: no environment variables, keys or third-party services. Enhanced noise suppression runs RNNoise ([@sapphi-red/web-noise-suppressor](https://github.com/sapphi-red/web-noise-suppressor), MIT) in an AudioWorklet in each browser; its worklet and WebAssembly files (about 130 KB gzipped) are part of the build and are only downloaded by people who turn it on. It needs a browser with AudioWorklet (Chrome, Edge, Firefox 76+, Safari 14.1+) and 48 kHz audio; elsewhere it says so and keeps Standard. If you put a Content-Security-Policy in front of Workchop (in Caddy or the Worker), allow `'wasm-unsafe-eval'` and scripts from `'self'`.
+
 ## How it works
 
 ```
@@ -237,7 +246,8 @@ client/   React + react-three-fiber app (Vite)
   src/ui/      Landing page, lobby, character editor, dock, chat, people and build panels,
                the side panel (panels.tsx) and settings (settings.tsx) registries
   src/lib/     Socket session and its hooks (session.ts), sign-in and account (account.ts),
-               WebRTC mesh (peers.ts), local media, speaking detection, file uploads (upload.ts),
+               WebRTC mesh (peers.ts), local media (media.ts) and its RNNoise pipeline (noise.ts),
+               headphones (focus.ts), speaking detection, file uploads (upload.ts),
                lounge radio (radio.ts, genmusic.ts), Spotify listen-along (spotify.ts)
   src/features/  Client features, loaded automatically (see Development)
 server/   Express + Socket.IO
@@ -252,6 +262,7 @@ server/   Express + Socket.IO
   accounts.ts  Users, sign-in identities, office memberships
   uploads.ts   File uploads and downloads (database, disk or S3/R2)
   features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
+  features/audio.ts  Shoulder taps for people wearing headphones
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangler.jsonc, worker.ts)
@@ -259,6 +270,8 @@ cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangle
 
 - **The server decides who talks to whom.** Clients stream their position to the server, which runs the proximity and private-area rules in `shared/geometry.ts`. When two people should be connected it sends `peer:connect` to both, with a link id and which side makes the WebRTC offer. When they drift apart it sends `peer:disconnect`. Signalling messages are relayed only between currently linked people, on their current link id, so nobody can open a call with someone they shouldn't hear.
 - **Media is peer-to-peer** (a mesh). Every connection always has one audio and one video transceiver, so muting, turning the camera on or off, or starting a screen share is just `replaceTrack`, with no renegotiation. Remote audio volume is set from the distance between the two people.
+- **Headphones mute, they don't disconnect.** Focus mode mutes the `<audio>` element of each call (`el.muted`, since iOS ignores `volume`) and turns the music down to zero, but keeps every call connected, so taking the headphones off is instant. Remote audio stays on media elements rather than Web Audio, so the browser's echo cancellation keeps working.
+- **Enhanced noise suppression** sends the microphone through a 48 kHz AudioContext (mono mix → RNNoise → a MediaStreamDestination) and sends that track instead, with `replaceTrack` like a mute. Muting disables the processed track. The pipeline is built once per visit and closed when you leave; if the worklet fails, the context isn't running (no click yet, or a phone call on iOS), or the mic can't be connected, the plain microphone is sent instead so nobody hears silence. A replaced or unplugged mic is picked up again.
 - **Office edits are operations** (`add`, `update`, `remove`, `zone:*`, `settings`). They are applied optimistically on the client and validated and normalised by the server with the same `applyOp` code. The server then echoes them to everyone in its own order, so all clients converge. Rejected edits trigger a full resync.
 - **Music is synced by clock, not streamed.** Clients estimate the server's clock (`time` pings). The built-in stations are generated from it with a seeded pattern, so every browser plays the same bar. Track lists play from a shared start time. Listen-along sessions store the DJ's track, position and server time, and listeners seek to match (the DJ re-sends on track changes, pauses and seeks).
 - **Everything in the world is generated in code** (furniture, characters, floor textures), so there are no asset files to load.

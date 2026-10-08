@@ -12,7 +12,7 @@ import type {
   ServerToClientEvents,
 } from '../../../shared/types';
 import type { UploadedFile } from '../../../shared/uploads';
-import { getState, initialBuild, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
+import { getState, initialBuild, personalMusicVolume, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
 import { accountUpdated, refreshAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
@@ -206,7 +206,7 @@ export class OfficeSession {
       setInterval(() => {
         const st = getState();
         if (!st.office) return;
-        const personal = st.music.muted ? 0 : st.music.volume;
+        const personal = personalMusicVolume(st);
         // A DJ hears their own session as loud as the jukebox it plays on; everyone else follows
         // the session at the jukebox they can hear.
         const djItem = st.office.items.find((i) => i.id === this.spotify.djJukebox);
@@ -434,6 +434,7 @@ export class OfficeSession {
     if (!el) {
       el = document.createElement('audio');
       el.autoplay = true;
+      el.muted = getState().focus;
       this.audioRoot.appendChild(el);
       this.audio.set(id, el);
       this.applySink(el);
@@ -457,13 +458,18 @@ export class OfficeSession {
     for (const el of this.audio.values()) this.applySink(el);
   }
 
-  /** Remote audio gets quieter with distance (and silent across private-zone walls). */
+  /**
+   * Remote audio gets quieter with distance (and silent across private-zone walls). Headphones mute
+   * it (iOS ignores volume, and the calls stay up so taking them off brings everyone back at once).
+   */
   private updateVolumes(): void {
-    const zones = getState().office?.zones ?? [];
+    const st = getState();
+    const zones = st.office?.zones ?? [];
     for (const [id, el] of this.audio) {
       const t = remoteTargets.get(id);
       const v = t ? proximityVolume(local, t, zones) : 0;
       if (Math.abs(el.volume - v) > 0.01) el.volume = v;
+      if (el.muted !== st.focus) el.muted = st.focus;
     }
   }
 
@@ -614,6 +620,7 @@ export function leaveOffice(): void {
     linked: {},
     streams: {},
     speaking: {},
+    focus: false,
     chat: [],
     unread: 0,
     emotes: {},

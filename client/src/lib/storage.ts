@@ -1,5 +1,6 @@
 import { DEFAULT_AVATAR, randomAvatar, sanitizeAvatar, sanitizeName } from '../../../shared/avatar';
 import type { AvatarConfig } from '../../../shared/types';
+import type { NoiseMode } from './noise';
 
 const PREFIX = 'workchop:';
 
@@ -64,6 +65,7 @@ export interface DevicePrefs {
   audioOut?: string;
   micOn?: boolean;
   camOn?: boolean;
+  noise?: NoiseMode;
 }
 
 export function loadDevices(): DevicePrefs {

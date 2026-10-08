@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { saveAccountSettings } from '../lib/account';
-import { media } from '../lib/media';
+import { media, type NoiseState } from '../lib/media';
+import type { NoiseMode } from '../lib/noise';
 import { createRegistry } from '../lib/registry';
 import { getSession } from '../lib/session';
 import { setTheme, useTheme, type Theme } from '../lib/theme';
-import { ComputerIcon, HeadphonesIcon, MoonIcon, PaletteIcon, SunIcon, type IconComponent } from './icons';
+import { ComputerIcon, EnhancedMicIcon, HeadphonesIcon, MicIcon, MoonIcon, PaletteIcon, SunIcon, type IconComponent } from './icons';
 import { useMediaState, VideoView } from './media';
 
 /** A section of the Settings window (opened from the dock). */
@@ -51,6 +52,45 @@ function DeviceSelect({ label, kind, devices }: { label: string; kind: 'audioIn'
   );
 }
 
+const NOISE_MODES: { id: NoiseMode; label: string; Icon: IconComponent }[] = [
+  { id: 'standard', label: 'Standard', Icon: MicIcon },
+  { id: 'enhanced', label: 'Enhanced', Icon: EnhancedMicIcon },
+];
+
+function noiseNote(noise: NoiseState): string {
+  if (noise.mode === 'standard') return 'Your browser’s built-in filter.';
+  if (noise.status === 'failed') return `${noise.error} Using standard for now.`;
+  if (noise.status === 'loading') return 'Loading…';
+  if (noise.status === 'waiting') return 'Starts with your next click.';
+  return 'Also removes typing, fans and chatter behind you. Uses a bit more battery.';
+}
+
+function NoiseSuppression({ noise }: { noise: NoiseState }) {
+  return (
+    <div className="field">
+      <span id="noise-label">Noise suppression</span>
+      <div className="theme-options two" role="group" aria-labelledby="noise-label">
+        {NOISE_MODES.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={noise.mode === id}
+            className={`theme-option${noise.mode === id ? ' active' : ''}`}
+            // Choosing it again after a failure tries again.
+            onClick={() => (noise.mode !== id || noise.status === 'failed') && media.setNoise(id)}
+          >
+            <Icon size={22} />
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className={`small noise-note${noise.status === 'failed' ? ' failed' : ' muted'}`} role="status">
+        {noiseNote(noise)}
+      </p>
+    </div>
+  );
+}
+
 function DevicesSection() {
   const m = useMediaState();
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -65,6 +105,7 @@ function DevicesSection() {
         {preview ? <VideoView stream={preview} mirror /> : <div className="device-off">Camera is off</div>}
       </div>
       <DeviceSelect label="Microphone" kind="audioIn" devices={devices} />
+      <NoiseSuppression noise={m.noise} />
       <DeviceSelect label="Camera" kind="videoIn" devices={devices} />
       {outputSupported && <DeviceSelect label="Speakers" kind="audioOut" devices={devices} />}
     </>

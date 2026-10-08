@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { EMOTES } from '../../../shared/avatar';
+import { REACTIONS } from '../../../shared/avatar';
 import { colorFor, initials } from '../lib/color';
 import { media } from '../lib/media';
 import { officeUrl } from '../lib/router';
@@ -8,6 +8,7 @@ import { getSession, leaveOffice } from '../lib/session';
 import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
 import { CamIcon, CamOffIcon, HammerIcon, LeaveIcon, LinkIcon, MicIcon, MicOffIcon, ScreenIcon, SettingsIcon, SmileIcon } from './icons';
 import { AccountMenu, usePopover } from './Account';
+import { HeadphonesButton } from './Focus';
 import { useMediaState } from './media';
 import { panelKey, usePanels, type PanelDef } from './panels';
 
@@ -27,31 +28,47 @@ export function toggleScreen(): void {
   else void media.startScreen();
 }
 
-function EmoteMenu({ onClose }: { onClose: () => void }) {
+/** The reactions, above the dock (in a portal: the dock scrolls sideways on phones and would clip it). */
+function EmoteMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [at] = useState(() => {
+    const r = anchor.getBoundingClientRect();
+    // Centred over the button, but kept on screen (the menu is about 250 px wide).
+    const half = 130;
+    return { left: Math.max(half, Math.min(window.innerWidth - half, r.left + r.width / 2)), bottom: window.innerHeight - r.top + 12 };
+  });
   useEffect(() => {
     const close = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
+      if (!ref.current?.contains(e.target as Node) && !anchor.contains(e.target as Node)) onClose();
     };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('pointerdown', close);
-    return () => window.removeEventListener('pointerdown', close);
-  }, [onClose]);
-  return (
-    <div className="emote-menu" ref={ref}>
-      {EMOTES.map((e, i) => (
+    window.addEventListener('keydown', onKey);
+    ref.current?.querySelector('button')?.focus({ preventScroll: true });
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [anchor, onClose]);
+  return createPortal(
+    <div className="emote-menu" ref={ref} role="menu" aria-label="Reactions" style={{ left: at.left, bottom: at.bottom }}>
+      {REACTIONS.map((r) => (
         <button
-          key={e}
-          title={`Press ${i + 1}`}
+          key={r.emoji}
+          role="menuitem"
+          title={`${r.name} (${r.key})`}
+          aria-label={`${r.name} (${r.key})`}
           onClick={() => {
-            getSession()?.emote(e);
+            getSession()?.emote(r.emoji);
             onClose();
           }}
         >
-          {e}
-          <kbd>{i + 1}</kbd>
+          {r.emoji}
+          <kbd>{r.key}</kbd>
         </button>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -115,7 +132,9 @@ export function Dock() {
   const m = useMediaState();
   const panel = useStore((s) => s.panel);
   const panels = usePanels();
-  const [emotes, setEmotes] = useState(false);
+  // The reactions button while its menu is open.
+  const [emoteAnchor, setEmoteAnchor] = useState<HTMLElement | null>(null);
+  const closeEmotes = useCallback(() => setEmoteAnchor(null), []);
   useStore((s) => s.office?.settings.buildPolicy);
   const buildAllowed = canBuild();
 
@@ -134,12 +153,20 @@ export function Dock() {
         <button className={`dock-btn${m.screen ? ' on' : ''}`} onClick={toggleScreen} title={m.screen ? 'Stop sharing' : 'Share your screen'}>
           <ScreenIcon />
         </button>
-        <div className="emote-wrap">
-          <button className={`dock-btn${emotes ? ' on' : ''}`} onClick={() => setEmotes((v) => !v)} title="Reactions (1–6)">
-            <SmileIcon />
-          </button>
-          {emotes && <EmoteMenu onClose={() => setEmotes(false)} />}
-        </div>
+        <HeadphonesButton />
+        <button
+          className={`dock-btn${emoteAnchor ? ' on' : ''}`}
+          onClick={(e) => {
+            const button = e.currentTarget;
+            setEmoteAnchor((open) => (open ? null : button));
+          }}
+          title="Reactions (1–9, 0)"
+          aria-haspopup="menu"
+          aria-expanded={!!emoteAnchor}
+        >
+          <SmileIcon />
+        </button>
+        {emoteAnchor && <EmoteMenu anchor={emoteAnchor} onClose={closeEmotes} />}
         <button
           className={`dock-btn${panel === 'build' ? ' on' : ''}`}
           onClick={() => setPanel('build')}

@@ -1,5 +1,5 @@
 import { audibleJukebox, sameSource, sourceOf, trackAt, type MusicSource, type Track } from '../../../shared/music';
-import { getState, setState, type NowPlaying } from '../state/store';
+import { getState, personalMusicVolume, setState, type NowPlaying } from '../state/store';
 import { clockOffset, serverNow } from './clock';
 import { GenerativeStation } from './genmusic';
 import { local } from './positions';
@@ -322,7 +322,7 @@ export class LoungeRadio {
     const office = st.office;
     const heard = office ? audibleJukebox(office, local.x, local.z) : null;
     const source = heard ? sourceOf(heard.item) : null;
-    const personal = st.music.muted ? 0 : st.music.volume;
+    const personal = personalMusicVolume(st);
     // Someone listening along to a Spotify session at this jukebox hears that instead, rather than
     // both playing over each other.
     const onSpotify = !!heard && st.music.spotifyPlaying && !!st.spotifySessions[heard.item.id];

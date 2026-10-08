@@ -9,10 +9,12 @@ export interface AvatarMotion {
   anim: AnimState;
   /** Horizontal speed in units per second. */
   speed: number;
-  /** Arm gesture currently playing, until `gestureUntil` (ms timestamp). */
-  gesture: 'wave' | 'raise' | null;
+  /** Gesture currently playing (reactions), until `gestureUntil` (ms timestamp). */
+  gesture: Gesture | null;
   gestureUntil: number;
 }
+
+export type Gesture = 'wave' | 'raise' | 'dance' | 'clap' | 'cheer';
 
 export function useMotion(): MutableRefObject<AvatarMotion> {
   return useRef<AvatarMotion>({ anim: 'idle', speed: 0, gesture: null, gestureUntil: 0 });
@@ -32,6 +34,13 @@ const bandGeo = new THREE.TorusGeometry(0.3, 0.025, 8, 24, Math.PI);
 const hoodGeo = new THREE.TorusGeometry(0.17, 0.065, 8, 18);
 const coneGeo = new THREE.ConeGeometry(1, 1, 10);
 const beanieRimGeo = new THREE.TorusGeometry(0.29, 0.045, 8, 28);
+// Focus-mode headphones: a band high enough to clear hats and tall hair, and a soft halo.
+const focusBandGeo = new THREE.TorusGeometry(1, 0.08, 8, 32, Math.PI);
+const focusGlowGeo = new THREE.TorusGeometry(0.075, 0.014, 8, 24);
+const haloGeo = new THREE.TorusGeometry(0.47, 0.012, 6, 56);
+const focusGlowMat = new THREE.MeshBasicMaterial({ color: '#c4b5fd' });
+const haloMat = new THREE.MeshBasicMaterial({ color: '#a78bfa', transparent: true, opacity: 0.55, depthWrite: false });
+const FOCUS_CUP = '#8b5cf6';
 const capsules = new Map<string, THREE.CapsuleGeometry>();
 function capsuleGeo(rad: number, len: number): THREE.CapsuleGeometry {
   const key = `${rad}:${len}`;
@@ -186,6 +195,28 @@ function Hat({ a }: { a: AvatarConfig }) {
   }
 }
 
+/** Big over-ear headphones in the focus colour, worn on top of any hat or hair, with a slowly breathing halo. */
+function FocusHeadphones() {
+  const halo = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const s = 1 + Math.sin(clock.elapsedTime * 2.2) * 0.07;
+    halo.current?.scale.set(s, s, s);
+  });
+  return (
+    <group>
+      <Mesh geo={focusBandGeo} c="#2a2d3e" p={[0, HEAD_Y, 0]} s={[0.335, 0.41, 0.36]} />
+      {[-1, 1].map((sx) => (
+        <group key={sx}>
+          <Cyl p={[sx * 0.33, HEAD_Y, 0]} r={[0, 0, Math.PI / 2]} rad={0.12} h={0.09} c={FOCUS_CUP} roughness={0.4} />
+          <Cyl p={[sx * 0.282, HEAD_Y, 0]} r={[0, 0, Math.PI / 2]} rad={0.105} h={0.03} c="#1d1f2b" />
+          <mesh geometry={focusGlowGeo} material={focusGlowMat} position={[sx * 0.377, HEAD_Y, 0]} rotation={[0, Math.PI / 2, 0]} />
+        </group>
+      ))}
+      <mesh ref={halo} geometry={haloGeo} material={haloMat} position={[0, HEAD_Y + 0.02, 0]} rotation={[Math.PI / 2, 0, 0]} />
+    </group>
+  );
+}
+
 function Face({ a }: { a: AvatarConfig }) {
   const z = 0.245;
   return (
@@ -255,8 +286,8 @@ function Torso({ a }: { a: AvatarConfig }) {
   );
 }
 
-/** A chibi-style character built from primitives; animated from `motion`. */
-export const Avatar = memo(function Avatar({ config, motion }: { config: AvatarConfig; motion: MutableRefObject<AvatarMotion> }) {
+/** A chibi-style character built from primitives; animated from `motion`. `focus` puts headphones on. */
+export const Avatar = memo(function Avatar({ config, motion, focus = false }: { config: AvatarConfig; motion: MutableRefObject<AvatarMotion>; focus?: boolean }) {
   const a = config;
   const body = useRef<THREE.Group>(null);
   const legL = useRef<THREE.Group>(null);
@@ -273,8 +304,10 @@ export const Avatar = memo(function Avatar({ config, motion }: { config: AvatarC
     const m = motion.current;
     const t = state.clock.elapsedTime;
     const k = 1 - Math.exp(-dt * 14);
-    const lerp = (obj: THREE.Object3D | null, axis: 'x' | 'y' | 'z', target: number) => {
-      if (obj) obj.rotation[axis] += (target - obj.rotation[axis]) * k;
+    // Gestures follow their targets faster, so claps and dance moves keep their snap.
+    const kg = 1 - Math.exp(-dt * 26);
+    const lerp = (obj: THREE.Object3D | null, axis: 'x' | 'y' | 'z', target: number, speed = k) => {
+      if (obj) obj.rotation[axis] += (target - obj.rotation[axis]) * speed;
     };
     let legSwing = 0;
     let armSwing = 0;
@@ -302,29 +335,73 @@ export const Avatar = memo(function Avatar({ config, motion }: { config: AvatarC
       armSwing = Math.sin(t * 1.6) * 0.03;
     }
 
+    // Walking off ends a dance.
+    if (m.gesture === 'dance' && m.anim === 'walk') m.gestureUntil = 0;
+    const g = m.gesture && performance.now() < m.gestureUntil ? m.gesture : null;
+    const standing = m.anim !== 'sit';
+    // Arms: x swings forward (negative) and back, z raises sideways (left arm positive, right negative).
+    let armLx = armRest - armSwing;
+    let armLz = 0;
+    let armRx = armRest + armSwing;
+    let armRz = 0;
+    let hop = 0;
+    let twist = 0;
+    let sway = 0;
+    let stepL = 0;
+    let stepR = 0;
+    let headTilt = m.anim === 'idle' ? Math.sin(t * 0.7) * 0.04 : 0;
+    if (g === 'wave') {
+      armRx = 0;
+      armRz = -2.5 + Math.sin(t * 14) * 0.35;
+    } else if (g === 'raise') {
+      armRx = 0;
+      armRz = -2.9;
+    } else if (g === 'cheer') {
+      armLx = armRx = 0;
+      armLz = 2.7 + Math.sin(t * 11) * 0.18;
+      armRz = -2.7 - Math.sin(t * 11 + 1.2) * 0.18;
+      if (standing) hop = Math.abs(Math.sin(t * 7)) * 0.05;
+    } else if (g === 'clap') {
+      // Arms forward, hands meeting in front of the chest about three times a second.
+      const together = (1 - Math.cos(t * 17)) / 2;
+      armLx = armRx = -1.25;
+      armLz = -(0.15 + together * 0.42);
+      armRz = 0.15 + together * 0.42;
+    } else if (g === 'dance') {
+      const beat = t * 7.5;
+      const up = (Math.sin(beat) + 1) / 2;
+      armLx = armRx = -0.35;
+      armLz = 0.5 + up * 1.9;
+      armRz = -(0.5 + (1 - up) * 1.9);
+      headTilt = Math.sin(beat) * 0.16;
+      if (standing) {
+        hop = Math.abs(Math.sin(beat)) * 0.06;
+        sway = Math.sin(beat) * 0.12;
+        twist = Math.sin(beat * 0.5) * 0.7;
+        stepL = Math.max(0, Math.sin(beat)) * 0.45;
+        stepR = Math.max(0, -Math.sin(beat)) * 0.45;
+      }
+    }
+
     if (body.current) {
-      body.current.position.y += (hipY - HIP_Y + bob - body.current.position.y) * k;
+      body.current.position.y += (hipY - HIP_Y + bob + hop - body.current.position.y) * (g ? kg : k);
       // Sitting keeps the torso in front of the seat's backrest (seats are placed so the back just touches it).
       body.current.position.z += (0 - body.current.position.z) * k;
       body.current.rotation.x += (lean - body.current.rotation.x) * k;
+      body.current.rotation.y += (twist - body.current.rotation.y) * k;
+      body.current.rotation.z += (sway - body.current.rotation.z) * kg;
     }
-    lerp(legL.current, 'x', thigh + legSwing);
-    lerp(legR.current, 'x', thigh - legSwing);
-    lerp(kneeL.current, 'x', knee * (m.anim === 'walk' ? (legSwing < 0 ? 1 : 0.2) : 1));
-    lerp(kneeR.current, 'x', knee * (m.anim === 'walk' ? (legSwing > 0 ? 1 : 0.2) : 1));
-    lerp(armL.current, 'x', armRest - armSwing);
-
-    const gesturing = m.gesture && performance.now() < m.gestureUntil;
-    if (gesturing) {
-      lerp(armR.current, 'x', 0);
-      lerp(armR.current, 'z', m.gesture === 'wave' ? -2.5 + Math.sin(t * 14) * 0.35 : -2.9);
-    } else {
-      lerp(armR.current, 'x', armRest + armSwing);
-      lerp(armR.current, 'z', 0);
-    }
+    lerp(legL.current, 'x', thigh + legSwing - stepL * 0.6);
+    lerp(legR.current, 'x', thigh - legSwing - stepR * 0.6);
+    lerp(kneeL.current, 'x', knee * (m.anim === 'walk' ? (legSwing < 0 ? 1 : 0.2) : 1) + stepL);
+    lerp(kneeR.current, 'x', knee * (m.anim === 'walk' ? (legSwing > 0 ? 1 : 0.2) : 1) + stepR);
+    lerp(armL.current, 'x', armLx, g ? kg : k);
+    lerp(armL.current, 'z', armLz, g ? kg : k);
+    lerp(armR.current, 'x', armRx, g ? kg : k);
+    lerp(armR.current, 'z', armRz, g ? kg : k);
     if (head.current) {
       head.current.position.y = Math.sin(t * 2) * 0.008;
-      head.current.rotation.z = m.anim === 'idle' ? Math.sin(t * 0.7) * 0.04 : 0;
+      head.current.rotation.z += (headTilt - head.current.rotation.z) * kg;
     }
   });
 
@@ -365,7 +442,8 @@ export const Avatar = memo(function Avatar({ config, motion }: { config: AvatarC
         <Ball p={[0, HEAD_Y, 0]} s={[HEAD_R, HEAD_R * 0.97, HEAD_R * 0.95]} c={a.skin} roughness={0.6} />
         <Face a={a} />
         <Hair a={a} hatOn={hatOn} />
-        <Hat a={a} />
+        {!(focus && a.hat === 'headphones') && <Hat a={a} />}
+        {focus && <FocusHeadphones />}
       </group>
     </group>
   );
