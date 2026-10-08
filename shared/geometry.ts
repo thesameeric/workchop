@@ -170,6 +170,11 @@ export function findPath(
   const toCell = (v: number, max: number) => Math.max(0, Math.min(max - 1, Math.floor(v / GRID)));
   const center = (c: number) => c * GRID + GRID / 2;
 
+  // Where the walk ends: the goal, or the free spot nearest to it (for a sofa's seat).
+  const end = isBlocked(goal.x, goal.z, colliders, bounds) ? findFreeSpot(goal.x, goal.z, colliders, bounds) : { x: goal.x, z: goal.z };
+  // Nothing in the way: straight there, wherever the grid says you stand.
+  if (clearLine(start, end, colliders, bounds)) return [end];
+
   const blocked = new Uint8Array(cols * rows);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -179,43 +184,46 @@ export function findPath(
 
   const cellOf = (p: { x: number; z: number }) => toCell(p.z, rows) * cols + toCell(p.x, cols);
   const centerOf = (i: number) => ({ x: center(i % cols), z: center(Math.floor(i / cols)) });
-  // The open cell to set off from or arrive at: the point's own, or, in a gap too tight for the grid
-  // (between a sofa and the coffee table, behind a desk), the nearest one in a straight line from it.
-  const openCell = (p: { x: number; z: number }): number => {
+  // Grid steps from one point to another with nothing in between, as A* counts them.
+  const steps = (a: { x: number; z: number }, b: { x: number; z: number }) => {
+    const dx = Math.abs(a.x - b.x) / GRID;
+    const dz = Math.abs(a.z - b.z) / GRID;
+    return Math.max(dx, dz) + (Math.SQRT2 - 1) * Math.min(dx, dz);
+  };
+  // The open cells to set off from or arrive at: the point's own, or, in a gap too tight for the grid
+  // (between a sofa and the coffee table, behind a desk), every one nearby in a straight line from it:
+  // the nearest can be a pocket that leads nowhere.
+  const openCells = (p: { x: number; z: number }): number[] => {
     const own = cellOf(p);
-    if (!blocked[own]) return own;
+    if (!blocked[own]) return [own];
     const c0 = own % cols;
     const r0 = (own - c0) / cols;
-    let best = -1;
-    let bestD = Infinity;
+    const out: number[] = [];
     for (let r = Math.max(0, r0 - 4); r <= Math.min(rows - 1, r0 + 4); r++) {
       for (let c = Math.max(0, c0 - 4); c <= Math.min(cols - 1, c0 + 4); c++) {
         const i = r * cols + c;
-        const q = centerOf(i);
-        const d = Math.hypot(q.x - p.x, q.z - p.z);
-        if (blocked[i] || d >= bestD || !clearLine(p, q, colliders, bounds)) continue;
-        best = i;
-        bestD = d;
+        if (!blocked[i] && clearLine(p, centerOf(i), colliders, bounds)) out.push(i);
       }
     }
-    return best;
+    return out;
   };
 
-  // Where the walk ends: the goal, or the free spot nearest to it (for a sofa's seat).
-  const end = isBlocked(goal.x, goal.z, colliders, bounds) ? findFreeSpot(goal.x, goal.z, colliders, bounds) : { x: goal.x, z: goal.z };
-  const startIdx = openCell(start);
-  const goalIdx = openCell(end);
-  if (startIdx < 0 || goalIdx < 0) return null;
-  if (startIdx === goalIdx && startIdx === cellOf(start)) return [end];
-  const gc = goalIdx % cols;
-  const gr = (goalIdx - gc) / cols;
+  const starts = openCells(start);
+  const goals = openCells(end);
+  if (!starts.length || !goals.length) return null;
+  const ownStart = cellOf(start);
+  const ownEnd = cellOf(end);
+  const isGoal = new Uint8Array(cols * rows);
+  for (const i of goals) isGoal[i] = 1;
+  // Every goal cell leads on to this one, the end itself, at the cost of the last straight bit.
+  const END = cols * rows;
 
-  const g = new Float32Array(cols * rows).fill(Infinity);
-  const came = new Int32Array(cols * rows).fill(-1);
-  const closed = new Uint8Array(cols * rows);
+  const g = new Float32Array(END + 1).fill(Infinity);
+  const came = new Int32Array(END + 1).fill(-1);
+  const closed = new Uint8Array(END + 1);
   // Simple binary heap keyed on f-score.
   const heap: number[] = [];
-  const f = new Float32Array(cols * rows).fill(Infinity);
+  const f = new Float32Array(END + 1).fill(Infinity);
   const push = (i: number) => {
     heap.push(i);
     let k = heap.length - 1;
@@ -245,15 +253,14 @@ export function findPath(
     }
     return top;
   };
-  const h = (c: number, r: number) => {
-    const dx = Math.abs(c - gc);
-    const dz = Math.abs(r - gr);
-    return Math.max(dx, dz) + (Math.SQRT2 - 1) * Math.min(dx, dz);
-  };
+  // Never more than what's left (steps on to the end), so the first way found is a shortest one.
+  const h = (c: number, r: number) => steps({ x: center(c), z: center(r) }, end);
 
-  g[startIdx] = 0;
-  f[startIdx] = h(startIdx % cols, Math.floor(startIdx / cols));
-  push(startIdx);
+  for (const i of starts) {
+    g[i] = steps(start, centerOf(i));
+    f[i] = g[i] + h(i % cols, Math.floor(i / cols));
+    push(i);
+  }
   const dirs = [
     [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
     [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
@@ -263,9 +270,17 @@ export function findPath(
     const cur = pop();
     if (closed[cur]) continue;
     closed[cur] = 1;
-    if (cur === goalIdx) {
+    if (cur === END) {
       found = true;
       break;
+    }
+    if (isGoal[cur]) {
+      const ng = g[cur] + steps(centerOf(cur), end);
+      if (ng < g[END]) {
+        g[END] = f[END] = ng;
+        came[END] = cur;
+        push(END);
+      }
     }
     const cc = cur % cols;
     const cr = (cur - cc) / cols;
@@ -290,12 +305,13 @@ export function findPath(
   if (!found) return null;
 
   const cells: number[] = [];
-  for (let i = goalIdx; i !== -1 && i !== startIdx; i = came[i]) cells.push(i);
-  if (startIdx !== cellOf(start)) cells.push(startIdx);
+  for (let i = came[END]; i !== -1; i = came[i]) cells.push(i);
   cells.reverse();
+  // Leave out the cell you stand in, unless the end is only in sight from its middle.
+  if (cells[0] === ownStart && cells.length > 1) cells.shift();
   const points = cells.map(centerOf);
   // End exactly on the goal (or the free spot next to it).
-  if (goalIdx === cellOf(end) && goalIdx !== startIdx) points[points.length - 1] = end;
+  if (cells[cells.length - 1] === ownEnd) points[points.length - 1] = end;
   else points.push(end);
   return smoothPath(start, points, colliders, bounds);
 }

@@ -98,6 +98,31 @@ describe('pathfinding', () => {
     expectWalkable({ x: 5.807, z: 17.154 }, { x: 5.9, z: 17.1 }, colliders, office.settings);
   });
 
+  it('gets out of, and into, a tight gap whose nearest open cell leads nowhere', () => {
+    const b = { width: 6, depth: 6 };
+    // A desk end and a cabinet against the wall: your own cell is too close to the desk, the nearest
+    // open one (in the corner between both) has no way on, the one the other way does.
+    const colliders = [
+      { minX: 1, maxX: 3, minZ: 2, maxZ: 2.5 },
+      { minX: 0, maxX: 0.5, minZ: 3, maxZ: 5 },
+    ];
+    const gap = { x: 0.58, z: 2.44 };
+    expect(isBlocked(gap.x, gap.z, colliders, b)).toBe(false);
+    expect(isBlocked(0.75, 2.25, colliders, b)).toBe(true);
+    expectWalkable(gap, { x: 2, z: 1 }, colliders, b);
+    expectWalkable({ x: 2, z: 1 }, gap, colliders, b);
+  });
+
+  it('walks straight along a passage too narrow for the grid', () => {
+    const b = { width: 6, depth: 6 };
+    // 0.6 wide: room to walk, but no cell's middle is clear.
+    const colliders = [
+      { minX: 0.5, maxX: 5.5, minZ: 0, maxZ: 1 },
+      { minX: 0.5, maxX: 5.5, minZ: 1.6, maxZ: 6 },
+    ];
+    expect(findPath({ x: 2, z: 1.3 }, { x: 4, z: 1.3 }, colliders, b)).toEqual([{ x: 4, z: 1.3 }]);
+  });
+
   it('gets you to every seat of the startup office and back to the entrance', () => {
     const office = createFromTemplate('startup', 'o', 'Office');
     const colliders = buildColliders(office);
