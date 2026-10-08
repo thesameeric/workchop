@@ -5,13 +5,11 @@ import { getSession } from '../lib/session';
 import { setPanel, setState, useStore } from '../state/store';
 import { isTyping } from '../world/input';
 import { toggleSit } from '../world/movement';
-import { BuildPanel } from './BuildPanel';
-import { ChatPanel } from './ChatPanel';
 import { Dock, copyInvite } from './Dock';
 import { CloseIcon, HelpIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
-import { MusicPanel, NowPlayingPill } from './MusicPanel';
-import { PeoplePanel } from './PeoplePanel';
+import { NowPlayingPill } from './MusicPanel';
+import { usePanels } from './panels';
 import { SelfView, Spotlight, VideoStrip } from './VideoStrip';
 import { WorldLabels, ZoneIndicator } from './WorldLabels';
 
@@ -39,23 +37,20 @@ function TopBar() {
   );
 }
 
-const PANEL_TITLES = { chat: 'Chat', people: 'People', build: 'Build', music: 'Music' } as const;
-
 function SidePanel() {
-  const panel = useStore((s) => s.panel);
-  if (panel === 'none') return null;
+  const id = useStore((s) => s.panel);
+  // Re-render when panels are registered (a feature's may arrive after its id was set).
+  const panel = usePanels().find((p) => p.id === id);
+  if (!panel) return null;
   return (
-    <aside className={`side-panel ${panel}`}>
+    <aside className={`side-panel ${panel.id}`}>
       <div className="panel-head">
-        <h2>{PANEL_TITLES[panel]}</h2>
-        <button className="icon-btn" onClick={() => setPanel(panel)} title="Close">
+        <h2>{panel.title}</h2>
+        <button className="icon-btn" onClick={() => setPanel(panel.id)} title="Close">
           <CloseIcon size={18} />
         </button>
       </div>
-      {panel === 'chat' && <ChatPanel />}
-      {panel === 'people' && <PeoplePanel />}
-      {panel === 'build' && <BuildPanel />}
-      {panel === 'music' && <MusicPanel />}
+      <panel.Component />
     </aside>
   );
 }
@@ -114,19 +109,6 @@ function Help() {
   );
 }
 
-function Toasts() {
-  const toasts = useStore((s) => s.toasts);
-  return (
-    <div className="toasts" aria-live="polite">
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`}>
-          {t.text}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ConnectionBanner() {
   const connection = useStore((s) => s.connection);
   if (connection === 'online') return null;
@@ -175,7 +157,6 @@ export function OfficeView() {
       <Dock />
       <Spotlight />
       <Modals />
-      <Toasts />
       <ConnectionBanner />
     </div>
   );

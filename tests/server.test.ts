@@ -113,7 +113,7 @@ describe('REST API', () => {
 
   it('serves ICE configuration', async () => {
     const cfg = await (await fetch(`${base}/api/config`)).json();
-    expect(cfg).toEqual({ iceServers: [], turn: false, spotifyClientId: null });
+    expect(cfg).toEqual({ iceServers: [], turn: false, spotifyClientId: null, uploadMaxBytes: 10 * 1024 * 1024 });
   });
 });
 
@@ -375,6 +375,40 @@ describe('realtime', () => {
     expect(events[3]).toEqual(['farbox', null]);
     const late = await join(id, 'Cat');
     expect(late.res.ok && late.res.spotify).toEqual([]);
+  });
+
+  it('takes focus from profile changes as a boolean, and never the app', async () => {
+    const { id } = await createOffice();
+    const a = await join(id, 'Ann');
+    const b = await join(id, 'Bob');
+    const aId = a.res.ok && a.res.selfId;
+    let updated = next(b.socket, 'player:updated');
+    a.socket.emit('profile', { focus: true });
+    expect(await updated).toEqual([aId, { focus: true }]);
+    updated = next(b.socket, 'player:updated');
+    a.socket.emit('profile', { focus: 'yes' as never, app: 'vscode' } as never);
+    expect(await updated).toEqual([aId, { focus: false }]);
+    updated = next(b.socket, 'player:updated');
+    a.socket.emit('profile', { app: 'figma' } as never);
+    expect(await updated).toEqual([aId, {}]);
+    expect(server.realtime.rooms.get(id)?.players.get(aId as string)).toMatchObject({ focus: false });
+    expect(server.realtime.rooms.get(id)?.players.get(aId as string)?.app).toBeUndefined();
+  });
+
+  it('keeps item data through moves, and drops it when an item is re-typed', async () => {
+    const { id, ownerKey } = await createOffice('startup');
+    const owner = await join(id, 'Olive', ownerKey);
+    const office = owner.res.ok ? owner.res.office : null;
+    const jukebox = office!.items.find((i) => i.type === 'jukebox')!;
+    const moved = next(owner.socket, 'office:op');
+    owner.socket.emit('office:op', { t: 'update', item: { ...jukebox, x: jukebox.x - 1, data: undefined } });
+    const [op] = await moved;
+    expect(op.t === 'update' && op.item.data).toEqual(jukebox.data);
+    const retyped = next(owner.socket, 'office:op');
+    owner.socket.emit('office:op', { t: 'update', item: { ...jukebox, type: 'plant' } });
+    const [op2] = await retyped;
+    expect(op2.t === 'update' && op2.item).toMatchObject({ type: 'plant' });
+    expect(op2.t === 'update' && 'data' in op2.item).toBe(false);
   });
 
   it('tells others when someone leaves', async () => {

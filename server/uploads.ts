@@ -7,9 +7,11 @@ import { AwsClient } from 'aws4fetch';
 import express from 'express';
 import { isValidId } from '../shared/office';
 import { clip } from '../shared/text';
+import type { UploadedFile } from '../shared/uploads';
 import type { Db, Tx } from './db';
 import { windowLimiter } from './limits';
 
+export type { UploadedFile };
 export type UploadStorage = 'db' | 'fs' | 's3';
 
 export interface S3Options {
@@ -197,14 +199,6 @@ function contentDisposition(type: 'inline' | 'attachment', name: string): string
 export interface Uploader {
   userId: string | null;
   name: string;
-}
-
-export interface UploadedFile {
-  id: string;
-  url: string;
-  name: string;
-  contentType: string;
-  size: number;
 }
 
 class UploadError extends Error {

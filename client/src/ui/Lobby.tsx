@@ -1,17 +1,29 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
+import { saveCharacter } from '../lib/account';
 import { fetchOfficeInfo } from '../lib/api';
 import { media } from '../lib/media';
 import { navigate } from '../lib/router';
 import { enterOffice } from '../lib/session';
-import { rememberOffice, saveProfile } from '../lib/storage';
+import { rememberOffice } from '../lib/storage';
 import { setState, useStore } from '../state/store';
+import { AccountButton, SignInButton } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from './icons';
 import { useMediaState, VideoView } from './media';
 
 export function Lobby() {
+  const ready = useStore((s) => s.accountReady);
+  const accountId = useStore((s) => s.account?.id ?? null);
+  // Signed in, the form starts from the account's character: wait to know who you are, and start
+  // afresh when you sign in or out here.
+  if (!ready) return <div className="lobby" />;
+  return <LobbyForm key={accountId ?? 'guest'} />;
+}
+
+function LobbyForm() {
   const officeId = useStore((s) => s.officeId)!;
+  const signedIn = useStore((s) => !!s.account);
   const me = useStore((s) => s.me);
   const [name, setName] = useState(me.name);
   const [avatar, setAvatar] = useState(me.avatar);
@@ -52,8 +64,8 @@ export function Lobby() {
     if (!cleanName) return;
     setJoining(true);
     setError(null);
-    saveProfile({ name: cleanName, avatar });
     setState((s) => ({ me: { ...s.me, name: cleanName, avatar } }));
+    void saveCharacter({ name: cleanName, avatar });
     try {
       await enterOffice(officeId);
       rememberOffice(officeId, info?.name ?? officeId);
@@ -104,17 +116,20 @@ export function Lobby() {
         <button className="brand link" onClick={() => navigate('/')}>
           <span className="brand-mark">◆</span> Workchop
         </button>
-        <div className="lobby-office">
-          {info ? (
-            <>
-              <strong>{info.name}</strong>
-              <span className="muted">
-                {info.online === 0 ? 'Nobody is here yet' : `${info.online} ${info.online === 1 ? 'person' : 'people'} inside`}
-              </span>
-            </>
-          ) : (
-            <span className="muted">Loading…</span>
-          )}
+        <div className="lobby-header-end">
+          <div className="lobby-office">
+            {info ? (
+              <>
+                <strong>{info.name}</strong>
+                <span className="muted">
+                  {info.online === 0 ? 'Nobody is here yet' : `${info.online} ${info.online === 1 ? 'person' : 'people'} inside`}
+                </span>
+              </>
+            ) : (
+              <span className="muted">Loading…</span>
+            )}
+          </div>
+          {signedIn ? <AccountButton /> : <SignInButton />}
         </div>
       </header>
       <form className="lobby-body" onSubmit={join}>

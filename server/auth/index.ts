@@ -69,6 +69,8 @@ export interface AuthDeps {
   options: AuthOptions;
   /** Called after a session is deleted, to disconnect its sockets. */
   onLogout?: (tokenHash: string) => void;
+  /** Called after someone changed their account (PATCH /api/me), to tell their other tabs and devices. */
+  onUserUpdated?: (user: AccountUser) => void;
   quiet?: boolean;
 }
 
@@ -332,6 +334,7 @@ export function createAuth(deps: AuthDeps) {
     }
     const profile = 'profile' in body ? sanitizeProfile(body.profile) : undefined;
     const updated = await accounts.update(user.id, { name, profile });
+    if (updated) deps.onUserUpdated?.(updated);
     res.json({ user: updated });
   });
 

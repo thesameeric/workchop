@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   audibleJukebox,
+  jukeboxData,
   musicVolumeAt,
   MAX_LINKS,
   parseSpotifyLink,
@@ -138,7 +139,7 @@ describe('applyMusicOp', () => {
     if ('error' in r) throw new Error(r.error);
     return r;
   };
-  const data = (o: Office) => o.items.find((i) => i.id === jukeboxId)!.data!;
+  const data = (o: Office) => jukeboxData(o.items.find((i) => i.id === jukeboxId)!);
 
   it('lets anyone switch built-in stations or turn it off', () => {
     let o = ok(applyMusicOp(office, { t: 'station', itemId: jukeboxId, station: 'ambient' }, guest)).office;

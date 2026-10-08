@@ -49,6 +49,14 @@ function subscribe(cb: () => void) {
   return () => void listeners.delete(cb);
 }
 
+export function getTheme(): Theme {
+  return theme;
+}
+
+export function isTheme(v: unknown): v is Theme {
+  return v === 'system' || v === 'light' || v === 'dark';
+}
+
 /** The chosen theme ('system' follows the device setting). */
 export function useTheme(): Theme {
   return useSyncExternalStore(subscribe, () => theme);

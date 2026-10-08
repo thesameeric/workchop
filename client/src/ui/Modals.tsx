@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
-import { media } from '../lib/media';
 import { getSession } from '../lib/session';
-import { setTheme, useTheme, type Theme } from '../lib/theme';
 import { setState, useStore } from '../state/store';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
-import { CloseIcon, ComputerIcon, HeadphonesIcon, MoonIcon, PaletteIcon, SunIcon } from './icons';
-import { useMediaState, VideoView } from './media';
+import { CloseIcon } from './icons';
+import { useSettingsSections } from './settings';
 
 function Modal({ title, children, onClose, className }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
   useEffect(() => {
@@ -61,106 +59,27 @@ function AvatarModal() {
   );
 }
 
-function DeviceSelect({ label, kind, devices }: { label: string; kind: 'audioIn' | 'videoIn' | 'audioOut'; devices: MediaDeviceInfo[] }) {
-  const domKind = kind === 'audioIn' ? 'audioinput' : kind === 'videoIn' ? 'videoinput' : 'audiooutput';
-  const list = devices.filter((d) => d.kind === domKind);
-  const [value, setValue] = useState(media.selectedDevice(kind) ?? '');
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <select
-        value={value}
-        disabled={!list.length}
-        onChange={async (e) => {
-          setValue(e.target.value);
-          await media.setDevice(kind, e.target.value);
-          if (kind === 'audioOut') getSession()?.refreshAudioOutput();
-        }}
-      >
-        {!list.length && <option value="">Not available</option>}
-        {list.map((d, i) => (
-          <option key={d.deviceId || i} value={d.deviceId}>
-            {d.label || `${label} ${i + 1}`}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function DevicesSection() {
-  const m = useMediaState();
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  useEffect(() => {
-    void media.listDevices().then(setDevices);
-  }, [m.version]);
-  const preview = useMemo(() => (m.cam && media.camTrack ? new MediaStream([media.camTrack]) : null), [m.cam, m.version]);
-  const outputSupported = 'setSinkId' in HTMLMediaElement.prototype;
-  return (
-    <>
-      <div className="device-preview">
-        {preview ? <VideoView stream={preview} mirror /> : <div className="device-off">Camera is off</div>}
-      </div>
-      <DeviceSelect label="Microphone" kind="audioIn" devices={devices} />
-      <DeviceSelect label="Camera" kind="videoIn" devices={devices} />
-      {outputSupported && <DeviceSelect label="Speakers" kind="audioOut" devices={devices} />}
-    </>
-  );
-}
-
-const THEMES: { id: Theme; label: string; Icon: typeof SunIcon }[] = [
-  { id: 'system', label: 'System', Icon: ComputerIcon },
-  { id: 'light', label: 'Light', Icon: SunIcon },
-  { id: 'dark', label: 'Dark', Icon: MoonIcon },
-];
-
-function AppearanceSection() {
-  const theme = useTheme();
-  return (
-    <div className="field">
-      <span id="theme-label">Theme</span>
-      <div className="theme-options" role="group" aria-labelledby="theme-label">
-        {THEMES.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={theme === id}
-            className={`theme-option${theme === id ? ' active' : ''}`}
-            onClick={() => setTheme(id)}
-          >
-            <Icon size={22} />
-            {label}
-          </button>
-        ))}
-      </div>
-      <p className="muted small">System follows your device’s light or dark setting.</p>
-    </div>
-  );
-}
-
-// More sections (privacy, integrations…) slot in here.
-const SECTIONS = [
-  { id: 'appearance', label: 'Appearance', Icon: PaletteIcon, Body: AppearanceSection },
-  { id: 'devices', label: 'Audio & video', Icon: HeadphonesIcon, Body: DevicesSection },
-] as const;
-
 function SettingsModal() {
-  const [section, setSection] = useState<(typeof SECTIONS)[number]>(SECTIONS[0]);
+  const sections = useSettingsSections();
+  const [id, setId] = useState<string | null>(null);
+  const section = sections.find((s) => s.id === id) ?? sections[0];
   return (
     <Modal title="Settings" onClose={close} className="settings">
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.map((s) => (
-            <button key={s.id} className={s === section ? 'active' : ''} aria-current={s === section} onClick={() => setSection(s)}>
-              <s.Icon size={18} />
-              {s.label}
+          {sections.map((s) => (
+            <button key={s.id} className={s === section ? 'active' : ''} aria-current={s === section} onClick={() => setId(s.id)}>
+              <s.icon size={18} />
+              {s.title}
             </button>
           ))}
         </nav>
-        <section className="settings-body" aria-label={section.label}>
-          <h3>{section.label}</h3>
-          <section.Body />
-        </section>
+        {section && (
+          <section className="settings-body" aria-label={section.title}>
+            <h3>{section.title}</h3>
+            <section.Component />
+          </section>
+        )}
       </div>
       <div className="modal-actions">
         <button className="btn primary" onClick={close}>

@@ -213,6 +213,21 @@ describe('sign-in', () => {
     expect(await me(jar)).toBeNull();
   });
 
+  it("tells the person's other tabs and devices when their account changes", async () => {
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Tabby', email: 'tabby@example.com' }));
+    const { id } = await createOffice(base);
+    const tab = await join(base, id, 'Tabby', { jar });
+    const guest = await join(base, id, 'Guest');
+    let guestHeard = false;
+    guest.socket.on('account:updated', () => (guestHeard = true));
+    const updated = new Promise<AccountUser>((resolve) => tab.socket.once('account:updated', resolve));
+    await jar.fetch(`${base}/api/me`, json({ profile: { status: 'busy' } }, 'PATCH'));
+    expect(await updated).toMatchObject({ name: 'Tabby', email: 'tabby@example.com', profile: { status: 'busy' } });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(guestHeard).toBe(false);
+  });
+
   it('uses __Host- Secure cookies when PUBLIC_URL is https', async () => {
     const secure = await startServer({ port: 0, host: '127.0.0.1', db: server.db, dataDir, quiet: true, iceServers: [], publicUrl: 'https://office.example.com', auth: { google: null, apple: null, devLogin: true } });
     try {
