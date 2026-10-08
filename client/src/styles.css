@@ -1128,6 +1128,8 @@ kbd {
   border-radius: 999px;
   font-size: 0.9rem;
   pointer-events: auto;
+  /* The video tiles keep clear of it. */
+  anchor-name: --office-chip;
 }
 
 .online-dot {
@@ -1416,19 +1418,36 @@ body:has(.emote-menu) .hint {
   z-index: 25;
   display: flex;
   gap: 10px;
-  max-width: calc(100vw - 420px);
+  max-width: calc(100vw - 600px);
   overflow-x: auto;
   padding: 4px;
   scrollbar-width: thin;
 }
 
-/* With a side panel open, the tiles line up beside it instead of going under it. */
+/* Wide screens: the tiles stay clear of the office chip and its invite button (about 300px wide; its
+   real width where anchor positioning works, for long office names), shrinking a little before the
+   strip scrolls. With a side panel open, they line up beside it instead of going under it. */
 @media (min-width: 961px) {
+  .video-strip .tile {
+    flex: 0 1 176px;
+    min-width: 120px;
+  }
+
   .office:has(> .side-panel) .video-strip {
     left: auto;
     right: calc(var(--panel-w) + 24px);
     transform: none;
     max-width: calc(100vw - var(--panel-w) - 380px);
+  }
+
+  @supports (anchor-name: --office-chip) {
+    .video-strip {
+      max-width: calc(100vw - 2 * (anchor-size(--office-chip width) + 24px));
+    }
+
+    .office:has(> .side-panel) .video-strip {
+      max-width: calc(100vw - var(--panel-w) - anchor-size(--office-chip width) - 48px);
+    }
   }
 }
 

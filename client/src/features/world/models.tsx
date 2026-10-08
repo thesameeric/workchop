@@ -298,7 +298,7 @@ function vine(parts: Parts, { angle, reach, drop, start }: { angle: number; reac
     const out = 0.11 + reach * Math.min(1, t * 1.8);
     const y = start - drop * Math.max(0, (t - 0.35) / 0.65) ** 1.3;
     const side = i % 2 ? 1 : -1;
-    parts.blob([dx * out + dz * side * 0.025, y, dz * out - dx * side * 0.025], [0.035, 0.01, 0.04], POTHOS_GREEN[(i + Math.round(angle * 3)) % POTHOS_GREEN.length], {
+    parts.blob([dx * out + dz * side * 0.025, y, dz * out - dx * side * 0.025], [0.035, 0.01, 0.04], POTHOS_GREEN[Math.abs(i + Math.round(angle * 3)) % POTHOS_GREEN.length], {
       r: [0.3 * side, angle, 0],
       shadow: false,
     });

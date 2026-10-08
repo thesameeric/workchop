@@ -392,9 +392,11 @@ export function Composer({
       onEditLast();
       return true;
     }
-    if (e.key === 'Escape' && onCancel) {
+    // Esc cancels the reply, or else leaves the box (a second Esc then closes the panel).
+    if (e.key === 'Escape') {
       e.stopPropagation();
-      onCancel();
+      if (onCancel) onCancel();
+      else input.current?.blur();
       return true;
     }
     return false;
