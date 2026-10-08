@@ -1216,6 +1216,18 @@ body:has(.emote-menu) .hint {
   display: none;
 }
 
+/* Beside an open side panel (which may be wide, like chat's), centred in the space left of it, with
+   the controls card moved up out of its way. */
+@media (min-width: 1041px) {
+  .office:has(> .side-panel) .focus-indicator {
+    left: calc((100% - var(--panel-w) - 24px) / 2);
+  }
+
+  .office:has(> .side-panel):has(> .focus-indicator) .help {
+    bottom: 134px;
+  }
+}
+
 @media (max-width: 1040px) {
   .office:has(.side-panel) .focus-indicator {
     display: none;

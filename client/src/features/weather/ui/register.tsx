@@ -10,5 +10,5 @@ import { WeatherSettings } from './WeatherSettings';
 import './weather.css';
 
 registerTopBarItem({ id: 'weather', order: 10, Component: WeatherChip });
-registerSettingsSection({ id: 'weather', title: 'Weather', icon: SunCloudIcon, order: 30, Component: WeatherSettings });
+registerSettingsSection({ id: 'weather', title: 'Weather', icon: SunCloudIcon, order: 40, Component: WeatherSettings });
 registerPersonDetail({ id: 'weather', order: 10, Component: PersonWeather });
