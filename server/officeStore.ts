@@ -16,7 +16,7 @@ export function randomId(length = 10): string {
 }
 
 /**
- * Offices in use are cached in memory; edits are written back to the repo (files or Postgres)
+ * Offices in use are cached in memory; edits are written back to the repo (the database)
  * after a short debounce, one save at a time per office.
  */
 export class OfficeStore {

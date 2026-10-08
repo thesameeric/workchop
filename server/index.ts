@@ -5,22 +5,43 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Server } from 'socket.io';
+import type { AccountUser, Space } from '../shared/account';
 import { sanitizeName } from '../shared/avatar';
 import type { TemplateId } from '../shared/templates';
-import type { ClientToServerEvents, ServerToClientEvents } from '../shared/types';
+import { Accounts } from './accounts';
+import { authOptionsFromEnv, createAuth, type AuthOptions } from './auth';
+import { openDb, type DatabaseSsl, type Db } from './db';
+import { importLegacyOffices } from './db/legacy';
+import { collectMigrations, migrate } from './db/migrations';
+import { registerFeatures, type Feature, type ServerContext } from './features';
+import { features as defaultFeatures } from './features/index';
 import { OfficeStore } from './officeStore';
-import { attachRealtime } from './realtime';
-import { FileRepo, PostgresRepo, type DatabaseSsl } from './repos';
+import { attachRealtime, sessionRoom, type IO } from './realtime';
+import { SqlOfficeRepo } from './repos';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers, type CloudflareTurn, type RTCIceServerLike } from './turn';
+import { createUploads, S3_MISSING, uploadOptionsFromEnv, type UploadOptions } from './uploads';
 
 export interface ServerOptions {
   port?: number;
   host?: string;
-  /** Directory for office JSON files (used when no database is configured). */
+  /**
+   * Base data directory (default ./data): the PGlite database in <dataDir>/db when there's no
+   * DATABASE_URL, uploaded files in <dataDir>/uploads, and old office JSON files to import once.
+   */
   dataDir?: string;
-  /** Postgres connection string; when set, offices are stored in Postgres instead of files. */
+  /** Postgres connection string; without one, data is kept in PGlite (embedded Postgres). */
   databaseUrl?: string;
   databaseSsl?: DatabaseSsl;
+  /** An open database to use instead (tests). It is migrated, but close() leaves it open. */
+  db?: Db;
+  /** The address people open Workchop at; defaults to PUBLIC_URL, or http://localhost:5173 outside production. */
+  publicUrl?: string | null;
+  /** Sign-in providers; defaults to the GOOGLE_*, APPLE_* and DEV_LOGIN variables. */
+  auth?: AuthOptions;
+  /** Upload settings; unset ones come from UPLOADS_STORAGE, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_*. */
+  uploads?: Partial<UploadOptions>;
+  /** Server features to load; defaults to the list in server/features/index.ts. */
+  features?: Feature[];
   /** Directory with the built client to serve; omit in development (Vite serves it). */
   clientDir?: string | null;
   iceServers?: RTCIceServerLike[];
@@ -74,23 +95,77 @@ export function iceServersFromEnv(env: NodeJS.ProcessEnv = process.env): RTCIceS
   return servers;
 }
 
+/** PUBLIC_URL's origin, or null when unknown. */
+function originOf(publicUrl: string | null): string | null {
+  if (!publicUrl) return null;
+  try {
+    const url = new URL(publicUrl);
+    if (url.protocol === 'https:' || url.protocol === 'http:') return url.origin;
+  } catch {
+    // Reported below.
+  }
+  throw new Error(`PUBLIC_URL must be the address people open Workchop at, like https://office.example.com (got "${publicUrl}")`);
+}
+
 export async function startServer(opts: ServerOptions = {}) {
-  const repo = opts.databaseUrl
-    ? new PostgresRepo(opts.databaseUrl, opts.databaseSsl)
-    : new FileRepo(opts.dataDir ?? path.resolve('data/offices'));
-  const store = new OfficeStore(repo);
+  const dataDir = path.resolve(opts.dataDir ?? 'data');
+  const features = opts.features ?? defaultFeatures;
+  // Settings are checked before the database is opened, so a mistake there doesn't leave it locked.
+  const publicUrl = opts.publicUrl !== undefined ? opts.publicUrl : process.env.PUBLIC_URL || (process.env.NODE_ENV === 'production' ? null : 'http://localhost:5173');
+  const publicOrigin = originOf(publicUrl);
+  const uploadOptions = { ...uploadOptionsFromEnv(dataDir), ...opts.uploads };
+  if (uploadOptions.storage === 's3' && !uploadOptions.s3) throw new Error(S3_MISSING);
+  const db = opts.db ?? (await openDb({ databaseUrl: opts.databaseUrl, databaseSsl: opts.databaseSsl, dataDir }));
+  try {
+    const applied = await migrate(db, collectMigrations(features));
+    if (applied.length && !opts.quiet) console.log(`[db] applied migrations: ${applied.join(', ')}`);
+    // A database handed in by a test has no data directory of its own unless one is given.
+    if (!opts.db || opts.dataDir) await importLegacyOffices(db, dataDir);
+  } catch (err) {
+    if (!opts.db) await db.close();
+    throw err;
+  }
+  const store = new OfficeStore(new SqlOfficeRepo(db));
   await store.init();
-  if (!opts.quiet) console.log(`[workchop] storing offices in ${store.description}`);
+  if (!opts.quiet) console.log(`[workchop] storing data in ${db.description}`);
+
+  const accounts = new Accounts(db);
 
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '64kb' }));
 
   const httpServer = createServer(app);
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
+  const io: IO = new Server(httpServer, {
     maxHttpBufferSize: 256 * 1024,
+    // Browsers send Origin on WebSocket handshakes from other sites, and not on same-origin polling.
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+      callback(null, !origin || !publicOrigin || origin === publicOrigin);
+    },
   });
-  const realtime = attachRealtime(io, store);
+  const auth = createAuth({
+    db,
+    accounts,
+    publicOrigin,
+    options: opts.auth ?? authOptionsFromEnv(),
+    onLogout: (tokenHash) => io.in(sessionRoom(tokenHash)).disconnectSockets(true),
+    quiet: opts.quiet,
+  });
+  io.use(auth.socketMiddleware);
+  const realtime = attachRealtime(io, store, { accounts });
+  const uploads = createUploads({
+    db,
+    options: uploadOptions,
+    // Anyone in the office right now may upload, guests included.
+    uploaderOf(socketId, officeId) {
+      const ctx = realtime.contextOf(socketId);
+      const player = ctx?.me();
+      if (!ctx?.socket.connected || ctx.room()?.officeId !== officeId || !player) return null;
+      return { userId: ctx.user?.id ?? null, name: player.name };
+    },
+  });
+  if (!opts.quiet) console.log(`[workchop] storing uploaded files in ${uploads.description}`);
+
   const iceServers = opts.iceServers ?? iceServersFromEnv();
   const turn = opts.cloudflareTurn !== undefined ? opts.cloudflareTurn : cloudflareTurnFromEnv();
   const ipHeader = (opts.clientIpHeader !== undefined ? opts.clientIpHeader : process.env.CLIENT_IP_HEADER)?.trim().toLowerCase() || null;
@@ -98,6 +173,10 @@ export async function startServer(opts: ServerOptions = {}) {
     const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
     return forwarded || req.ip || 'unknown';
   };
+
+  // Before express.json, which would otherwise swallow uploads sent as application/json.
+  app.post('/api/offices/:id/uploads', uploads.upload);
+  app.use(express.json({ limit: '64kb' }));
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -143,6 +222,9 @@ export async function startServer(opts: ServerOptions = {}) {
       res.status(503).json({ error: 'Could not save the new office. Please try again.' });
       return;
     }
+    // Signed in: the office is listed among their spaces, with them as its owner.
+    const user = await auth.userFromRequest(req);
+    if (user) await accounts.visit(user.id, stored.office.id, true).catch((err) => console.error('[accounts] could not add the owner:', err));
     res.status(201).json({ id: stored.office.id, ownerKey: stored.ownerKey });
   });
 
@@ -166,6 +248,47 @@ export async function startServer(opts: ServerOptions = {}) {
     });
   });
 
+  app.get('/api/uploads/:id{/:name}', uploads.download);
+
+  // Each sign-in attempt stores a little state, so limit them like office creation.
+  const maySignIn = windowLimiter(60, 15 * 60 * 1000);
+  app.use(['/api/auth/dev', '/api/auth/:provider/start'], (req, res, next) => {
+    if (maySignIn(clientIp(req))) return next();
+    res.status(429).json({ error: 'Too many sign-in attempts, try again later.' });
+  });
+  app.use('/api', auth.router);
+  app.get('/api/me/spaces', auth.requireUser, async (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = res.locals.user as AccountUser;
+    const spaces: Space[] = (await accounts.spaces(user.id)).map((s) => ({
+      ...s,
+      // Offices open right now may have been renamed moments ago.
+      name: store.peek(s.id)?.office.settings.name ?? s.name,
+      online: realtime.onlineCount(s.id),
+    }));
+    res.json(spaces);
+  });
+
+  const featureRoutes = express.Router();
+  app.use('/api', featureRoutes);
+  const ctx: ServerContext = {
+    app: featureRoutes,
+    io,
+    db,
+    store,
+    auth: { userFromRequest: auth.userFromRequest, requireUser: auth.requireUser },
+    realtime,
+    uploads,
+    publicOrigin,
+  };
+  try {
+    await registerFeatures(features, ctx);
+  } catch (err) {
+    await auth.close();
+    if (!opts.db) await db.close();
+    throw err;
+  }
+
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
@@ -184,12 +307,28 @@ export async function startServer(opts: ServerOptions = {}) {
     });
   }
 
+  // Errors from route handlers (e.g. the database going away) and bad request bodies.
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    const e = err as { status?: number; expose?: boolean; message?: string };
+    if (e.status && e.status >= 400 && e.status < 500) {
+      res.status(e.status).json({ error: e.expose && e.message ? e.message : 'Bad request' });
+      return;
+    }
+    console.error(`[workchop] ${req.method} ${req.path} failed:`, err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  });
+
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(opts.port ?? 0, opts.host ?? '0.0.0.0', () => {
       httpServer.off('error', reject);
       resolve();
     });
+  }).catch(async (err) => {
+    await auth.close();
+    if (!opts.db) await db.close();
+    throw err;
   });
   const port = (httpServer.address() as AddressInfo).port;
   if (!opts.quiet) {
@@ -204,6 +343,8 @@ export async function startServer(opts: ServerOptions = {}) {
     port,
     io,
     store,
+    db,
+    realtime,
     async close() {
       // Save pending office edits first, so nothing is lost even if shutdown gets cut short.
       await store.flush();
@@ -211,6 +352,8 @@ export async function startServer(opts: ServerOptions = {}) {
       httpServer.closeAllConnections();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await store.close();
+      await auth.close();
+      if (!opts.db) await db.close();
     },
   };
 }
@@ -226,6 +369,8 @@ if (isMain) {
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
     databaseUrl: process.env.DATABASE_URL || undefined,
     databaseSsl: process.env.DATABASE_SSL === 'require' || process.env.DATABASE_SSL === 'no-verify' ? process.env.DATABASE_SSL : undefined,
+    // The built app is served on its own port, not Vite's: there's no sensible default address.
+    publicUrl: process.env.PUBLIC_URL || (production ? null : undefined),
     clientDir: production ? (process.env.CLIENT_DIR ?? path.resolve(here, '../client')) : null,
   }).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'EADDRINUSE') throw err;

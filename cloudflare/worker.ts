@@ -11,7 +11,10 @@ interface Env {
   WORKCHOP: DurableObjectNamespace<WorkchopServer>;
   /** Where to create the Durable Object on first use ("weur", "enam", "apac"…); empty means near the first visitor. */
   LOCATION_HINT?: string;
-  /** "true" to run without a database, for trying things out: offices vanish whenever the container stops. */
+  /**
+   * "true" to run without a database, for trying things out: the server then keeps its data in an
+   * embedded database (PGlite) on the container's disk, so it vanishes whenever the container stops.
+   */
   EPHEMERAL_STORAGE?: string;
   // Secrets (`wrangler secret put NAME`), passed on to the server.
   DATABASE_URL?: string;
@@ -24,6 +27,23 @@ interface Env {
   TURN_URL?: string;
   TURN_USERNAME?: string;
   TURN_CREDENTIAL?: string;
+  /** The address people open Workchop at, e.g. https://office.example.com (needed for sign-in). */
+  PUBLIC_URL?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  APPLE_CLIENT_ID?: string;
+  APPLE_TEAM_ID?: string;
+  APPLE_KEY_ID?: string;
+  APPLE_PRIVATE_KEY?: string;
+  /** Uploaded files: "s3" (an R2 bucket via S3_*) or "db" (the Postgres database). */
+  UPLOADS_STORAGE?: string;
+  UPLOAD_MAX_BYTES?: string;
+  UPLOADS_QUOTA_MB?: string;
+  S3_ENDPOINT?: string;
+  S3_BUCKET?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_REGION?: string;
 }
 
 const PASSED_TO_SERVER = [
@@ -37,6 +57,21 @@ const PASSED_TO_SERVER = [
   'TURN_URL',
   'TURN_USERNAME',
   'TURN_CREDENTIAL',
+  'PUBLIC_URL',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'APPLE_CLIENT_ID',
+  'APPLE_TEAM_ID',
+  'APPLE_KEY_ID',
+  'APPLE_PRIVATE_KEY',
+  'UPLOADS_STORAGE',
+  'UPLOAD_MAX_BYTES',
+  'UPLOADS_QUOTA_MB',
+  'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+  'S3_REGION',
 ] as const;
 
 /** The port the server listens on inside the container (the Dockerfile's PORT). */

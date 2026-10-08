@@ -46,7 +46,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 ## Getting started
 
-Requires Node.js 22.12+ or 24+ (the current LTS releases). Node 20.19+ also runs the app, though npm warns that the test runner wants 22.12+. Check with `node --version`.
+Requires Node.js 22.12+ or 24+ (the current LTS releases). Check with `node --version`.
 
 ```bash
 npm install
@@ -54,6 +54,8 @@ npm run dev
 ```
 
 Open the `Local:` address it prints (normally http://localhost:5173), create an office, pick a name and join. Allow the camera and microphone when the browser asks.
+
+Data is kept in `./data`: an embedded Postgres ([PGlite](https://pglite.dev), no setup) in `data/db` and uploaded files in `data/uploads`. Only one server can use a data folder at a time.
 
 `npm run dev` starts the API and realtime server on port 3001 (reloading on change) and Vite on port 5173, which proxies `/api` and `/socket.io` to the server. If port 3001 is taken, run it on another one, e.g. `PORT=4001 npm run dev` (the proxy follows `PORT`; on Windows use `$env:PORT=4001; npm run dev` in PowerShell or `set PORT=4001&& npm run dev` in cmd). Stop it with `Ctrl+C`.
 
@@ -87,7 +89,8 @@ docker compose up -d --build
 
 Then open `https://<your DOMAIN>`. Update later with `git pull && docker compose up -d --build`. To try the stack on your own machine, set `DOMAIN=localhost` and accept the browser's warning about Caddy's local certificate.
 
-- **Where the data lives:** in the `db-data` Docker volume, and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
+- **Where the data lives:** in the `db-data` Docker volume (offices, accounts and, unless you set up a bucket, uploaded files), and it survives restarts and `docker compose down`. Only `docker compose down -v` deletes it. Back it up with `docker compose exec db pg_dump -U workchop workchop > backup.sql`.
+- **Sign-in (optional):** see [Accounts and sign-in](#accounts-and-sign-in). Compose sets `PUBLIC_URL` to `https://<DOMAIN>`.
 - **TURN (optional):** people behind strict corporate firewalls may need a relay for calls to connect. The simplest is [Cloudflare's TURN service](#cloudflare-turn-for-calls). To run your own instead, set `TURN_URL=turn:<DOMAIN>:3478`, `TURN_USERNAME` and `TURN_CREDENTIAL` in `.env`, open TCP/UDP 3478 and UDP 49160–49200, and start with `docker compose --profile turn up -d --build`.
 
 ### Hosting on Cloudflare
@@ -130,7 +133,7 @@ npx wrangler secret put DATABASE_URL        # e.g. postgresql://…neon.tech/neo
 npm run deploy                              # builds the app and the image, then deploys
 ```
 
-The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`.
+The first deploy takes a few minutes while Cloudflare prepares the container. Workchop is then at `https://workchop.<your-subdomain>.workers.dev`. Add your own hostname under the Worker's *Settings > Domains & Routes*. Optional settings are wrangler secrets as well: `SPOTIFY_CLIENT_ID` (register `https://<your host>/spotify-callback.html` as its redirect URI), `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_KEY_API_TOKEN`, the [sign-in](#accounts-and-sign-in) keys, and an R2 bucket for uploaded files (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; without one, files go into Postgres, which fills a free database quickly). Set `PUBLIC_URL` (in `wrangler.jsonc`) to the address people use; sign-in needs it.
 
 How it behaves:
 - **Starts on demand.** The first visit starts the container, which takes a few seconds. It stops about 15 minutes after the last person closes Workchop. Open tabs check in every few minutes, which keeps it running.
@@ -157,14 +160,18 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 
 | Data | Where |
 | --- | --- |
-| Offices: layout, furniture, private areas, settings, owner key | Postgres (when `DATABASE_URL` is set), otherwise one JSON file per office in `DATA_DIR` |
-| Names and characters | Each person's browser (local storage) |
+| Offices: layout, furniture, private areas, settings, owner key | The database: Postgres when `DATABASE_URL` is set, otherwise PGlite in `DATA_DIR/db` |
+| Accounts (people who signed in): name, email, character and settings, sign-in methods, sessions, which offices they belong to | The database. Sessions are stored as a SHA-256 of the cookie's token |
+| Uploaded files | An S3/R2 bucket when `S3_*` is set, otherwise the database with Postgres, or `DATA_DIR/uploads` with PGlite (`UPLOADS_STORAGE` picks one) |
+| Names and characters of guests | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
 | Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
 | Who's online, positions, calls | In memory only (live state) |
 
-**Postgres or files?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in one `offices` table, created automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. The JSON files are fine for a single server with a persistent disk, and need no setup. Switching storage doesn't move existing offices over.
+**Postgres or PGlite?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in an `offices` table; the tables are created and upgraded automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. Without `DATABASE_URL`, the server runs PGlite, Postgres compiled to WebAssembly, inside its own process: no setup, fine for development and a single small server with a persistent disk, but it needs about 300–500 MB of memory and every query briefly pauses the server. Switching between the two doesn't move data over.
+
+Earlier versions saved offices as JSON files (`DATA_DIR/offices/*.json`, or `DATA_DIR/*.json`). On its first start, the server copies them into the database and moves them to `DATA_DIR/offices.imported`.
 
 Run **one app instance**. Live rooms (who's where, call links) are kept in memory, so several instances behind a load balancer would split an office in two. One instance comfortably serves many offices.
 
@@ -175,7 +182,7 @@ npm run build      # client -> dist/client, server -> dist/server
 npm start          # serves both on PORT (default 3001)
 ```
 
-or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgres://… workchop` (leave out `DATABASE_URL` to store files in the `/app/data` volume). Put it behind any HTTPS reverse proxy that forwards WebSockets (Caddy, nginx, a cloud load balancer).
+or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgres://… workchop` (leave out `DATABASE_URL` to keep everything in PGlite in the `/app/data` volume). Put it behind any HTTPS reverse proxy that forwards WebSockets (Caddy, nginx, a cloud load balancer).
 
 ### Configuration
 
@@ -183,9 +190,16 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | --- | --- | --- |
 | `PORT` | `3001` | HTTP port of the server (in `npm run dev`, the API port Vite proxies to) |
 | `HOST` | `0.0.0.0` | Bind address |
-| `DATABASE_URL` | – | Postgres connection string. When set, offices are stored in Postgres |
+| `DATABASE_URL` | – | Postgres connection string. Without it, data is kept in PGlite in `DATA_DIR/db` |
 | `DATABASE_SSL` | – | `require` (verified TLS) or `no-verify` (TLS without certificate checks, for some managed providers) |
-| `DATA_DIR` | `./data/offices` | Where offices are saved when there's no `DATABASE_URL` (one JSON file each) |
+| `DATA_DIR` | `./data` (`/app/data` in Docker) | Data folder: the PGlite database (`db/`), uploaded files with `UPLOADS_STORAGE=fs` (`uploads/`), and old office JSON files to import |
+| `PUBLIC_URL` | `http://localhost:5173` in development | The address people open Workchop at, e.g. `https://office.example.com`. Sign-in redirects are built from it, and Socket.IO refuses connections whose `Origin` differs. Compose sets it from `DOMAIN` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | – | Turns on "Sign in with Google" (see [Accounts and sign-in](#accounts-and-sign-in)) |
+| `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | – | Turns on "Sign in with Apple": the Services ID, team ID, key ID and the `.p8` key (PEM, with `\n` for line breaks, or base64) |
+| `DEV_LOGIN` | – | `true` allows signing in with just a name and email, for development. Ignored when `NODE_ENV=production` unless `DEV_LOGIN_IN_PRODUCTION=true` |
+| `UPLOADS_STORAGE` | see above | Where uploaded files go: `s3`, `db` or `fs`. Each file remembers where it went, so switching keeps old files readable |
+| `UPLOAD_MAX_BYTES`, `UPLOADS_QUOTA_MB` | `10485760`, `1024` | Largest file, and the total each office may keep |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | –, `auto` | An S3-compatible bucket for uploads (Cloudflare R2: `https://<account id>.r2.cloudflarestorage.com`); path-style URLs |
 | `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | – | Shortcut for adding one TURN server (comma-separate several URLs) |
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_KEY_API_TOKEN` | – | Use Cloudflare's TURN service, with short-lived credentials per visitor (replaces the static ICE servers above) |
@@ -194,6 +208,16 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
+
+### Accounts and sign-in
+
+Signing in is optional: anyone with an office link can still join as a guest. People who sign in keep their character and settings across devices, and the offices they visit are listed for them (`GET /api/me/spaces`), with the ones they created (or opened with the owner key) as their own. Accounts are never merged by email address, so signing in with Google and with Apple gives two accounts.
+
+- **Google:** in the Google Cloud console (Google Auth Platform), set up the branding, set the audience to *External* and publish it to *In production* (for just name, email and profile no review is needed). Create a *Web application* client with the redirect URI `https://<your host>/api/auth/google/callback` (and `http://localhost:5173/api/auth/google/callback` for development), copy the secret right away (it's shown once), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Google deletes clients that go unused for six months.
+- **Apple** (needs a paid Apple Developer membership): enable *Sign in with Apple* on an App ID, create a *Services ID* with your domain and the return URL `https://<your host>/api/auth/apple/callback` (HTTPS only, no localhost), and create a *Sign in with Apple* key. Set `APPLE_CLIENT_ID` (the Services ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY` (the `.p8` file). Apple sends a person's name only the first time they sign in.
+- **Development:** `DEV_LOGIN=true npm run dev` adds a sign-in with just a name and email.
+
+Sessions last 30 days from the last visit, in an HttpOnly cookie (`__Host-wc_session` over HTTPS).
 
 ### Music and Spotify
 
@@ -219,7 +243,12 @@ server/   Express + Socket.IO
   room.ts      Who is linked to whom
   music.ts     Jukebox changes and who may make them, Spotify link previews
   officeStore.ts  Cache of open offices, debounced saves, flush on shutdown
-  repos.ts     Storage backends: JSON files or Postgres (jsonb)
+  repos.ts     Offices in SQL (one jsonb row each)
+  db/          The database (Postgres or PGlite), migrations, import of old JSON offices
+  auth/        Sign-in with Google, Apple or the dev login; cookie sessions
+  accounts.ts  Users, sign-in identities, office memberships
+  uploads.ts   File uploads and downloads (database, disk or S3/R2)
+  features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangler.jsonc, worker.ts)
@@ -238,7 +267,9 @@ npm run typecheck
 npm test          # unit tests for geometry/office rules + server integration tests
 ```
 
-The storage tests also run against Postgres when `TEST_DATABASE_URL` points at a database they may write to, e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`.
+Tests use an in-memory PGlite. They run against real Postgres instead when `TEST_DATABASE_URL` points at a database they may write to (each test file gets its own schema), e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`. Run both before changing SQL: production may run Postgres 16 while PGlite is Postgres 18.
+
+**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register` gets an Express router mounted at `/api`, the database, the office store, `auth.userFromRequest`/`requireUser`, and the realtime hooks (`onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `updatePlayer`…). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100.
 
 ## Limits
 

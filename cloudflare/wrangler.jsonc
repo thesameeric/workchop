@@ -38,11 +38,18 @@
     "LOCATION_HINT": "",
     // "true" lets it run without DATABASE_URL, for a quick try: offices are lost whenever the
     // container stops (15 minutes after everyone leaves, on deploys and on host restarts).
-    "EPHEMERAL_STORAGE": "false"
+    "EPHEMERAL_STORAGE": "false",
+    // The address people open Workchop at, e.g. "https://office.example.com" (sign-in needs it).
+    "PUBLIC_URL": "",
+    // Uploaded files: "s3" for an R2 bucket (set the S3_* secrets; recommended), or "db" to keep
+    // them in Postgres (uses up a small free database quickly). Empty: s3 when S3_BUCKET is set, else db.
+    "UPLOADS_STORAGE": ""
   },
   // Secrets, set with `npx wrangler secret put NAME`: DATABASE_URL (required), DATABASE_SSL,
-  // SPOTIFY_CLIENT_ID, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_KEY_API_TOKEN, and optionally
-  // ICE_SERVERS or TURN_URL/TURN_USERNAME/TURN_CREDENTIAL.
+  // SPOTIFY_CLIENT_ID, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_KEY_API_TOKEN, optionally
+  // ICE_SERVERS or TURN_URL/TURN_USERNAME/TURN_CREDENTIAL, for sign-in GOOGLE_CLIENT_ID,
+  // GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY, and
+  // for uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY.
 
   "observability": { "enabled": true }
 }

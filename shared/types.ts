@@ -38,9 +38,12 @@ export interface PlayerState {
   mic: boolean;
   cam: boolean;
   screen: boolean;
+  /** Account id when signed in (a random id, shown so others can tell members apart). */
+  userId?: string;
 }
 
-export type PlayerPatch = Partial<Pick<PlayerState, 'name' | 'avatar' | 'status' | 'mic' | 'cam' | 'screen'>>;
+/** Changes to a player's public state. Fields features add to PlayerState are included automatically. */
+export type PlayerPatch = Partial<Omit<PlayerState, 'id' | 'x' | 'z' | 'ry' | 'anim' | 'userId'>>;
 
 /** A piece of furniture or structure placed in an office. x/z is the footprint centre. */
 export interface OfficeItem {

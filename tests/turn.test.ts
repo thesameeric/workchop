@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../server/index';
+import { createTestDb } from './helpers/db';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers } from '../server/turn';
 
 // The 201 response from Cloudflare's docs (Realtime TURN → Generate credentials).
@@ -80,6 +81,7 @@ describe('Cloudflare TURN credentials', () => {
 describe('server behind a proxy', () => {
   const servers: { close(): Promise<void> }[] = [];
   const dirs: string[] = [];
+  beforeAll(() => createTestDb(), 60_000);
   afterEach(async () => {
     for (const s of servers.splice(0)) await s.close();
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -87,7 +89,8 @@ describe('server behind a proxy', () => {
   const start = async (opts: Parameters<typeof startServer>[0]) => {
     const dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-turn-'));
     dirs.push(dataDir);
-    const server = await startServer({ port: 0, host: '127.0.0.1', dataDir, quiet: true, iceServers: [{ urls: 'stun:static.example' }], ...opts });
+    const db = await createTestDb();
+    const server = await startServer({ port: 0, host: '127.0.0.1', dataDir, db, quiet: true, iceServers: [{ urls: 'stun:static.example' }], ...opts });
     servers.push(server);
     return `http://127.0.0.1:${server.port}`;
   };

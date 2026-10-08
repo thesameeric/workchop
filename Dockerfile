@@ -11,12 +11,13 @@ RUN npm run build
 # Runtime image: only the server's own dependencies plus the built files.
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production PORT=3001 DATA_DIR=/app/data/offices
+ENV NODE_ENV=production PORT=3001 DATA_DIR=/app/data
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
-# Run as the unprivileged "node" user; /app/data holds offices when no DATABASE_URL is set.
-RUN mkdir -p /app/data/offices && chown -R node:node /app/data
+# Run as the unprivileged "node" user. Without DATABASE_URL, /app/data holds the embedded database
+# (PGlite, in /app/data/db) and uploaded files (/app/data/uploads).
+RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node
 VOLUME /app/data
 EXPOSE 3001
