@@ -5,6 +5,8 @@ import { FocusBadge } from '../features/audio/Headphones';
 import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
+import { PlayerApp } from '../features/presence/AppChip';
+import { DeskAppLabels } from '../features/presence/DeskLabels';
 import { LockIcon, MicOffIcon } from './icons';
 
 const TAG_Y = 2.12;
@@ -42,6 +44,7 @@ const PlayerLabel = memo(function PlayerLabel({
           <span className={`status-dot ${status}`} />
           <span className="nametag-name">{name}</span>
           {focus && <FocusBadge />}
+          <PlayerApp id={id} self={self} variant="tag" />
           {!mic && (
             <span className="nametag-muted">
               <MicOffIcon size={12} />
@@ -91,6 +94,8 @@ export function WorldLabels() {
       {zones.map((z) => (
         <ZoneLabel key={z.id} zone={z} active={z.id === activeZoneId} />
       ))}
+      {/* Under the name tags. */}
+      <DeskAppLabels />
       {ids.map((id) => (
         <RemoteLabel key={id} id={id} />
       ))}

@@ -7,7 +7,7 @@ type P = HTMLAttributes<HTMLSpanElement> & { size?: number };
 export type IconComponent = (props: P) => ReactElement;
 
 /** A Hugeicons glyph from the subset font (add new names to icon-names.json, then run `npm run icons`). */
-function icon(name: HugeiconName) {
+export function icon(name: HugeiconName) {
   const glyph = String.fromCodePoint(HUGEICONS[name]);
   return function Icon({ size = 20, className, style, ...rest }: P) {
     return (

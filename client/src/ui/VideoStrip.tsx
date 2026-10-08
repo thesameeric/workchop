@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { setState, useStore } from '../state/store';
+import { PlayerApp } from '../features/presence/AppChip';
 import { CloseIcon, ExpandIcon, MicOffIcon, ScreenIcon } from './icons';
 import { useMediaState, VideoView } from './media';
 
@@ -33,6 +34,7 @@ function Tile({ id, name, stream, videoOn, mic, screen, speaking, focus, self }:
         {focus && <FocusBadge />}
         {screen && <ScreenIcon size={12} />}
         <span>{self ? `${name} (you)` : name}</span>
+        <PlayerApp id={id} self={self} variant="tile" />
       </div>
       {videoOn && stream && (
         <button className="tile-expand" title="Enlarge" onClick={() => setState({ spotlight: id })}>

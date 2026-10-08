@@ -10,6 +10,7 @@ import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
 import { CamIcon, CamOffIcon, HammerIcon, LeaveIcon, LinkIcon, MicIcon, MicOffIcon, ScreenIcon, SettingsIcon, SmileIcon } from './icons';
 import { AccountMenu, usePopover } from './Account';
 import { useMediaState } from './media';
+import { PresenceDockButton } from '../features/presence/DockButton';
 import { panelKey, usePanels, type PanelDef } from './panels';
 
 export async function copyInvite(): Promise<void> {
@@ -148,6 +149,7 @@ export function Dock() {
     <nav className="dock" aria-label="Controls">
       <div className="dock-group">
         <MeButton />
+        <PresenceDockButton />
       </div>
       <div className="dock-group center">
         <button className={`dock-btn${m.mic ? '' : ' off'}`} onClick={() => media.setMic(!m.mic)} title={m.mic ? 'Mute (M)' : 'Unmute (M)'}>
