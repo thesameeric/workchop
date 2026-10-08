@@ -8,6 +8,7 @@ import { shade } from '../lib/color';
 import { local } from '../lib/positions';
 import { useDarkTheme } from '../lib/theme';
 import { useStore } from '../state/store';
+import { sceneLighting, SUN_DISTANCE } from './layers';
 import { OpacityContext, Box } from './prims';
 import { floorTexture } from './textures';
 
@@ -22,8 +23,33 @@ export function useSceneColors() {
   return SCENE_COLORS[useDarkTheme() ? 'dark' : 'light'];
 }
 
+/** Background and fog, in the sky colour (sceneLighting may change both). */
+export function Sky() {
+  const { sky } = useSceneColors();
+  const theme = useMemo(() => new THREE.Color(sky), [sky]);
+  const background = useRef<THREE.Color>(null);
+  const fog = useRef<THREE.Fog>(null);
+  useFrame(() => {
+    const l = sceneLighting;
+    const color = l.sky ?? theme;
+    background.current?.copy(color);
+    if (!fog.current) return;
+    fog.current.color.copy(color);
+    fog.current.near = l.fogNear;
+    fog.current.far = l.fogFar;
+  });
+  return (
+    <>
+      <color ref={background} attach="background" args={[sky]} />
+      <fog ref={fog} attach="fog" args={[sky, 45, 110]} />
+    </>
+  );
+}
+
 export function Lights({ settings }: { settings: OfficeSettings }) {
   const { width, depth } = settings;
+  const hemi = useRef<THREE.HemisphereLight>(null);
+  const ambient = useRef<THREE.AmbientLight>(null);
   const light = useRef<THREE.DirectionalLight>(null);
   const span = Math.max(width, depth);
   const target = useMemo(() => {
@@ -31,15 +57,28 @@ export function Lights({ settings }: { settings: OfficeSettings }) {
     o.position.set(width / 2, 0, depth / 2);
     return o;
   }, [width, depth]);
+  useFrame(() => {
+    const l = sceneLighting;
+    if (hemi.current) {
+      hemi.current.color.copy(l.hemiSky);
+      hemi.current.groundColor.copy(l.hemiGround);
+      hemi.current.intensity = l.hemiIntensity;
+    }
+    if (ambient.current) ambient.current.intensity = l.ambientIntensity;
+    const sun = light.current;
+    if (!sun) return;
+    // Always the same distance from the middle, so the shadow camera keeps covering the office.
+    sun.position.copy(target.position).addScaledVector(l.sunDir, span * SUN_DISTANCE);
+    sun.color.copy(l.sunColor);
+    sun.intensity = l.sunIntensity;
+  });
   return (
     <>
-      <hemisphereLight args={['#f4f1ff', '#8c7a6b', 1.25]} />
-      <ambientLight intensity={0.35} />
+      <hemisphereLight ref={hemi} />
+      <ambientLight ref={ambient} />
       <primitive object={target} />
       <directionalLight
         ref={light}
-        position={[width / 2 - span * 0.35, span * 0.9, depth / 2 + span * 0.45]}
-        intensity={1.6}
         target={target}
         castShadow
         shadow-mapSize={[2048, 2048]}
@@ -59,18 +98,27 @@ export function Lights({ settings }: { settings: OfficeSettings }) {
 export const Floor = memo(function Floor({ settings }: { settings: OfficeSettings }) {
   const { width, depth, floor, floorColor } = settings;
   const { ground } = useSceneColors();
+  const groundMat = useRef<THREE.MeshStandardMaterial>(null);
+  const groundColor = useMemo(() => new THREE.Color(ground), [ground]);
   const map = useMemo(() => {
     const t = floorTexture(floor, floorColor);
     t.repeat.set(width / 2, depth / 2);
     t.needsUpdate = true;
     return t;
   }, [floor, floorColor, width, depth]);
+  // Darker at night; wet ground is darker still and a little shiny.
+  useFrame(() => {
+    const m = groundMat.current;
+    if (!m) return;
+    m.color.copy(groundColor).multiplyScalar(sceneLighting.groundShade * (1 - 0.35 * sceneLighting.wetness));
+    m.roughness = 1 - 0.55 * sceneLighting.wetness;
+  });
   return (
     <group>
       {/* Ground around the building. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[width / 2, -0.02, depth / 2]} receiveShadow>
         <planeGeometry args={[width + 60, depth + 60]} />
-        <meshStandardMaterial color={ground} roughness={1} />
+        <meshStandardMaterial ref={groundMat} color={ground} roughness={1} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[width / 2, 0, depth / 2]} receiveShadow>
         <planeGeometry args={[width, depth]} />

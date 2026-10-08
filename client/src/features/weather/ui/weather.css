@@ -1,0 +1,352 @@
+/* Weather: the chip in the office's top bar and its popover (dark glass, like the rest of the HUD),
+   Settings > Weather, and people's shared weather in the People panel. This file loads before
+   styles.css, so rules that override its classes are more specific than theirs. */
+
+.weather {
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+.weather-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Clear of the widest video strip, which starts 210px in (the chip starts at 12px). */
+  max-width: 198px;
+  padding: 5px 12px 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-line);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--glass-shadow);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.weather-chip:hover,
+.weather-chip[aria-expanded='true'] {
+  background: var(--glass-solid);
+}
+
+.weather-chip:focus-visible,
+.weather-pop :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.weather-temp {
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--glass-muted);
+}
+
+/* The popover, in a portal on the page (outside the office's own styles). */
+.weather-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(300px, calc(100vw - 24px));
+  overflow-y: auto;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--glass-line);
+  background: var(--glass-solid);
+  color: var(--glass-ink);
+  box-shadow: var(--glass-shadow);
+  font-size: 0.9rem;
+  outline: none;
+  animation: menu-in 0.12s ease-out;
+}
+
+.weather-pop h3,
+.weather-pop p {
+  margin: 0;
+}
+
+.weather-pop h3 {
+  font-size: 0.95rem;
+}
+
+.weather-pop .muted {
+  color: var(--glass-muted);
+}
+
+.weather-pop > .btn {
+  align-self: flex-start;
+}
+
+.weather-pop .btn {
+  background: var(--glass-fill);
+  border-color: var(--glass-line);
+  color: var(--glass-ink);
+}
+
+.weather-pop .btn:hover:not(:disabled) {
+  background: var(--glass-hover);
+}
+
+.weather-pop .form-error {
+  color: var(--glass-danger);
+}
+
+.weather-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.weather-big {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--glass-line);
+  border-bottom: 1px solid var(--glass-line);
+}
+
+.weather-facts dt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--glass-muted);
+  font-size: 0.75rem;
+}
+
+/* Sunrise and sunset share a row. */
+.weather-facts .sun-start {
+  grid-column: 1;
+}
+
+.weather-facts dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-credit {
+  color: var(--muted);
+}
+
+.weather-pop .weather-credit {
+  color: var(--glass-muted);
+}
+
+.weather-credit a {
+  color: inherit;
+}
+
+/* Choosing a place: city search, "Use my location", "Use automatic" (or "Clear location"). */
+.weather-location,
+.weather-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weather-location p,
+.weather-search p {
+  margin: 0;
+}
+
+.weather-location-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weather-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.weather-search-box .hgi {
+  position: absolute;
+  left: 10px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.weather-search-box input[type='search'] {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px 8px 32px;
+  border-radius: 10px;
+}
+
+.weather-pop .weather-search-box input[type='search'] {
+  border: 1px solid var(--glass-line);
+  background: var(--glass-fill);
+  color: var(--glass-ink);
+  outline: none;
+}
+
+.weather-pop .weather-search-box input[type='search']:focus {
+  border-color: var(--primary);
+}
+
+.weather-pop input::placeholder {
+  color: var(--glass-muted);
+}
+
+.weather-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weather-results button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+}
+
+.weather-results button > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-results button > span:first-child {
+  font-weight: 600;
+}
+
+.weather-pop .weather-results button:hover,
+.weather-pop .weather-results button:focus-visible {
+  background: var(--glass-raised);
+}
+
+.settings-body .weather-results button:hover,
+.settings-body .weather-results button:focus-visible {
+  background: var(--primary-soft);
+}
+
+/* Settings > Weather */
+.weather-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.theme-options.weather-units {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* The unit symbol, where the Theme options have their icons. */
+.weather-unit {
+  font-size: 1.2rem;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.weather-switch {
+  margin-bottom: 14px;
+}
+
+.weather-switch label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.weather-switch p {
+  margin: 4px 0 0;
+}
+
+.weather-switch input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  /* Off: an outline and a small knob in --muted, which stand out on the card in both themes. */
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.weather-switch input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: scale(0.75);
+  transition: transform 0.15s, background 0.15s;
+}
+
+.weather-switch input[type='checkbox']:checked {
+  background: var(--primary);
+  box-shadow: none;
+}
+
+.weather-switch input[type='checkbox']:checked::before {
+  background: var(--primary-ink);
+  transform: translateX(18px);
+}
+
+.weather-switch input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.weather-switch input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* People panel */
+.person-weather {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow: just the condition and temperature (the place stays while there's no temperature yet). */
+@media (max-width: 720px) {
+  .weather-chip .weather-temp ~ .weather-place {
+    display: none;
+  }
+}

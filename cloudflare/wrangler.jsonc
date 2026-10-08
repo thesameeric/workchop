@@ -48,8 +48,9 @@
   // Secrets, set with `npx wrangler secret put NAME`: DATABASE_URL (required), DATABASE_SSL,
   // SPOTIFY_CLIENT_ID, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_KEY_API_TOKEN, optionally
   // ICE_SERVERS or TURN_URL/TURN_USERNAME/TURN_CREDENTIAL, for sign-in GOOGLE_CLIENT_ID,
-  // GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY, and
-  // for uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY.
+  // GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY, for
+  // uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, and for weather
+  // in commercial use OPEN_METEO_API_KEY (the free API is non-commercial only; WEATHER=off turns it off).
 
   "observability": { "enabled": true }
 }

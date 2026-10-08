@@ -1,12 +1,13 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Suspense, useEffect, useRef, type ComponentRef } from 'react';
+import { Component, Suspense, useEffect, useRef, type ComponentRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { local } from '../lib/positions';
 import { useStore } from '../state/store';
-import { BuildGrid, Floor, Lights, PerimeterWalls, useSceneColors, Zones } from './Environment';
+import { BuildGrid, Floor, Lights, PerimeterWalls, Sky, Zones } from './Environment';
 import { Ground } from './Ground';
 import { Items } from './Items';
+import { sceneLayerKey, useSceneLayers } from './layers';
 import { LocalPlayer, RemotePlayers } from './Players';
 import { Projector } from './Projector';
 
@@ -61,15 +62,31 @@ function CameraRig() {
   );
 }
 
+/** A scene layer that fails (to load or to render) renders nothing, so the office carries on without it. */
+class LayerBoundary extends Component<{ id: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error(`The ${this.props.id} scene layer failed and is turned off.`, error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 function Scene() {
   const settings = useStore((s) => s.office?.settings);
   const building = useStore((s) => s.mode === 'build');
-  const { sky } = useSceneColors();
+  const layers = useSceneLayers();
   if (!settings) return null;
   return (
     <>
-      <color attach="background" args={[sky]} />
-      <fog attach="fog" args={[sky, 45, 110]} />
+      <Sky />
       <Lights settings={settings} />
       <Floor settings={settings} />
       {building && <BuildGrid settings={settings} />}
@@ -81,6 +98,14 @@ function Scene() {
       <RemotePlayers />
       <CameraRig />
       <Projector />
+      {/* What features add (weather…); one that is still loading or fails doesn't hold up the office. */}
+      {layers.map((layer) => (
+        <LayerBoundary key={sceneLayerKey(layer)} id={layer.id}>
+          <Suspense fallback={null}>
+            <layer.Component />
+          </Suspense>
+        </LayerBoundary>
+      ))}
     </>
   );
 }

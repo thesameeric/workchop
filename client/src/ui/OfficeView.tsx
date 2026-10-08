@@ -10,6 +10,7 @@ import { CloseIcon, HelpIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
 import { NowPlayingPill } from './MusicPanel';
 import { usePanels } from './panels';
+import { topBarItemKey, useTopBarItems } from './topbar';
 import { SelfView, Spotlight, VideoStrip } from './VideoStrip';
 import { WorldLabels, ZoneIndicator } from './WorldLabels';
 
@@ -19,6 +20,7 @@ function TopBar() {
   const name = useStore((s) => s.office?.settings.name ?? '');
   const count = useStore((s) => Object.keys(s.players).length + 1);
   const isOwner = useStore((s) => s.isOwner);
+  const items = useTopBarItems();
   return (
     <div className="topbar">
       <div className="office-chip">
@@ -33,6 +35,9 @@ function TopBar() {
       </div>
       <ZoneIndicator />
       <NowPlayingPill />
+      {items.map((item) => (
+        <item.Component key={topBarItemKey(item)} />
+      ))}
     </div>
   );
 }
