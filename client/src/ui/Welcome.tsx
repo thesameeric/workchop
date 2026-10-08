@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { sanitizeUserName, type AccountUser } from '../../../shared/account';
 import { errorText, saveAccountCharacter } from '../lib/account';
-import { navigate, nextParam } from '../lib/router';
+import { navigate, nextParam, wantDefault } from '../lib/router';
 import { getState, useStore } from '../state/store';
 import { AuthShell } from './AuthPage';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
@@ -25,6 +25,8 @@ function WelcomeForm({ account, next }: { account: AccountUser; next: string }) 
     setError(null);
     try {
       await saveAccountCharacter(clean, avatar);
+      // Nowhere in particular: on to your default workspace, if you have one.
+      if (next === '/') wantDefault();
       navigate(next, { replace: true });
     } catch (err) {
       setError(errorText(err));

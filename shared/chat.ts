@@ -144,7 +144,7 @@ export interface MentionNotice {
 declare module './types' {
   interface ClientToServerEvents {
     'chat:channels': (ack: (res: ChatResult<ChannelsAnswer>) => void) => void;
-    /** Signed-in members of the office, for mentions and direct messages. */
+    /** The office's members, for mentions and direct messages (none for guests). */
     'chat:people': (ack: (res: ChatResult<{ people: ChatPerson[] }>) => void) => void;
     /** A page of history, newest first in the database, oldest first in the answer; `before` is a message id. */
     'chat:history': (req: { conv: ConvKey; before?: string }, ack: (res: ChatResult<HistoryAnswer>) => void) => void;

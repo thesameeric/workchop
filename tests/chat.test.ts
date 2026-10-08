@@ -9,7 +9,8 @@ import type { UploadedFile } from '../shared/uploads';
 import { chatFeature } from '../server/features/chat';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
-import { createOffice, disconnectAll, Jar, join, json, until, type Client } from './helpers/http';
+import type { MemberRole } from '../shared/workspace';
+import { createOffice, disconnectAll, Jar, join, json, member, until, type Client } from './helpers/http';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let base: string;
@@ -62,17 +63,15 @@ async function signIn(name: string) {
   return { jar, user };
 }
 
+/** Makes them members of the office. */
+async function members(officeId: string, people: { jar: Jar }[], role: MemberRole = 'member') {
+  for (const p of people) await member(base, server.db, officeId, p.jar, role);
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const send = (c: Client, req: SendRequest) => c.emitWithAck('chat:send', req);
 const channels = async (c: Client) => ok(await c.emitWithAck('chat:channels'));
 const general = async (c: Client): Promise<ChatChannel> => (await channels(c)).channels.find((ch) => ch.isDefault)!;
-
-/** Locks building (and so channel management and moderation) to the owner. */
-async function ownerOnly(owner: Client, other: Client) {
-  const seen = collect(other, 'office:op');
-  owner.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
-  await until(() => seen.length > 0);
-}
 
 async function upload(c: Client, uploadKey: string, officeId: string, name: string, body: Buffer, type = 'image/png'): Promise<UploadedFile> {
   const res = await fetch(`${base}/api/offices/${officeId}/uploads`, {
@@ -87,9 +86,9 @@ async function upload(c: Client, uploadKey: string, officeId: string, name: stri
 const keyOf = (r: Awaited<ReturnType<typeof join>>['res']) => (r.ok ? r.uploadKey : '');
 
 describe('chat channels', () => {
-  it('start with #general; anyone creates channels, editors rename and archive them', async () => {
-    const { id, ownerKey } = await createOffice(base);
-    const owner = await join(base, id, 'Owner', { ownerKey });
+  it('start with #general; anyone creates channels, the owner and admins rename and archive them', async () => {
+    const { id, owner: ownerJar } = await createOffice(base);
+    const owner = await join(base, id, 'Owner', { jar: ownerJar });
     const guest = await join(base, id, 'Gus');
     const list = await channels(owner.socket);
     expect(list.channels.map((c) => [c.name, c.isDefault])).toEqual([['general', true]]);
@@ -111,10 +110,9 @@ describe('chat channels', () => {
       expect(failed(await guest.socket.emitWithAck('channel:create', { name }))).toMatch(error);
     }
 
-    // With building locked to the owner, only the owner renames and archives; anyone sets topics.
-    await ownerOnly(owner.socket, guest.socket);
-    expect(failed(await guest.socket.emitWithAck('channel:update', { id: design.id, name: 'mine' }))).toMatch(/Only people who can edit/);
-    expect(failed(await guest.socket.emitWithAck('channel:archive', design.id, true))).toMatch(/Only people who can edit/);
+    // Only the owner (and admins) rename and archive; anyone sets topics.
+    expect(failed(await guest.socket.emitWithAck('channel:update', { id: design.id, name: 'mine' }))).toBe('Only the owner and admins can rename channels.');
+    expect(failed(await guest.socket.emitWithAck('channel:archive', design.id, true))).toBe('Only the owner and admins can archive channels.');
     expect(ok(await guest.socket.emitWithAck('channel:update', { id: design.id, topic: 'Logos' })).channel.topic).toBe('Logos');
     const updates = collect(guest.socket, 'channel:updated');
     const renamed = ok(await owner.socket.emitWithAck('channel:update', { id: design.id, name: 'design' })).channel;
@@ -149,12 +147,11 @@ describe('chat channels', () => {
 });
 
 describe('chat messages', () => {
-  it('are sent, edited and deleted by their authors; editors delete anyone’s', async () => {
-    const { id, ownerKey } = await createOffice(base);
-    const owner = await join(base, id, 'Owner', { ownerKey });
+  it('are sent, edited and deleted by their authors; the owner deletes anyone’s', async () => {
+    const { id, owner: ownerJar } = await createOffice(base);
+    const owner = await join(base, id, 'Owner', { jar: ownerJar });
     const ann = await join(base, id, 'Ann');
     const bob = await join(base, id, 'Bob');
-    await ownerOnly(owner.socket, bob.socket);
     const conv = `c:${(await general(ann.socket)).id}`;
 
     const arrived = collect(bob.socket, 'chat:message');
@@ -176,7 +173,7 @@ describe('chat messages', () => {
     expect(updates[0][0].text).toBe('hello _there_');
     expect(failed(await ann.socket.emitWithAck('chat:edit', sent.id, ' '))).toMatch(/can’t be empty/);
 
-    // Bob may not delete Ann's message; the owner (who may edit the office) may.
+    // Bob may not delete Ann's message; the owner may.
     expect(failed(await bob.socket.emitWithAck('chat:delete', sent.id))).toMatch(/your own/);
     const deleted = collect(bob.socket, 'chat:deleted');
     ok(await owner.socket.emitWithAck('chat:delete', sent.id));
@@ -191,24 +188,31 @@ describe('chat messages', () => {
     expect(failed(await ann.socket.emitWithAck('chat:edit', long.id, 'back'))).toMatch(/deleted/);
   });
 
-  it('in an open office are moderated by the owner and signed-in people, not by guests', async () => {
-    const { id, ownerKey } = await createOffice(base);
-    const owner = await join(base, id, 'Owner', { ownerKey });
+  it('are moderated by the owner and admins, not by members or guests', async () => {
+    const { id, owner: ownerJar } = await createOffice(base);
+    const owner = await join(base, id, 'Owner', { jar: ownerJar });
     const ann = await join(base, id, 'Ann');
     const gus = await join(base, id, 'Gus');
-    const mia = await join(base, id, 'Mia', { jar: (await signIn('Mia')).jar });
+    const mia = await signIn('Mia');
+    const ada = await signIn('Ada');
+    await members(id, [mia]);
+    await members(id, [ada], 'admin');
+    const m = await join(base, id, 'Mia', { jar: mia.jar });
+    const a = await join(base, id, 'Ada', { jar: ada.jar });
     const conv = `c:${(await general(ann.socket)).id}`;
     const first = ok(await send(ann.socket, { conv, text: 'hello' })).message;
     const second = ok(await send(ann.socket, { conv, text: 'again' })).message;
     const side = ok(await gus.socket.emitWithAck('channel:create', { name: 'side' })).channel;
 
-    // Everyone may build here, but a guest can't take down others' messages or channels.
-    expect(failed(await gus.socket.emitWithAck('chat:delete', first.id))).toMatch(/your own/);
-    expect(failed(await gus.socket.emitWithAck('channel:archive', side.id, true))).toMatch(/Sign in to archive/);
-    expect(failed(await gus.socket.emitWithAck('channel:update', { id: side.id, name: 'other' }))).toMatch(/Sign in to rename/);
-    expect(ok(await mia.socket.emitWithAck('channel:update', { id: side.id, name: 'other' })).channel.name).toBe('other');
-    ok(await mia.socket.emitWithAck('channel:archive', side.id, true));
-    ok(await mia.socket.emitWithAck('chat:delete', first.id));
+    // Members may build here, but neither they nor guests take down others' messages or channels.
+    for (const c of [gus, m]) {
+      expect(failed(await c.socket.emitWithAck('chat:delete', first.id))).toMatch(/your own/);
+      expect(failed(await c.socket.emitWithAck('channel:archive', side.id, true))).toMatch(/Only the owner and admins can archive/);
+      expect(failed(await c.socket.emitWithAck('channel:update', { id: side.id, name: 'other' }))).toMatch(/Only the owner and admins can rename/);
+    }
+    expect(ok(await a.socket.emitWithAck('channel:update', { id: side.id, name: 'other' })).channel.name).toBe('other');
+    ok(await a.socket.emitWithAck('channel:archive', side.id, true));
+    ok(await a.socket.emitWithAck('chat:delete', first.id));
     ok(await owner.socket.emitWithAck('chat:delete', second.id));
   });
 
@@ -339,10 +343,11 @@ describe('chat mentions', () => {
     const mia = await signIn('Mia');
     const ned = await signIn('Ned');
     const stranger = await signIn('Stranger');
+    await members(id, [ava, mia, ned]);
     const a = await join(base, id, 'Ava', { jar: ava.jar });
     const m = await join(base, id, 'Mia', { jar: mia.jar });
     const g = await join(base, id, 'Gus');
-    // Ned has been here before (so he's a member) but is away now.
+    // Ned is a member too, but away now.
     const n = await join(base, id, 'Ned', { jar: ned.jar });
     n.socket.disconnect();
     await until(() => server.realtime.onlineCount(id) === 3);
@@ -411,6 +416,7 @@ describe('chat direct messages and read markers', () => {
     const { id } = await createOffice(base);
     const ava = await signIn('Ava');
     const mia = await signIn('Mia');
+    await members(id, [ava, mia]);
     const a = await join(base, id, 'Ava', { jar: ava.jar });
     const aOtherTab = await join(base, id, 'Ava', { jar: ava.jar });
     const m = await join(base, id, 'Mia', { jar: mia.jar });
@@ -460,6 +466,7 @@ describe('chat direct messages and read markers', () => {
     const conv = `c:${(await general(old.socket)).id}`;
     const first = ok(await send(old.socket, { conv, text: 'before Ava came' })).message;
     await wait(5);
+    await members(id, [ava]);
     const a = await join(base, id, 'Ava', { jar: ava.jar });
     expect((await channels(a.socket)).counts).toEqual({});
     ok(await send(old.socket, { conv, text: 'one' }));
@@ -523,6 +530,7 @@ describe('chat retention', () => {
     await server.db.query(`UPDATE uploads SET created_at = now() - interval '40 days' WHERE id = $1`, [liveFile.id]);
     const ava = await signIn('Ava');
     const zed = await signIn('Zed');
+    await members(id, [ava, zed]);
     const a = await join(base, id, 'Ava', { jar: ava.jar });
     await join(base, id, 'Zed', { jar: zed.jar });
     const dm = ok(await send(a.socket, { conv: `d:${zed.user.id}`, text: 'old news' })).message;

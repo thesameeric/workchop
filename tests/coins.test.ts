@@ -235,7 +235,7 @@ describe(`coins in the office on ${DB}`, () => {
   afterAll(() => sockets.forEach((s) => s.disconnect()));
 
   /** Joins an office (away by default, so no presence coins), noting the office's coin state. */
-  async function join(officeId: string, name: string, opts: { jar?: Jar; ownerKey?: string; status?: Status } = {}) {
+  async function join(officeId: string, name: string, opts: { jar?: Jar; guest?: string; status?: Status } = {}) {
     const cookie = opts.jar?.header();
     const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
     sockets.push(socket);
@@ -243,23 +243,23 @@ describe(`coins in the office on ${DB}`, () => {
     socket.on('coins:office', (s) => office.push(s.enabled));
     const res = await new Promise<JoinResponse>((resolve) => {
       socket.on('connect', () =>
-        socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey: opts.ownerKey, status: opts.status ?? 'away' }, resolve),
+        socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, guest: opts.guest, status: opts.status ?? 'away' }, resolve),
       );
     });
     if (!res.ok) throw new Error(res.error);
     return { socket, id: res.selfId, office };
   }
 
-  /** Two members (with the daily bonus) and a guest in a fresh office. */
+  /** Two signed-in people (with the daily bonus), Ada the owner, and a guest in a fresh office. */
   async function setup() {
     const ada = await signIn('Ada');
     const bo = await signIn('Bo');
-    const { id, ownerKey } = await createOffice(base);
-    const a = await join(id, 'Ada', { jar: ada.jar, ownerKey });
-    const b = await join(id, 'Bo', { jar: bo.jar });
-    const g = await join(id, 'Guest');
+    const { id, guest } = await createOffice(base, ada.jar);
+    const a = await join(id, 'Ada', { jar: ada.jar });
+    const b = await join(id, 'Bo', { jar: bo.jar, guest });
+    const g = await join(id, 'Guest', { guest });
     await until(async () => (await wallet(ada.jar)).balance === WELCOME_COINS + DAILY_COINS && (await wallet(bo.jar)).balance === WELCOME_COINS + DAILY_COINS);
-    return { ada, bo, a, b, g, officeId: id };
+    return { ada, bo, a, b, g, officeId: id, guest };
   }
 
   it('has wallets only for members', async () => {
@@ -338,9 +338,9 @@ describe(`coins in the office on ${DB}`, () => {
   });
 
   it('tells people joining whether coins are on', async () => {
-    const { a, officeId } = await setup();
+    const { a, officeId, guest } = await setup();
     expect(await a.socket.timeout(3000).emitWithAck('coins:office', false)).toEqual({ ok: true });
-    const eve = await join(officeId, 'Eve');
+    const eve = await join(officeId, 'Eve', { guest });
     await until(() => eve.office.length > 0);
     expect(eve.office).toEqual([false]);
     expect(a.office).toEqual([true, false]);
@@ -404,28 +404,28 @@ describe(`presence coins and idleness on ${DB}`, () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const balance = async (jar: Jar) => ((await (await jar.fetch(`${base}/api/me/wallet`)).json()) as WalletResponse).balance;
 
-  /** A new member, available in the office. */
-  async function member(officeId: string, name: string, ownerKey?: string) {
-    const jar = new Jar();
-    await jar.fetch(`${base}/api/auth/dev`, json({ name, email: `${name.toLowerCase()}-${crypto.randomUUID()}@example.com` }));
+  /** Someone signed in (a new account, or that browser's), available in the office. */
+  async function member(officeId: string, name: string, opts: { jar?: Jar; guest?: string } = {}) {
+    const jar = opts.jar ?? new Jar();
+    if (!opts.jar) await jar.fetch(`${base}/api/auth/dev`, json({ name, email: `${name.toLowerCase()}-${crypto.randomUUID()}@example.com` }));
     const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie: jar.header() } });
     sockets.push(socket);
     const res = await new Promise<JoinResponse>((resolve) => {
-      socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey, status: 'available' }, resolve));
+      socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, guest: opts.guest, status: 'available' }, resolve));
     });
     if (!res.ok) throw new Error(res.error);
     return { jar, socket };
   }
 
   it('stops paying idle members, and counts chat, status changes and switching apps as activity', async () => {
-    const { id } = await createOffice(base);
+    const { id, guest } = await createOffice(base);
     const activities: [string, (socket: Client) => void][] = [
       ['chat', (socket) => socket.emit('chat:send', { conv: 'c:none', text: 'hi' } as never, () => {})],
       ['status', (socket) => socket.emit('profile', { status: 'busy' })],
       ['app', (socket) => (socket as unknown as { emit(event: string, app: string): void }).emit('test:app', 'figma')],
     ];
     for (const [name, act] of activities) {
-      const { jar, socket } = await member(id, name);
+      const { jar, socket } = await member(id, name, { guest });
       await until(async () => (await balance(jar)) >= WELCOME_COINS + DAILY_COINS);
       // Nothing for a while (and no mic, camera or screen): idle, so no presence coins.
       clock += IDLE_MS + 1000;
@@ -439,10 +439,10 @@ describe(`presence coins and idleness on ${DB}`, () => {
   });
 
   it('pays no presence coins (and no daily bonus) in an office with coins off', async () => {
-    const { id, ownerKey } = await createOffice(base);
-    const owner = await member(id, 'Owner', ownerKey);
+    const { id, owner: ownerJar, guest } = await createOffice(base);
+    const owner = await member(id, 'Owner', { jar: ownerJar });
     expect(await owner.socket.timeout(3000).emitWithAck('coins:office', false)).toEqual({ ok: true });
-    const { jar, socket } = await member(id, 'Active');
+    const { jar, socket } = await member(id, 'Active', { guest });
     for (let i = 0; i < 10; i++) {
       socket.emit('move', 5 + i * 0.1, 5, 0, 'walk');
       await sleep(30);
@@ -486,12 +486,12 @@ describe(`coins switched off (the default) on ${DB}`, () => {
       await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Ada', email: `ada-${crypto.randomUUID()}@example.com` }));
       for (const route of ['/api/me/wallet', '/api/me/wallet/history']) expect((await jar.fetch(`${base}${route}`)).status).toBe(404);
 
-      const { id, ownerKey } = await createOffice(base, jar);
+      const { id } = await createOffice(base, jar);
       const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie: jar.header() } });
       const heard: string[] = [];
       socket.onAny((event: string) => heard.push(event));
       const res = await new Promise<JoinResponse>((resolve) => {
-        socket.on('connect', () => socket.emit('join', { officeId: id, name: 'Ada', avatar: DEFAULT_AVATAR, ownerKey }, resolve));
+        socket.on('connect', () => socket.emit('join', { officeId: id, name: 'Ada', avatar: DEFAULT_AVATAR }, resolve));
       });
       expect(res.ok).toBe(true);
       // Nobody answers coin requests.

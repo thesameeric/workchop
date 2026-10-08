@@ -15,7 +15,7 @@ import type { Db } from '../server/db';
 import { startServer } from '../server/index';
 import { outboxMailer } from '../server/mail';
 import { createTestDb } from './helpers/db';
-import { createOffice, disconnectAll, Jar, join, json, until } from './helpers/http';
+import { createOffice, disconnectAll, Jar, join, json, member, until } from './helpers/http';
 
 let oauth: OAuth2Server;
 let server: Awaited<ReturnType<typeof startServer>>;
@@ -403,17 +403,17 @@ describe('sign-in', () => {
 });
 
 describe('accounts in the office', () => {
-  it('knows who is connected, records memberships and lists spaces', async () => {
+  it('knows who is connected, records visits and lists spaces', async () => {
     const jar = new Jar();
     await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Mia', email: 'mia@example.com' }));
     const mia = (await me(jar))!;
     // Created while signed in: Mia owns it.
     const mine = await createOffice(base, jar, 'Mia HQ');
-    // Someone else's, which Mia visits.
-    const other = await createOffice(base, undefined, 'Other HQ');
+    // Someone else's, which Mia visits with its guest link.
+    const other = await createOffice(base, 'Olga', 'Other HQ');
 
     const a = await join(base, other.id, 'Mia', { jar });
-    expect(a.res.ok && a.res.isOwner).toBe(false);
+    expect(a.res.ok && [a.res.isOwner, a.res.role]).toEqual([false, 'guest']);
     expect(server.io.sockets.sockets.get(a.socket.id!)?.data.user).toEqual({ id: mia.id, name: 'Mia' });
     const guest = await join(base, other.id, 'Guest');
     expect(server.io.sockets.sockets.get(guest.socket.id!)?.data.user).toBeNull();
@@ -421,26 +421,26 @@ describe('accounts in the office', () => {
     expect(players.find((p) => p.name === 'Mia')?.userId).toBe(mia.id);
     expect(players.find((p) => p.name === 'Guest')?.userId).toBeUndefined();
 
-    const spaces = (await (await jar.fetch(`${base}/api/me/spaces`)).json()) as Space[];
-    expect(spaces.map((s) => [s.id, s.name, s.role, s.online])).toEqual([
+    // Coming in doesn't make her a member.
+    const spaces = async () => (await (await jar.fetch(`${base}/api/me/spaces`)).json()) as Space[];
+    expect((await spaces()).map((s) => [s.id, s.name, s.kind, s.role, s.online])).toEqual([[mine.id, 'Mia HQ', 'team', 'owner', 0]]);
+    expect((await fetch(`${base}/api/me/spaces`)).status).toBe(401);
+
+    // As a member, her latest visit comes first.
+    await member(base, server.db, other.id, jar);
+    a.socket.disconnect();
+    const later = await join(base, other.id, 'Mia', { jar });
+    expect(later.res.ok && [later.res.isOwner, later.res.role]).toEqual([false, 'member']);
+    const listed = await spaces();
+    expect(listed.map((s) => [s.id, s.name, s.role, s.online])).toEqual([
       [other.id, 'Other HQ', 'member', 2],
       [mine.id, 'Mia HQ', 'owner', 0],
     ]);
-    expect(spaces[0].lastVisitAt).toBeGreaterThan(Date.now() - 60_000);
-    expect((await fetch(`${base}/api/me/spaces`)).status).toBe(401);
-
-    // The owner key makes her an owner, which then holds without the key.
-    a.socket.disconnect();
-    const withKey = await join(base, other.id, 'Mia', { jar, ownerKey: other.ownerKey });
-    expect(withKey.res.ok && withKey.res.isOwner).toBe(true);
-    withKey.socket.disconnect();
-    const later = await join(base, other.id, 'Mia', { jar });
-    expect(later.res.ok && later.res.isOwner).toBe(true);
-    const roles = (await (await jar.fetch(`${base}/api/me/spaces`)).json()) as Space[];
-    expect(roles.find((s) => s.id === other.id)?.role).toBe('owner');
+    expect(listed[0].lastVisitAt).toBeGreaterThan(Date.now() - 60_000);
     // Guests leave no trace.
-    const members = await server.db.query('SELECT user_id FROM memberships WHERE office_id = $1', [other.id]);
-    expect(members.rows).toEqual([{ user_id: mia.id }]);
+    const members = await server.db.query<{ user_id: string; role: string }>('SELECT user_id, role FROM memberships WHERE office_id = $1', [other.id]);
+    expect(members.rows.map((r) => r.role).sort()).toEqual(['member', 'owner']);
+    expect(members.rows.find((r) => r.role === 'member')?.user_id).toBe(mia.id);
 
     // Logging out disconnects that session's sockets.
     const dropped = new Promise((resolve) => later.socket.on('disconnect', resolve));
@@ -458,7 +458,7 @@ describe('accounts in the office', () => {
       kind: db.kind,
       description: db.description,
       query: async <T,>(sql: string, params?: unknown[]) => {
-        if (delay && sql.includes('INSERT INTO memberships')) await new Promise((r) => setTimeout(r, delay));
+        if (delay && sql.includes('UPDATE memberships SET last_visit_at')) await new Promise((r) => setTimeout(r, delay));
         return db.query<T>(sql, params);
       },
       exec: (sql) => db.exec(sql),
@@ -470,8 +470,7 @@ describe('accounts in the office', () => {
       const otherBase = `http://127.0.0.1:${other.port}`;
       const office = await createOffice(otherBase);
       const last = await join(otherBase, office.id, 'Last');
-      const jar = new Jar();
-      await jar.fetch(`${otherBase}/api/auth/dev`, json({ name: 'Newcomer' }));
+      const jar = await member(otherBase, db, office.id, 'Newcomer');
       delay = 200;
       const joining = join(otherBase, office.id, 'Newcomer', { jar });
       await new Promise((r) => setTimeout(r, 100));

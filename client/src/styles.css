@@ -470,11 +470,17 @@ a.btn {
   gap: 20px;
 }
 
-.templates {
+/* A line under a card's title. */
+.card .card-intro {
+  margin: -10px 0 16px;
+}
+
+/* New workspace: its type, then a template */
+.templates,
+.kinds {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-bottom: 16px;
 }
 
 .template {
@@ -488,10 +494,22 @@ a.btn {
   background: var(--field);
 }
 
-.template span {
+.template strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.template > span:not(.hgi) {
   font-size: 0.82rem;
   color: var(--muted);
   line-height: 1.35;
+}
+
+.template > .hgi {
+  color: var(--primary-text);
+  margin-bottom: 2px;
 }
 
 .template.active {
@@ -640,19 +658,6 @@ a.btn {
 
 .sign-in-menu > p {
   margin: 0 0 12px;
-}
-
-.sign-in-card {
-  margin-top: 32px;
-  max-width: 30rem;
-}
-
-.sign-in-card h2 {
-  margin-bottom: 6px;
-}
-
-.sign-in-card > p {
-  margin: 0 0 16px;
 }
 
 .provider-buttons {
@@ -812,6 +817,12 @@ a.btn {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+/* Several choices on an auth page, one under the other. */
+.auth-buttons {
+  display: grid;
+  gap: 8px;
 }
 
 .auth-actions {
@@ -1189,6 +1200,40 @@ a.btn {
   color: var(--primary-text);
 }
 
+/* Offices made on this browser before accounts, to add to yours */
+.claim-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 26px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.claim-card > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.claim-card p {
+  margin: 2px 0 0;
+  line-height: 1.45;
+}
+
+.claim-card .spaces-empty-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+}
+
+.claim-card .btn {
+  flex: none;
+}
+
 /* ---------- Lobby ---------- */
 
 .lobby {
@@ -1228,6 +1273,40 @@ a.btn {
 .lobby-wait {
   text-align: center;
   padding: 48px 24px;
+}
+
+/* Can't come in (or can't reach the server), and what to do */
+.lobby-message {
+  display: grid;
+  place-items: center;
+  padding: 24px 16px 48px;
+}
+
+.lobby-message .card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.lobby-message .card h2,
+.lobby-message .card p {
+  margin: 0;
+}
+
+.lobby-message .card > p {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lobby-sign-in,
+.lobby-message-actions {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
 }
 
 .lobby-body {
@@ -1515,12 +1594,107 @@ a.btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 14px;
+  max-width: calc(100vw - 24px);
+  min-height: 42px;
+  padding: 6px 14px;
   border-radius: 999px;
   font-size: 0.9rem;
   pointer-events: auto;
   /* The video tiles keep clear of it. */
   anchor-name: --office-chip;
+}
+
+.office-chip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-chip > .muted {
+  white-space: nowrap;
+}
+
+/* Signed in, the office's name opens the workspace switcher. */
+.office-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.office-switch .hgi {
+  opacity: 0.7;
+}
+
+.office-switch:hover .hgi {
+  opacity: 1;
+}
+
+.workspace-menu {
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+}
+
+.workspace-menu .menu-label {
+  margin: 4px 10px 6px;
+  color: var(--glass-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.workspace-menu hr {
+  margin: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--glass-line);
+}
+
+.workspace-menu button[aria-current='true'] {
+  font-weight: 700;
+}
+
+.menu-space-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.menu-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The browser blocked people's voices until a click. */
+.audio-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--away);
+  color: #1d2030;
+  box-shadow: var(--glass-shadow);
+  font-size: 0.82rem;
+  font-weight: 700;
+  pointer-events: auto;
+}
+
+.audio-blocked:hover {
+  filter: brightness(1.06);
 }
 
 .online-dot {
@@ -2071,7 +2245,7 @@ body:has(.emote-menu) .hint {
   background: #3d4260;
 }
 
-/* The account menu above the dock, in the office's glass style (placed by Dock.tsx). */
+/* Menus over the office (the dock's, the workspace switcher), in its glass style, placed by their buttons. */
 .dock-menu {
   position: fixed;
   z-index: 60;
@@ -2146,7 +2320,7 @@ body:has(.emote-menu) .hint {
   color: var(--glass-danger);
 }
 
-/* Tablets: no room for your name or the invite button (it's in the office chip too). */
+/* Tablets: no room for your name or the invite button (it's in the workspace menu too). */
 @media (max-width: 960px) {
   .me-btn {
     padding: 5px;
@@ -2851,6 +3025,194 @@ body:has(.emote-menu) .hint {
   color: var(--danger);
 }
 
+/* Settings > Workspace */
+.ws {
+  display: grid;
+  gap: 20px;
+}
+
+.ws-section h4 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.ws-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ws-row:last-child {
+  border-bottom: 0;
+}
+
+.ws-who {
+  flex: 1 1 140px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ws-who > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.ws-actions select {
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.ws-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.icon-btn.danger:hover {
+  color: var(--danger);
+}
+
+.ws-add > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.ws-add-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ws-add-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  outline: none;
+}
+
+.ws-add-row input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.ws-add-row select {
+  padding: 0 8px;
+  border-radius: 10px;
+}
+
+.ws-result {
+  margin: 8px 0 0;
+  color: var(--ok-text);
+  overflow-wrap: anywhere;
+}
+
+.ws-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--neutral-soft);
+  font-size: 0.9rem;
+}
+
+.ws-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  cursor: pointer;
+}
+
+.ws-toggle input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: var(--primary);
+}
+
+.ws-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.ws-link input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--ink-soft);
+  font: 0.8rem ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* An open office (from before workspaces): a nudge to close it */
+.ws-banner {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--away) 50%, transparent);
+  background: color-mix(in srgb, var(--away) 14%, var(--card));
+}
+
+.ws-banner > .hgi {
+  margin-top: 1px;
+  color: var(--away);
+}
+
+.ws-banner p {
+  margin: 4px 0 10px;
+  line-height: 1.45;
+}
+
+.ws-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 960px) {
@@ -2945,10 +3307,6 @@ body:has(.emote-menu) .hint {
     padding: 3px;
   }
 
-  .sign-in-card {
-    margin-top: 24px;
-  }
-
   .dev-fields {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2981,6 +3339,30 @@ body:has(.emote-menu) .hint {
 
   .templates {
     grid-template-columns: 1fr;
+  }
+
+  .claim-card {
+    flex-wrap: wrap;
+  }
+
+  .claim-card .btn {
+    flex: 1 1 100%;
+  }
+
+  .ws-add-row {
+    flex-wrap: wrap;
+  }
+
+  .ws-add-row input {
+    flex-basis: 100%;
+  }
+
+  .ws-add-row .btn {
+    flex: 1;
+  }
+
+  .office-chip {
+    max-width: calc(100vw - 16px);
   }
 
   .settings-layout {

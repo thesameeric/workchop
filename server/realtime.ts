@@ -8,18 +8,24 @@ import { applyOp, OpError } from '../shared/office';
 import type {
   AnimState,
   ClientToServerEvents,
+  JoinRequest,
+  JoinResponse,
   Office,
   OfficeOp,
   PlayerPatch,
   PlayerState,
   ServerToClientEvents,
 } from '../shared/types';
+import { may, type GuestAccess, type MemberRole, type RemovedReason, type Role } from '../shared/workspace';
 import type { Accounts } from './accounts';
 import { applyMusicOp, fetchLinkMeta } from './music';
 import type { OfficeStore } from './officeStore';
 import { type LinkChanges, Room } from './room';
+import { deniedMessage, refusal, welcomesGuests, type Admission, type Workspaces } from './workspaces';
 
 export const MAX_PLAYERS_PER_ROOM = 100;
+/** Guests take at most this many of an office's places, so its members can always come in. */
+export const MAX_GUESTS_PER_ROOM = 90;
 const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
 
 /** The signed-in person behind a socket (set from the session cookie when it connects). */
@@ -52,9 +58,11 @@ export interface SocketContext {
   room(): { officeId: string; players: ReadonlyMap<string, PlayerState> } | null;
   me(): PlayerState | undefined;
   office(): Office | undefined;
-  /** Owner key, or an owner membership. */
+  /** Their role in the office they're in (null before joining): a member's, or 'guest'. */
+  role(): Role | null;
+  /** The owner, or whoever came in with the owner key of an office nobody has claimed yet. */
   isOwner(): boolean;
-  /** May change the office (build mode, settings). */
+  /** May change the office (build mode, settings): see may(role, 'build') in shared/workspace.ts. */
   mayEdit(): boolean;
   /** A token bucket for this socket: `rate` actions per second, bursts up to `burst`. */
   limiter(rate: number, burst: number): () => boolean;
@@ -82,6 +90,18 @@ export interface RealtimeApi {
   onlineCount(officeId: string): number;
   /** The players this one is in a call with right now. */
   linkedPeers(officeId: string, playerId: string): string[];
+  /**
+   * After a member's role changed: tells them (office:role) wherever they are in that office, or,
+   * with null (no longer a member), takes them out of it (office:removed).
+   */
+  setRole(officeId: string, userId: string, role: MemberRole | null): void;
+  /** Takes the guests out of an office (office:removed). */
+  removeGuests(officeId: string): void;
+  /**
+   * After the office's guest access changed to `guests`: tells everyone in it (office:role), and
+   * takes the guests out when it was turned off.
+   */
+  accessChanged(officeId: string, guests: GuestAccess): void;
 }
 
 /** Token bucket: `rate` actions per second with bursts up to `burst`. */
@@ -131,9 +151,13 @@ function each<A extends unknown[]>(handlers: ((...args: A) => void)[], ...args: 
   }
 }
 
-export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Accounts } = {}) {
+export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Accounts; workspaces: Workspaces }) {
   const rooms = new Map<string, Room>();
   const contexts = new Map<string, SocketContext>();
+  /** What the server may do to each connection besides its own handlers. */
+  const controls = new Map<string, { setRole(role: Role, guests: GuestAccess): void; remove(reason: RemovedReason): void }>();
+  /** Counts changes to who may be in an office, so joins in progress check again. */
+  let admissions = 0;
   const socketHandlers: ((s: SocketContext) => void)[] = [];
   const joinHandlers: ((s: SocketContext) => void)[] = [];
   const leaveHandlers: ((s: SocketContext, left: { officeId: string; player: PlayerState }) => void)[] = [];
@@ -183,10 +207,33 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     contextOf: (socketId) => contexts.get(socketId),
     onlineCount: (officeId: string) => rooms.get(officeId)?.players.size ?? 0,
     linkedPeers: (officeId, playerId) => rooms.get(officeId)?.linkedPeers(playerId) ?? [],
+    setRole(officeId, userId, role) {
+      admissions++;
+      const guests = store.peek(officeId)?.guests ?? 'off';
+      for (const socketId of io.sockets.adapter.rooms.get(userRoom(userId)) ?? []) {
+        if (contexts.get(socketId)?.room()?.officeId !== officeId) continue;
+        const control = controls.get(socketId);
+        if (role) control?.setRole(role, guests);
+        else control?.remove('removed');
+      }
+    },
+    removeGuests(officeId) {
+      admissions++;
+      for (const id of [...(rooms.get(officeId)?.guests ?? [])]) controls.get(id)?.remove('guests-off');
+    },
+    accessChanged(officeId, guests) {
+      admissions++;
+      if (guests === 'off') api.removeGuests(officeId);
+      for (const id of rooms.get(officeId)?.players.keys() ?? []) {
+        const role = contexts.get(id)?.role();
+        if (role) controls.get(id)?.setRole(role, guests);
+      }
+    },
   };
 
   io.on('connection', (socket: ClientSocket) => {
     let room: Room | null = null;
+    let role: Role | null = null;
     let isOwner = false;
     const user = socket.data.user ?? null;
     socket.data.uploadKey = crypto.randomBytes(24).toString('base64url');
@@ -199,10 +246,11 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       room: () => room,
       me: () => room?.players.get(socket.id),
       office,
+      role: () => role,
       isOwner: () => isOwner,
       mayEdit: () => {
-        const o = office();
-        return !!o && (o.settings.buildPolicy === 'everyone' || isOwner);
+        const stored = room ? store.peek(room.officeId) : undefined;
+        return !!stored && (isOwner || may(role, 'build', { buildPolicy: stored.office.settings.buildPolicy, guests: stored.guests }));
       },
       limiter,
     };
@@ -229,17 +277,42 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       for (const [itemId, s] of r.spotify) if (s.dj === socket.id) endSpotify(r, itemId);
       emitLinks(r.removePlayer(socket.id));
       io.to(roomName(r.officeId)).emit('player:left', socket.id);
-      if (r.players.size === 0) {
+      if (r.players.size === 0 && rooms.get(r.officeId) === r) {
         rooms.delete(r.officeId);
         void store.evict(r.officeId, () => rooms.has(r.officeId));
       }
       if (player) each(leaveHandlers, ctx, { officeId: r.officeId, player });
+      role = null;
+      isOwner = false;
     };
 
-    socket.on('join', async (req, ack) => {
-      if (typeof ack !== 'function') return;
+    controls.set(socket.id, {
+      setRole(next, guests) {
+        if (!room) return;
+        role = next;
+        isOwner = next === 'owner';
+        if (next === 'guest') room.guests.add(socket.id);
+        else room.guests.delete(socket.id);
+        socket.emit('office:role', next, guests);
+      },
+      remove(reason) {
+        if (!room) return;
+        socket.emit('office:removed', reason);
+        leave();
+      },
+    });
+
+    // Joins run one at a time per connection, and only the newest counts: two sent at once would
+    // otherwise both get in (into two offices) while the connection only remembers one.
+    let joining = Promise.resolve();
+    let latestJoin = 0;
+    const replaced: JoinResponse = { ok: false, error: 'Replaced by a newer join.' };
+
+    const join = async (req: JoinRequest, ack: (res: JoinResponse) => void, seq: number) => {
       if (!req || typeof req !== 'object') return ack({ ok: false, error: 'Bad request' });
       leave();
+      if (socket.disconnected) return;
+      if (seq !== latestJoin) return ack(replaced);
       const officeId = String(req.officeId);
       const load = async () => {
         try {
@@ -250,58 +323,75 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
         }
       };
       const full = (id: string) => (rooms.get(id)?.players.size ?? 0) >= MAX_PLAYERS_PER_ROOM;
+      const unavailable: JoinResponse = { ok: false, error: 'Could not load this office right now. Please try again.' };
       let loaded = await load();
-      if (!loaded) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+      if (!loaded) return ack(unavailable);
       let stored = loaded.stored;
       if (!stored) return ack({ ok: false, error: 'This office does not exist.' });
       const id = stored.office.id;
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
-      const keyOwner = typeof req.ownerKey === 'string' && req.ownerKey === stored.ownerKey;
-      // Signed-in people become members (owners with the owner key); being signed in is never required.
-      // They appear with their account's name and character, whatever the page sent.
-      let role: 'owner' | 'member' | null = null;
+      let admitted: Admission | null = null;
       let account: AccountUser | null = null;
-      if (user && opts.accounts) {
+      // Who may come in can change while this waits (a member removed, say): then it's checked again.
+      for (let attempt = 1; ; attempt++) {
+        const before = admissions;
         try {
-          role = await opts.accounts.visit(user.id, id, keyOwner);
+          admitted = await opts.workspaces.admit(stored, user?.id ?? null, { ownerKey: req.ownerKey, guest: req.guest });
         } catch (err) {
-          console.error('[accounts] could not record a visit:', err);
+          console.error('[workspaces] could not check who may come in:', err);
+          return ack(unavailable);
         }
-        try {
-          account = await opts.accounts.get(user.id);
-        } catch (err) {
-          console.error('[accounts] could not load an account:', err);
-        }
-        // Never as someone else: without their account, they can't come in.
-        if (!account) return ack({ ok: false, error: 'Could not load your account right now. Please try again.' });
-        // An account without a character yet keeps the one they came in with.
-        if (!account.profile.avatar && req.avatar && typeof req.avatar === 'object') {
+        if ('denied' in admitted) return ack({ ok: false, error: deniedMessage(admitted.denied), reason: admitted.denied });
+        // Signed-in people appear with their account's name and character, whatever the page sent.
+        if (user && !account) {
           try {
-            account = (await opts.accounts.update(user.id, { profile: { avatar: sanitizeAvatar(req.avatar) } })) ?? account;
-            io.to(userRoom(user.id)).emit('account:updated', account);
+            account = await opts.accounts.get(user.id);
           } catch (err) {
-            console.error('[accounts] could not save a character:', err);
+            console.error('[accounts] could not load an account:', err);
+          }
+          // Never as someone else: without their account, they can't come in.
+          if (!account) return ack({ ok: false, error: 'Could not load your account right now. Please try again.' });
+          // An account without a character yet keeps the one they came in with.
+          if (!account.profile.avatar && req.avatar && typeof req.avatar === 'object') {
+            try {
+              account = (await opts.accounts.update(user.id, { profile: { avatar: sanitizeAvatar(req.avatar) } })) ?? account;
+              io.to(userRoom(user.id)).emit('account:updated', account);
+            } catch (err) {
+              console.error('[accounts] could not save a character:', err);
+            }
           }
         }
+        // While we waited, the office's last visitor may have left and the office been dropped from
+        // memory: then load it again, or edits would go to a copy nobody saves.
+        while (store.peek(id) !== stored) {
+          if (socket.disconnected) return;
+          loaded = await load();
+          if (!loaded?.stored) return ack(unavailable);
+          stored = loaded.stored;
+        }
+        if (before === admissions) break;
+        if (attempt === 3) return ack(unavailable);
       }
-      // While we waited, the office's last visitor may have left and the office been dropped from
-      // memory: then load it again, or edits would go to a copy nobody saves.
-      while (store.peek(id) !== stored) {
-        if (socket.disconnected) return;
-        loaded = await load();
-        if (!loaded?.stored) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
-        stored = loaded.stored;
-      }
+      // From here on nothing waits, so nothing changes until the player is in.
       if (socket.disconnected) return;
+      if (seq !== latestJoin) return ack(replaced);
+      const joinedAs: Role = admitted.role;
+      // The guest link may have been turned off or replaced meanwhile.
+      if (joinedAs === 'guest' && !welcomesGuests(stored, req.guest)) {
+        const { denied } = refusal(req.guest, user?.id ?? null);
+        return ack({ ok: false, error: deniedMessage(denied), reason: denied });
+      }
       // Checked before recording the visit too; this catches people who arrived in the meantime.
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
+      if (joinedAs === 'guest' && (r?.guests.size ?? 0) >= MAX_GUESTS_PER_ROOM) return ack({ ok: false, error: 'This office is full.' });
       if (!r) {
         r = new Room(id);
         rooms.set(id, r);
       }
 
-      isOwner = keyOwner || role === 'owner';
+      role = joinedAs;
+      isOwner = admitted.isOwner;
       const spot = spawnSpot(stored.office, r.players.values());
       const player: PlayerState = {
         id: socket.id,
@@ -319,6 +409,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if (user) player.userId = user.id;
       room = r;
       r.players.set(socket.id, player);
+      if (joinedAs === 'guest') r.guests.add(socket.id);
       socket.join(roomName(id));
       ack({
         ok: true,
@@ -326,12 +417,26 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
         office: stored.office,
         players: [...r.players.values()],
         isOwner,
+        role: joinedAs,
+        kind: stored.kind,
+        guests: stored.guests,
         spotify: [...r.spotify.values()],
         uploadKey: socket.data.uploadKey!,
       });
       socket.to(roomName(id)).emit('player:joined', player);
       emitLinks(r.recompute(stored.office.zones, [socket.id]));
       each(joinHandlers, ctx);
+    };
+
+    socket.on('join', (req, ack) => {
+      if (typeof ack !== 'function') return;
+      const seq = ++latestJoin;
+      joining = joining
+        .then(() => join(req, ack, seq))
+        .catch((err) => {
+          console.error('[realtime] a join failed:', err);
+          ack({ ok: false, error: 'Something went wrong. Please try again.' });
+        });
     });
 
     socket.on('move', (x, z, ry, anim) => {
@@ -371,7 +476,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if (!stored) return;
       const reject = (reason: string) => socket.emit('office:sync', stored.office, reason);
       if (!canEdit()) return reject('You are editing too quickly.');
-      if (stored.office.settings.buildPolicy === 'owner' && !isOwner) return reject('Only the owner can edit this office.');
+      if (!mayEdit()) return reject(stored.office.settings.buildPolicy === 'owner' ? 'Only the owner and admins can edit this office.' : 'Only members can edit this office.');
       if (op?.t === 'settings' && op.settings && 'buildPolicy' in op.settings && !isOwner) {
         return reject('Only the owner can change who may edit.');
       }
@@ -468,6 +573,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     socket.on('disconnect', () => {
       leave();
       contexts.delete(socket.id);
+      controls.delete(socket.id);
     });
 
     each(socketHandlers, ctx);

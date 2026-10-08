@@ -101,6 +101,15 @@ export const MinusIcon = icon('minus-sign');
 export const PlusIcon = icon('plus-sign');
 export const SearchIcon = icon('search-01');
 export const GpsIcon = icon('gps-01');
+// Workspaces
+export const HomeIcon = icon('home-01');
+export const WorkspaceIcon = icon('user-group');
+export const SupportIcon = icon('customer-support');
+export const InviteIcon = icon('user-add-01');
+export const RemoveUserIcon = icon('user-remove-01');
+export const OwnerIcon = icon('crown');
+export const ResendIcon = icon('mail-send-01');
+export const RefreshIcon = icon('refresh');
 // Weather
 export const SunCloudIcon = icon('sun-cloud-02');
 export const MoonCloudIcon = icon('moon-cloud');

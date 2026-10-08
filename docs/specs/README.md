@@ -58,9 +58,16 @@ where the hooks below allow it, to keep merges easy.
 - RealtimeApi (ctx.realtime): `onSocket(s => s.socket.on(...))`, `onJoin(s => ...)`,
   `onLeave((s, {officeId, player}) => ...)` (may be async; failures are logged), `emitToOffice`,
   `emitToUser`, `playersOfUser`, `updatePlayer` (broadcasts player:updated), `contextOf`, `onlineCount`,
-  `linkedPeers(officeId, playerId)` (who they're in a call with).
-- SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `isOwner()`,
-  `mayEdit()`, `limiter(rate, burst)`.
+  `linkedPeers(officeId, playerId)` (who they're in a call with), `setRole(officeId, userId, role | null)`
+  (after a member's role changed: `office:role` to them, or with null `office:removed` and out of the
+  office), `removeGuests(officeId)` and `accessChanged(officeId, guests)` (after the guest link
+  changed: `office:role` to everyone, guests out when it's off). The workspace routes call these; features
+  rarely need to.
+- SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (the
+  person's role in the office: 'owner' | 'admin' | 'member' | 'guest', null before joining),
+  `isOwner()` (the owner, or the owner-key holder of an office nobody has claimed), `mayEdit()`
+  (`may(role, 'build', …)`), `limiter(rate, burst)`. Check permissions with `may()` from
+  shared/workspace.ts; signed in is not the same as a member (signed-in people can be guests).
 - Catch errors in your own socket.on handlers: an async handler that rejects can still crash the server.
 - Socket events: declare in shared/<feature>.ts with `declare module './types' { interface
   ClientToServerEvents {…}; interface ServerToClientEvents {…}; interface PlayerState {…} }`.
@@ -82,8 +89,8 @@ where the hooks below allow it, to keep merges easy.
   (chat: Enter); don't reuse the office's keys (WASD/arrows, Shift, E, M, V, H, B, Enter, Esc, 1–9, 0,
   and R, Del, Ctrl+D in build mode).
 - Settings sections: `registerSettingsSection({ id, title, icon, order, Component })` from
-  client/src/ui/settings.tsx (Appearance 10, Audio & video 20, Privacy & status 30, Desktop helper 35,
-  Weather 40, Integrations 45).
+  client/src/ui/settings.tsx (Workspace 5, Appearance 10, Audio & video 20, Privacy & status 30, Desktop helper
+  35, Weather 40, Integrations 45).
 - Top bar: `registerTopBarItem({ id, order, Component })` from client/src/ui/topbar.ts (after the
   music; weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
   client/src/ui/PeoplePanel.tsx, a line under each other person's name (`Component` gets `{ player }`;

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
+import { Jar } from './helpers/http';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers } from '../server/turn';
 
 // The 201 response from Cloudflare's docs (Realtime TURN → Generate credentials).
@@ -90,7 +91,16 @@ describe('server behind a proxy', () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-turn-'));
     dirs.push(dataDir);
     const db = await createTestDb();
-    const server = await startServer({ port: 0, host: '127.0.0.1', dataDir, db, quiet: true, iceServers: [{ urls: 'stun:static.example' }], ...opts });
+    const server = await startServer({
+      port: 0,
+      host: '127.0.0.1',
+      dataDir,
+      db,
+      quiet: true,
+      iceServers: [{ urls: 'stun:static.example' }],
+      auth: { google: null, apple: null, devLogin: true },
+      ...opts,
+    });
     servers.push(server);
     return `http://127.0.0.1:${server.port}`;
   };
@@ -136,35 +146,66 @@ describe('server behind a proxy', () => {
   });
 
   it('limits office creation per visitor, using the proxy’s client-IP header when told to', async () => {
-    const create = (base: string, ip: string) =>
-      fetch(`${base}/api/offices`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: '{}' });
+    let makers = 0;
+    const post = (jar: Jar, url: string, headers: Record<string, string>, body: object) =>
+      jar.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    /**
+     * Offices made by one visitor (the headers for each request say where from), signed in to a
+     * new account for every 10, since an account makes at most 10 an hour.
+     */
+    const visitor = (base: string, headers: (i: number) => Record<string, string>) => {
+      let jar: Jar | null = null;
+      let made = 0;
+      let i = 0;
+      return async () => {
+        const from = headers(i++);
+        if (!jar || made === 10) {
+          jar = new Jar();
+          made = 0;
+          expect((await post(jar, `${base}/api/auth/dev`, from, { name: `Maker ${++makers}` })).status).toBe(200);
+        }
+        const res = await post(jar, `${base}/api/offices`, from, {});
+        if (res.status === 201) made++;
+        return res.status;
+      };
+    };
+    const header = (name: string, ip: string) => () => ({ [name]: ip });
+
     const behindCloudflare = await start({ clientIpHeader: 'cf-connecting-ip' });
-    for (let i = 0; i < 30; i++) expect((await create(behindCloudflare, '10.0.0.1')).status).toBe(201);
-    expect((await create(behindCloudflare, '10.0.0.1')).status).toBe(429);
-    expect((await create(behindCloudflare, '10.0.0.2')).status).toBe(201);
+    const fromCloudflare = visitor(behindCloudflare, header('cf-connecting-ip', '10.0.0.1'));
+    for (let i = 0; i < 30; i++) expect(await fromCloudflare()).toBe(201);
+    expect(await fromCloudflare()).toBe(429);
+    expect(await visitor(behindCloudflare, header('cf-connecting-ip', '10.0.0.2'))()).toBe(201);
+
+    // An account makes at most 10 an hour, wherever it is.
+    const busy = new Jar();
+    await post(busy, `${behindCloudflare}/api/auth/dev`, { 'cf-connecting-ip': '10.0.5.1' }, { name: 'Busy' });
+    for (let i = 0; i < 10; i++) expect((await post(busy, `${behindCloudflare}/api/offices`, { 'cf-connecting-ip': `10.0.5.${i}` }, {})).status).toBe(201);
+    expect((await post(busy, `${behindCloudflare}/api/offices`, { 'cf-connecting-ip': '10.0.6.1' }, {})).status).toBe(429);
 
     // Behind Caddy: X-Forwarded-For, first address (Caddy replaces whatever the visitor sent).
     const behindCaddy = await start({ clientIpHeader: 'x-forwarded-for' });
-    const viaCaddy = (xff: string) =>
-      fetch(`${behindCaddy}/api/offices`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': xff }, body: '{}' });
-    for (let i = 0; i < 30; i++) expect((await viaCaddy(`10.2.0.1, 172.18.0.${i}`)).status).toBe(201);
-    expect((await viaCaddy('10.2.0.1, 172.18.0.99')).status).toBe(429);
-    expect((await viaCaddy('10.2.0.2')).status).toBe(201);
+    const viaCaddy = visitor(behindCaddy, (i) => ({ 'x-forwarded-for': `10.2.0.1, 172.18.0.${i}` }));
+    for (let i = 0; i < 30; i++) expect(await viaCaddy()).toBe(201);
+    expect(await viaCaddy()).toBe(429);
+    expect(await visitor(behindCaddy, header('x-forwarded-for', '10.2.0.2'))()).toBe(201);
 
     // The setting can also come from the environment.
     process.env.CLIENT_IP_HEADER = 'cf-connecting-ip';
     try {
       const fromEnv = await start({});
-      for (let i = 0; i < 30; i++) expect((await create(fromEnv, '10.3.0.1')).status).toBe(201);
-      expect((await create(fromEnv, '10.3.0.1')).status).toBe(429);
-      expect((await create(fromEnv, '10.3.0.2')).status).toBe(201);
+      const create = visitor(fromEnv, header('cf-connecting-ip', '10.3.0.1'));
+      for (let i = 0; i < 30; i++) expect(await create()).toBe(201);
+      expect(await create()).toBe(429);
+      expect(await visitor(fromEnv, header('cf-connecting-ip', '10.3.0.2'))()).toBe(201);
     } finally {
       delete process.env.CLIENT_IP_HEADER;
     }
 
     // Without the setting the header is ignored, so nobody can dodge the limit by faking it.
     const direct = await start({ clientIpHeader: null });
-    for (let i = 0; i < 30; i++) expect((await create(direct, `10.1.0.${i}`)).status).toBe(201);
-    expect((await create(direct, '10.9.9.9')).status).toBe(429);
+    const faking = visitor(direct, (i) => ({ 'cf-connecting-ip': `10.1.0.${i}` }));
+    for (let i = 0; i < 30; i++) expect(await faking()).toBe(201);
+    expect(await visitor(direct, header('cf-connecting-ip', '10.9.9.9'))()).toBe(429);
   });
 });

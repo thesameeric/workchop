@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { isValidId, sanitizeOffice } from '../shared/office';
 import { createFromTemplate, type TemplateId } from '../shared/templates';
 import type { Office } from '../shared/types';
+import type { GuestAccess, OfficeKind } from '../shared/workspace';
 import type { OfficeRepo, StoredOffice } from './repos';
 
 export type { StoredOffice } from './repos';
@@ -61,22 +62,41 @@ export class OfficeStore {
       console.error(`[store] office ${id} is malformed; ignoring it`);
       return null;
     }
-    const stored: StoredOffice = { office: { ...office, id }, ownerKey: raw.ownerKey };
+    const stored: StoredOffice = {
+      office: { ...office, id },
+      ownerKey: raw.ownerKey,
+      kind: raw.kind === 'support' ? 'support' : 'team',
+      guests: raw.guests === 'link' || raw.guests === 'open' ? raw.guests : 'off',
+      guestToken: typeof raw.guestToken === 'string' ? raw.guestToken : null,
+    };
     this.cache.set(id, stored);
     return stored;
   }
 
-  /** Create and immediately persist a new office. Throws if it can't be saved. */
-  async create(name: string, template: TemplateId): Promise<StoredOffice> {
+  /**
+   * Create and immediately persist a new office, members only, with `ownerId` (an account) as its
+   * owner. Throws if it can't be saved.
+   */
+  async create(name: string, template: TemplateId, opts: { kind?: OfficeKind; ownerId?: string } = {}): Promise<StoredOffice> {
     let id = randomId();
     while (this.cache.has(id) || (await this.repo.exists(id))) id = randomId();
     const stored: StoredOffice = {
       office: createFromTemplate(template, id, name),
       ownerKey: crypto.randomBytes(18).toString('base64url'),
+      kind: opts.kind ?? 'team',
+      guests: 'off',
+      guestToken: null,
     };
-    await this.repo.save(stored);
+    await this.repo.create(stored, opts.ownerId ?? null);
     this.cache.set(id, stored);
     return stored;
+  }
+
+  /** Saves who besides members may come in (at once, not with the office's other changes). */
+  async setAccess(id: string, guests: GuestAccess, guestToken: string | null): Promise<void> {
+    await this.repo.setAccess(id, guests, guestToken);
+    const stored = this.cache.get(id);
+    if (stored) Object.assign(stored, { guests, guestToken });
   }
 
   update(id: string, office: Office): void {

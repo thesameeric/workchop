@@ -1,5 +1,6 @@
 import type { AccountUser } from './account';
 import type { JukeboxData, MusicOp, SpotifySession, SpotifySessionUpdate } from './music';
+import type { AccessDenied, GuestAccess, OfficeKind, RemovedReason, Role } from './workspace';
 import type { DeskData, LightData } from './world';
 
 // Types shared by the browser client and the Node server.
@@ -131,7 +132,10 @@ export interface JoinRequest {
   name: string;
   avatar: AvatarConfig;
   status?: Status;
+  /** The secret an office made before accounts gave its creator's browser. */
   ownerKey?: string;
+  /** The token from a guest link (`#guest=` in the address). */
+  guest?: string;
   mic?: boolean;
   cam?: boolean;
 }
@@ -142,13 +146,17 @@ export type JoinResponse =
       selfId: string;
       office: Office;
       players: PlayerState[];
+      /** The owner, or whoever holds the owner key of an office nobody has claimed yet. */
       isOwner: boolean;
+      role: Role;
+      kind: OfficeKind;
+      guests: GuestAccess;
       /** Spotify listen-along sessions running in this office. */
       spotify: SpotifySession[];
       /** Secret for uploading files while in this office (the X-Workchop-Upload-Key header); never shared. */
       uploadKey: string;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: AccessDenied };
 
 /** Compact movement packet: [id, x, z, ry, anim]. */
 export type MovePacket = [string, number, number, number, AnimState];
@@ -168,6 +176,10 @@ export interface ServerToClientEvents {
   notice: (text: string) => void;
   /** Your account changed (on another device or tab): only sent to your own sockets. */
   'account:updated': (user: AccountUser) => void;
+  /** Your role in this office, or who else may come in, changed. */
+  'office:role': (role: Role, guests: GuestAccess) => void;
+  /** You were removed from the office (you've left it by the time this arrives). */
+  'office:removed': (reason: RemovedReason) => void;
 }
 
 export interface ClientToServerEvents {

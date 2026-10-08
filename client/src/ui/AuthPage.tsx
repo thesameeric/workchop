@@ -1,16 +1,25 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
-import { normalizeEmail, passwordProblem, sanitizeUserName } from '../../../shared/account';
-import { accountUpdated, afterSignIn, errorText, finishSignUp, resetPassword, signOut } from '../lib/account';
-import { ApiError, confirmEmailRequest, forgotPasswordRequest, peekLinkRequest, signUpRequest } from '../lib/api';
-import { navigate, nextParam, withNext } from '../lib/router';
-import { loadProfile, pendingConfirmation, saveSignUpNext, setPendingConfirmation, takeSignUpNext } from '../lib/storage';
+import { normalizeEmail, passwordProblem, sanitizeUserName, type Space } from '../../../shared/account';
+import { acceptInvite, accountUpdated, afterSignIn, errorText, finishSignUp, resetPassword, signOut } from '../lib/account';
+import { ApiError, confirmEmailRequest, fetchSpaces, forgotPasswordRequest, peekLinkRequest, previewInvite, signUpRequest, type InvitePreview } from '../lib/api';
+import { goHome, navigate, nextParam, withNext } from '../lib/router';
+import {
+  loadProfile,
+  pendingConfirmation,
+  pendingInvite,
+  saveSignUpNext,
+  setPendingConfirmation,
+  setPendingInvite,
+  takeSignUpNext,
+} from '../lib/storage';
 import { canSignIn, getState, toast, useStore } from '../state/store';
 import { Link, NewPasswordField, ProviderButtons, SignInOptions, UserAvatar } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { MailIcon } from './icons';
 
 // The pages for signing in and up, and for the links we email: /signin, /signup (and /signup#t=… to
-// finish), /forgot, /reset#t=… and /confirm-email#t=…. The router takes the token out of the address.
+// finish), /forgot, /reset#t=…, /confirm-email#t=… and /invite#t=…. The router takes the token out of
+// the address.
 
 /** The page around a sign-in form (and the welcome): the brand, then a card. */
 export function AuthShell({ title, intro, wide, children }: { title?: string; intro?: ReactNode; wide?: boolean; children?: ReactNode }) {
@@ -18,7 +27,7 @@ export function AuthShell({ title, intro, wide, children }: { title?: string; in
     <div className="auth-page">
       <div className="landing-bg" aria-hidden="true" />
       <header className="landing-header">
-        <button className="brand link" onClick={() => navigate('/')}>
+        <button className="brand link" onClick={() => goHome()}>
           <span className="brand-mark">◆</span> Workchop
         </button>
       </header>
@@ -515,6 +524,251 @@ function ConfirmEmail({ token: linked }: { token: string | null }) {
   );
 }
 
+/**
+ * A link that no longer works: used already when you're signed in and belong to workspaces (it was
+ * accepted, say, as you signed in with its address), or expired.
+ */
+async function usedOrExpired(): Promise<{ used: Space[] } | 'expired'> {
+  setPendingInvite(null);
+  const spaces = getState().account ? await fetchSpaces().catch(() => []) : [];
+  return spaces.length ? { used: spaces } : 'expired';
+}
+
+/** The account an invitation is for: name, character and password, then it's made and you're in. */
+function InviteSignUp({ token, invite, onGone }: { token: string; invite: InvitePreview; onGone: () => void }) {
+  const [guest] = useState(loadProfile);
+  const [name, setName] = useState(guest.name);
+  const [avatar, setAvatar] = useState(guest.avatar);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // An account has this address after all: sign in with it (the link waits in this tab).
+  const [signIn, setSignIn] = useState(false);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const clean = sanitizeUserName(name);
+    if (!clean) return setError('Enter your name.');
+    const problem = passwordProblem(password, invite.email);
+    if (problem) return setError(problem);
+    setBusy(true);
+    setError(null);
+    try {
+      const officeId = await acceptInvite(token, { name: clean, password, avatar });
+      setPendingInvite(null);
+      afterSignIn(`/o/${officeId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'expired') onGone();
+      else {
+        setSignIn(err instanceof ApiError && err.code === 'sign-in');
+        setError(errorText(err));
+      }
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthShell
+      title={`Join ${invite.officeName}`}
+      intro={
+        <>
+          You’re invited as {invite.role === 'admin' ? 'an admin' : 'a member'}. Create your account for <strong>{invite.email}</strong>: your name, how
+          you look in the office, and a password.
+        </>
+      }
+      wide
+    >
+      <form onSubmit={submit} noValidate>
+        <div className="character-layout">
+          <AvatarPreview avatar={avatar} />
+          <div>
+            <AvatarEditor name={name} avatar={avatar} onName={setName} onAvatar={setAvatar} />
+            <div className="auth-password">
+              <UsernameField email={invite.email} />
+              <NewPasswordField value={password} onChange={setPassword} email={invite.email} />
+            </div>
+          </div>
+        </div>
+        <div className="auth-actions">
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {signIn ? (
+            <button type="button" className="btn primary big" onClick={() => navigate(withNext('/signin', '/invite'))}>
+              Sign in to accept
+            </button>
+          ) : (
+            <button className="btn primary big" disabled={busy}>
+              {busy ? 'Creating your account…' : 'Create account and join'}
+            </button>
+          )}
+        </div>
+      </form>
+    </AuthShell>
+  );
+}
+
+/**
+ * An emailed invitation to a workspace (/invite#t=…). Without an account for its address you make
+ * one here; with one, you accept signed in with it (the link waits in this tab while you sign in,
+ * here or with Google, Apple or GitHub).
+ */
+function InvitePage({ token: linked }: { token: string | null }) {
+  const account = useStore((s) => s.account);
+  const accountId = account?.id ?? null;
+  const [token] = useState(() => linked ?? pendingInvite());
+  const [invite, setInvite] = useState<InvitePreview | 'expired' | { used: Space[] } | { error: string } | null>(null);
+  const [otherAccount, setOtherAccount] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Asked again after signing in here: signing in with the invited address accepts it by itself.
+  useEffect(() => {
+    if (!token) return;
+    setPendingInvite(token);
+    setInvite(null);
+    let alive = true;
+    previewInvite(token).then(
+      (preview) => alive && setInvite(preview),
+      (err: unknown) => {
+        if (!alive) return;
+        if (err instanceof ApiError && err.code === 'expired') void usedOrExpired().then((gone) => alive && setInvite(gone));
+        else setInvite({ error: errorText(err) });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [token, accountId]);
+
+  const gone = () => void usedOrExpired().then(setInvite);
+  const accept = async () => {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const officeId = await acceptInvite(token);
+      setPendingInvite(null);
+      afterSignIn(`/o/${officeId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'other-account') setOtherAccount(true);
+      else if (err instanceof ApiError && err.code === 'expired') gone();
+      else setError(errorText(err));
+      setBusy(false);
+    }
+  };
+  const home = (primary: boolean, label = 'Back home') => (
+    <button className={`btn wide${primary ? ' primary' : ''}`} onClick={() => goHome()}>
+      {label}
+    </button>
+  );
+
+  if (!token) return <AuthShell title="Join a workspace" intro="Open the invitation link from your email.">{home(true)}</AuthShell>;
+  if (invite === null) return <AuthShell intro="Loading…" />;
+  if (invite === 'expired') {
+    return (
+      <AuthShell title="Invitation expired" intro="This invitation has expired or was already used. Ask whoever invited you for a new one.">
+        {home(true)}
+      </AuthShell>
+    );
+  }
+  if ('used' in invite) {
+    return (
+      <AuthShell title="Your workspaces" intro="This invitation was already used or has expired. If it was for you, you’re in.">
+        <div className="auth-buttons">
+          {invite.used.slice(0, 5).map((s) => (
+            <button key={s.id} className="recent-item" onClick={() => navigate(`/o/${s.id}`)}>
+              <span>{s.name || 'Untitled office'}</span>
+              <span className="muted">Open</span>
+            </button>
+          ))}
+          {home(false, 'All workspaces')}
+        </div>
+      </AuthShell>
+    );
+  }
+  if ('error' in invite) return <AuthShell title="Join a workspace" intro={invite.error}>{home(true)}</AuthShell>;
+
+  const title = `Join ${invite.officeName}`;
+  const as = invite.role === 'admin' ? 'an admin' : 'a member';
+  const sameAddress = !!account && account.email === invite.email;
+  // Confirming the address (in Profile) makes you a member by itself.
+  if (account && sameAddress && !account.emailVerified) {
+    return (
+      <AuthShell
+        title={title}
+        intro={
+          <>
+            Confirm <strong>{invite.email}</strong> in your profile, and you’ll join {invite.officeName} as {as}.
+          </>
+        }
+      >
+        <button className="btn primary wide" onClick={() => navigate('/profile')}>
+          Go to your profile
+        </button>
+      </AuthShell>
+    );
+  }
+  if (account && (otherAccount || !sameAddress)) {
+    return (
+      <AuthShell
+        title={title}
+        intro={
+          <>
+            This invitation is for <strong>{invite.email}</strong>, but you’re signed in as {account.email ? <strong>{account.email}</strong> : account.name}.
+          </>
+        }
+      >
+        <div className="auth-buttons">
+          {/* Signing out brings the page back for the right account, with this link. */}
+          <button className="btn primary wide" onClick={() => void signOut()}>
+            Sign in with another account
+          </button>
+          {home(false)}
+        </div>
+      </AuthShell>
+    );
+  }
+  if (account) {
+    return (
+      <AuthShell title={title} intro={`You’re invited as ${as}.`}>
+        <div className="confirm-account">
+          <UserAvatar user={account} size={40} />
+          <span className="account-who">
+            <strong title={account.name}>{account.name}</strong>
+            <span className="muted small">{account.email}</span>
+          </span>
+        </div>
+        <button className="btn primary wide" disabled={busy} onClick={() => void accept()}>
+          {busy ? 'Joining…' : `Join ${invite.officeName}`}
+        </button>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+      </AuthShell>
+    );
+  }
+  if (invite.hasAccount) {
+    return (
+      <AuthShell
+        title={title}
+        intro={
+          <>
+            You’re invited as {as}. Sign in as <strong>{invite.email}</strong> to accept.
+          </>
+        }
+      >
+        <SignInOptions next="/invite" />
+      </AuthShell>
+    );
+  }
+  return <InviteSignUp token={token} invite={invite} onGone={gone} />;
+}
+
 export function AuthPage() {
   const page = useStore((s) => s.authPage);
   const token = useStore((s) => s.linkToken);
@@ -526,5 +780,6 @@ export function AuthPage() {
   if (page === 'forgot') return <Forgot />;
   if (page === 'reset') return <ResetPassword key={token} token={token} />;
   if (page === 'confirm-email') return <ConfirmEmail key={token} token={token} />;
+  if (page === 'invite') return <InvitePage key={token} token={token} />;
   return <SignInPage />;
 }

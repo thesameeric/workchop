@@ -10,7 +10,7 @@ import { deskOwner, isLightOn, MAX_GUEST_NOTES_PER_DESK, MAX_NOTES_PER_DESK, typ
 import { feature as world, GUEST_NOTES_PER_ADDRESS } from '../server/features/world';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
-import { createOffice, disconnectAll, Jar, join, json, until, type Client } from './helpers/http';
+import { createOffice, disconnectAll, Jar, join, json, member, until, type Client } from './helpers/http';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let base: string;
@@ -60,17 +60,18 @@ const extra: Client[] = [];
 
 const itemOf = (officeId: string, id: string) => server.store.peek(officeId)!.office.items.find((i) => i.id === id)!;
 
-/** An office with a desk ('d1', 'd2'), a lamp and a light switch. */
-async function setUp(ownerJar?: Jar) {
-  const { id, ownerKey } = await createOffice(base, ownerJar);
-  const owner = await join(base, id, 'Owner', { jar: ownerJar, ownerKey });
+/** An office with a desk ('d1', 'd2'), a lamp and a light switch, and these people as members. */
+async function setUp(members: { jar: Jar }[] = []) {
+  const { id, owner: ownerJar } = await createOffice(base);
+  const owner = await join(base, id, 'Owner', { jar: ownerJar });
+  for (const m of members) await member(base, server.db, id, m.jar);
   const add = (item: OfficeItem) => owner.socket.emit('office:op', { t: 'add', item });
   add({ id: 'd1', type: 'desk', x: 5, z: 5, rot: 0 });
   add({ id: 'd2', type: 'desk', x: 9, z: 5, rot: 0 });
   add({ id: 'lamp', type: 'floor-lamp', x: 2.25, z: 2.25, rot: 0 });
   add({ id: 'sw', type: 'light-switch', x: 3.25, z: 0.25, rot: 0 });
   await until(() => !!server.store.peek(id)?.office.items.find((i) => i.id === 'sw'));
-  return { id, ownerKey, owner };
+  return { id, owner };
 }
 
 describe('lights', () => {
@@ -113,12 +114,16 @@ describe('desks', () => {
   it('are claimed by members only, one each, and freed by their owner or an editor', async () => {
     const ana = await signIn('Ana');
     const ben = await signIn('Ben');
-    const { id, owner } = await setUp();
+    const vic = await signIn('Vic');
+    const { id, owner } = await setUp([ana, ben]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     const b = await join(base, id, 'Ben', { jar: ben.jar });
     const guest = await join(base, id, 'Gus');
+    // Signed in, but here with the guest link.
+    const visitor = await join(base, id, 'Vic', { jar: vic.jar });
 
     expect(await guest.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: false, error: 'Sign in to claim a desk.' });
+    expect(await visitor.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: false, error: 'Only members can claim a desk here.' });
     expect(await a.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: true });
     expect(deskOwner(itemOf(id, 'd1'))).toEqual({ ownerUserId: ana.user.id, ownerName: 'Ana' });
     expect(await b.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: false, error: 'This is Ana’s desk.' });
@@ -127,7 +132,7 @@ describe('desks', () => {
     expect(deskOwner(itemOf(id, 'd1'))).toBeNull();
     expect(deskOwner(itemOf(id, 'd2'))?.ownerUserId).toBe(ana.user.id);
 
-    // Ben can't free it… but the office is open for editing to everyone, so a guest editor can.
+    // Once only the owner may build, Ben can't free it, but the owner can.
     owner.socket.emit('office:op', { t: 'settings', settings: { buildPolicy: 'owner' } });
     await until(() => server.store.peek(id)!.office.settings.buildPolicy === 'owner');
     expect(await b.socket.emitWithAck('desk:release', 'd2')).toMatchObject({ ok: false });
@@ -139,7 +144,7 @@ describe('desks', () => {
 
   it('show a new name on the name plate as soon as their owner renames themselves in Profile', async () => {
     const rena = await signIn('Rena');
-    const { id, owner } = await setUp();
+    const { id, owner } = await setUp([rena]);
     const r = await join(base, id, 'Rena', { jar: rena.jar });
     expect(await r.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: true });
     const heard = listen(owner.socket);
@@ -150,7 +155,7 @@ describe('desks', () => {
 
   it("keep their claim when moved, and copies don't inherit it", async () => {
     const ana = await signIn('Ana');
-    const { id, owner } = await setUp();
+    const { id, owner } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     owner.socket.emit('office:op', { t: 'update', item: { ...itemOf(id, 'd1'), x: 6, data: undefined } });
@@ -170,7 +175,7 @@ describe('desk notes', () => {
   it('reach the owner (live and on their next visit); everyone else sees only that they exist', async () => {
     const ana = await signIn('Ana');
     const ben = await signIn('Ben');
-    const { id } = await setUp();
+    const { id } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     const anaHeard = listen(a.socket);
@@ -228,7 +233,7 @@ describe('desk notes', () => {
     const ana = await signIn('Ana');
     const ben = await signIn('Ben');
     const cat = await signIn('Cat');
-    const { id } = await setUp();
+    const { id } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     const b = await join(base, id, 'Ben', { jar: ben.jar });
@@ -254,7 +259,7 @@ describe('desk notes', () => {
 
   it('make room by dropping old read notes, but never unread ones', async () => {
     const ana = await signIn('Ana');
-    const { id } = await setUp();
+    const { id } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     // Fill the desk straight in the database (the socket would rate-limit this).
@@ -281,7 +286,7 @@ describe('desk notes', () => {
 
   it('never go over the limit, even when many arrive at once', async () => {
     const ana = await signIn('Ana');
-    const { id } = await setUp();
+    const { id } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     // Room for two more.
@@ -303,7 +308,7 @@ describe('desk notes', () => {
   it('from guests: limited by address, not by connection, and never crowding out coworkers', async () => {
     const ana = await signIn('Ana');
     const ben = await signIn('Ben');
-    const { id } = await setUp();
+    const { id } = await setUp([ana]);
     const a = await join(base, id, 'Ana', { jar: ana.jar });
     await a.socket.emitWithAck('desk:claim', 'd1');
     const send = (g: { socket: Client }, n: number) => g.socket.emitWithAck('desk:note', 'd1', { text: `Note ${n}`, color: '#ffe066' });

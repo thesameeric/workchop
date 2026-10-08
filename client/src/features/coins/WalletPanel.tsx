@@ -11,9 +11,9 @@ import {
   type CoinKind,
   type LedgerEntry,
 } from '../../../../shared/coins';
-import { getSession, leaveOffice } from '../../lib/session';
+import { backToLobby, getSession } from '../../lib/session';
 import { ago } from '../../lib/time';
-import { getState, setState, toast, useStore } from '../../state/store';
+import { toast, useStore } from '../../state/store';
 import {
   ArrowDownLeftIcon,
   ArrowUpRightIcon,
@@ -227,11 +227,6 @@ function OfficeSwitch() {
 }
 
 function SignInToGetAWallet() {
-  const goSignIn = () => {
-    const { officeId } = getState();
-    leaveOffice();
-    setState({ phase: 'lobby', officeId });
-  };
   return (
     <div className="coin-guest">
       <span className="coin-glyph big">
@@ -239,7 +234,7 @@ function SignInToGetAWallet() {
       </span>
       <strong>Sign in to get a wallet</strong>
       <p className="muted small">Members get {DAILY_COINS} coins a day for dropping by, and can thank coworkers with coins. Just for fun: no real money.</p>
-      <button className="btn" onClick={goSignIn}>
+      <button className="btn" onClick={backToLobby}>
         Sign in
       </button>
       <p className="muted small">Takes you to the lobby; come back in after signing in.</p>

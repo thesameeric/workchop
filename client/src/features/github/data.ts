@@ -1,6 +1,6 @@
 import type { GithubInbox, GithubItem, GithubStatus } from '../../../../shared/github';
-import { getSession, leaveOffice, onSession, type AppSocket, type OfficeSession } from '../../lib/session';
-import { getState as getAppState, setState as setAppState, toast, useStore } from '../../state/store';
+import { getSession, onSession, type AppSocket, type OfficeSession } from '../../lib/session';
+import { getState as getAppState, toast, useStore } from '../../state/store';
 import { GithubIcon } from '../../ui/icons';
 import { connectUrl, fetchStatus, postDisconnect, type GithubScope } from './api';
 import { failedRunText, webUrl } from './format';
@@ -114,13 +114,6 @@ export async function disconnectGithub(): Promise<void> {
   } catch (err) {
     toast(`Couldn’t disconnect GitHub: ${(err as Error).message}`, 'error');
   }
-}
-
-/** Back to the lobby, to come in again as who you are now (you signed in after joining). */
-export function rejoin(): void {
-  const { officeId } = getAppState();
-  leaveOffice();
-  if (officeId) setAppState({ phase: 'lobby', officeId });
 }
 
 /**

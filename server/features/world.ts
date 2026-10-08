@@ -24,7 +24,7 @@ import type { Feature, SocketContext } from '../features';
 import { windowLimiter } from '../limits';
 import { randomId } from '../officeStore';
 
-// World micro-interactions: lamps and light switches anyone can flip, desks signed-in people claim,
+// World micro-interactions: lamps and light switches anyone can flip, desks members claim,
 // and the notes others leave on them. Lights and claims are item data (saved with the office);
 // notes live in their own table, and only the desk's owner (and each note's author) gets their text.
 
@@ -167,6 +167,9 @@ export const feature: Feature = {
         const me = s.me();
         if (typeof itemId !== 'string' || !me) return reply(ack, { ok: false, error: 'Join the office first.' });
         if (!s.user) return reply(ack, { ok: false, error: 'Sign in to claim a desk.' });
+        // Desks are for the office's members, not for people passing through.
+        const role = s.role();
+        if (!role || role === 'guest') return reply(ack, { ok: false, error: 'Only members can claim a desk here.' });
         if (!canClaim()) return reply(ack, { ok: false, error: 'One moment…' });
         const user = { id: s.user.id, name: me.name };
         const error = change(s, (office) => claimDesk(office, itemId, user));

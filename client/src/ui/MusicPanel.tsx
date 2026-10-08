@@ -56,7 +56,7 @@ export function VolumeControl() {
 
 function RadioSection({ item }: { item: OfficeItem }) {
   const data = jukeboxData(item);
-  const editor = canBuild();
+  const editor = useStore(canBuild);
   const [editing, setEditing] = useState<'tracks' | 'stream' | null>(null);
   const [tracksText, setTracksText] = useState('');
   const [streamText, setStreamText] = useState('');
@@ -221,7 +221,7 @@ function SpotifySection({ item }: { item: OfficeItem }) {
   const selfId = useStore((s) => s.selfId);
   const session = useStore((s) => s.spotifySessions[item.id]);
   const status = useStore((s) => s.spotify.status);
-  const editor = canBuild();
+  const editor = useStore(canBuild);
   const [url, setUrl] = useState('');
 
   const share = (e: FormEvent) => {

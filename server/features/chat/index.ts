@@ -167,12 +167,9 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       if (!ok) throw new ChatError(why);
     };
     const isMine = (row: MessageRow) => (row.author_user_id ? row.author_user_id === s.user?.id : row.author_player_id === s.socket.id);
-    /**
-     * Renaming and archiving channels and deleting others' messages: the owner, and signed-in people
-     * who may edit the office (not anonymous guests, even where everyone may build).
-     */
-    const mayModerate = () => s.isOwner() || (!!s.user && s.mayEdit());
-    const moderators = (what: string) => new ChatError(s.mayEdit() ? `Sign in to ${what}.` : `Only people who can edit this office can ${what}.`);
+    /** Renaming and archiving channels and deleting others' messages: the owner and admins. */
+    const mayModerate = () => s.isOwner() || s.role() === 'admin';
+    const moderators = (what: string) => new ChatError(`Only the owner and admins can ${what}.`);
     const mayView = (row: MessageRow, officeId: string) =>
       row.office_id === officeId && (!!row.channel_id || (!!s.user && !!row.dm_key?.split(':').includes(s.user.id)));
     /** The conversation a message is in, as this person names it. */
@@ -302,7 +299,8 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       answer(ack, async () => {
         const h = here();
         limit(canQuery());
-        return { people: await store.people(h.officeId) };
+        // Who belongs to the office is for its members to know.
+        return { people: s.role() === 'guest' ? [] : await store.people(h.officeId) };
       }),
     );
 

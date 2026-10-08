@@ -1,35 +1,70 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
-import { saveCharacter } from '../lib/account';
-import { fetchOfficeInfo } from '../lib/api';
+import type { AccessDenied, OfficeInfo, Role } from '../../../shared/workspace';
+import { saveCharacter, signOut } from '../lib/account';
+import { fetchOfficeInfo, type OfficeLookup } from '../lib/api';
 import { media } from '../lib/media';
-import { navigate, withNext } from '../lib/router';
-import { enterOffice } from '../lib/session';
-import { rememberOffice } from '../lib/storage';
-import { getState, setState, useStore } from '../state/store';
-import { AccountButton, SignInButton } from './Account';
+import { defaultRefused, goHome, navigate, withNext } from '../lib/router';
+import { enterOffice, JoinRefused } from '../lib/session';
+import { enteredBefore, forgetGuestToken, getGuestToken, loadDevices, rememberEntered, rememberOffice } from '../lib/storage';
+import { canSignIn, getState, setState, toast, useStore } from '../state/store';
+import { AccountButton, SignInButton, SignInOptions } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, UserEditIcon } from './icons';
+import { CamIcon, CamOffIcon, LockIcon, MicIcon, MicOffIcon, UserEditIcon } from './icons';
 import { useMediaState, VideoView } from './media';
 
-type OfficeInfo = { name: string; online: number };
+const isMember = (role: Role) => role !== 'guest';
+
+/** Whether the browser already lets this page use the microphone or camera (asking would show a prompt). */
+async function granted(name: 'microphone' | 'camera'): Promise<boolean> {
+  try {
+    return (await navigator.permissions.query({ name: name as PermissionName })).state === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Members who came into this workspace on this browser before go straight in: with the mic and camera
+ * as they left them, but only where the browser already allows them (no prompt), else muted.
+ */
+async function joinStraightIn(officeId: string): Promise<void> {
+  const prefs = loadDevices();
+  const [mic, cam] = await Promise.all([granted('microphone'), granted('camera')]);
+  if (!media.audioTrack && !media.camTrack) await media.start(mic && (prefs.micOn ?? true), cam && (prefs.camOn ?? true));
+  await enterOffice(officeId);
+  if (!mic && (prefs.micOn ?? true)) {
+    toast('Your mic is off. Press M to talk.', { icon: MicOffIcon, action: { label: 'Unmute', run: () => void media.setMic(true) }, duration: 8000 });
+  }
+}
 
 export function Lobby() {
   const officeId = useStore((s) => s.officeId)!;
   const ready = useStore((s) => s.accountReady);
-  const accountId = useStore((s) => s.account?.id ?? null);
-  const [info, setInfo] = useState<OfficeInfo | null | undefined>(undefined);
+  const account = useStore((s) => s.account);
+  const accountId = account?.id ?? null;
+  const guestLink = useStore((s) => s.linkToken);
+  const [lookup, setLookup] = useState<OfficeLookup | undefined>(undefined);
   const [unreachable, setUnreachable] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Going straight in (members back on this browser), and whether that failed (then the lobby shows).
+  const [straight, setStraight] = useState<'no' | 'joining' | 'failed'>('no');
+  const tried = useRef(false);
 
+  // What you'd be here depends on who you are: asked again after signing in or out, or opening a guest link.
   useEffect(() => {
+    if (!ready) return;
     let alive = true;
     // null means the server answered "not found"; a thrown error means we couldn't ask it.
-    fetchOfficeInfo(officeId)
-      .then((i) => {
+    fetchOfficeInfo(officeId, getGuestToken(officeId))
+      .then((l) => {
         if (!alive) return;
-        setInfo(i);
+        // A guest link that no longer works is forgotten.
+        if (l && 'denied' in l && l.denied === 'link') forgetGuestToken(officeId);
+        // Your default workspace turned you away: home instead.
+        if ((l === null || 'denied' in l) && defaultRefused(officeId)) return;
+        setLookup(l);
         setUnreachable(false);
       })
       .catch(() => alive && setUnreachable(true))
@@ -37,78 +72,173 @@ export function Lobby() {
     return () => {
       alive = false;
     };
-  }, [officeId, attempt]);
+  }, [officeId, attempt, ready, accountId, guestLink]);
 
-  // Ask for camera/mic once, so people can check how they look before going in. Off to another page
-  // (not into the office), they go off again; checked once this render is done, as React also
-  // unmounts and remounts once in development.
+  const info = lookup && !('denied' in lookup) ? lookup : undefined;
+  // The first time in each workspace (per account, on this browser) is through the lobby: camera and mic first.
+  const goStraight = !!info && !!account?.profile.avatar && isMember(info.role) && enteredBefore(account.id, officeId);
+
   useEffect(() => {
-    const elsewhere = () => getState().phase !== 'lobby' && getState().phase !== 'office';
-    if (!media.audioTrack && !media.camTrack) void media.start().then(() => elsewhere() && media.stopAll());
-    return () => void setTimeout(() => elsewhere() && media.stopAll());
-  }, []);
+    if (!goStraight || tried.current) return;
+    tried.current = true;
+    setStraight('joining');
+    joinStraightIn(officeId).then(
+      () => rememberOffice(officeId, info!.name),
+      (err: unknown) => {
+        setStraight('failed');
+        if (err instanceof JoinRefused && err.reason) setLookup({ denied: err.reason });
+        else toast((err as Error).message, 'error');
+      },
+    );
+  }, [goStraight, officeId, info]);
+
+  // Ask for camera/mic once we know you'll stay here, so people can check how they look before going
+  // in.
+  const showLobby = ready && lookup !== undefined && (!goStraight || straight === 'failed');
+  useEffect(() => {
+    if (showLobby && !media.audioTrack && !media.camTrack) void media.start().then(() => elsewhere() && media.stopAll());
+  }, [showLobby]);
+  // Off to another page (not into the office), they go off again; checked once this render is done,
+  // as React also unmounts and remounts once in development.
+  useEffect(() => () => void setTimeout(() => elsewhere() && media.stopAll()), []);
+
+  const retry = () => {
+    setRetrying(true);
+    setAttempt((n) => n + 1);
+  };
 
   if (unreachable) {
     return (
-      <div className="lobby centered">
-        <div className="card narrow">
-          <h2>Can’t reach the server</h2>
-          <p className="muted">The Workchop server isn’t responding. Check that it’s running, then try again.</p>
-          <button
-            className="btn primary"
-            disabled={retrying}
-            onClick={() => {
-              setRetrying(true);
-              setAttempt((n) => n + 1);
-            }}
-          >
-            {retrying ? 'Trying…' : 'Try again'}
-          </button>
-        </div>
-      </div>
+      <LobbyMessage title="Can’t reach the server" text="The Workchop server isn’t responding. Check that it’s running, then try again.">
+        <button className="btn primary" disabled={retrying} onClick={retry}>
+          {retrying ? 'Trying…' : 'Try again'}
+        </button>
+      </LobbyMessage>
     );
   }
 
-  if (info === null) {
+  if (lookup === null) {
     return (
-      <div className="lobby centered">
-        <div className="card narrow">
-          <h2>Office not found</h2>
-          <p className="muted">The link may be wrong, or the office was removed.</p>
-          <button className="btn primary" onClick={() => navigate('/')}>
-            Back home
-          </button>
-        </div>
-      </div>
+      <LobbyMessage title="Office not found" text="The link may be wrong, or the office was removed.">
+        <button className="btn primary" onClick={() => goHome()}>
+          Back home
+        </button>
+      </LobbyMessage>
     );
   }
+
+  if (lookup && 'denied' in lookup) return <AccessDeniedPage reason={lookup.denied} />;
 
   return (
     <div className="lobby">
-      <header className="lobby-header">
-        <button className="brand link" onClick={() => navigate('/')}>
-          <span className="brand-mark">◆</span> Workchop
-        </button>
-        <div className="lobby-header-end">
-          <div className="lobby-office">
-            {info ? (
-              <>
-                <strong title={info.name}>{info.name}</strong>
-                <span className="muted">
-                  {info.online === 0 ? 'Nobody is here yet' : `${info.online} ${info.online === 1 ? 'person' : 'people'} inside`}
-                </span>
-              </>
-            ) : (
-              <span className="muted">Loading…</span>
-            )}
-          </div>
-          {ready && (accountId ? <AccountButton /> : <SignInButton />)}
+      <LobbyHeader>
+        <div className="lobby-office">
+          {info ? (
+            <>
+              <strong title={info.name}>{info.name}</strong>
+              <span className="muted">
+                {info.online === 0 ? 'Nobody is here yet' : `${info.online} ${info.online === 1 ? 'person' : 'people'} inside`}
+              </span>
+            </>
+          ) : (
+            <span className="muted">Loading…</span>
+          )}
         </div>
-      </header>
+      </LobbyHeader>
       {/* Wait to know who you are: signed in, you come in as your profile says; guests pick a name
           and a character here. */}
-      {!ready ? <p className="lobby-wait muted">Loading…</p> : accountId ? <SignedInJoin info={info} /> : <LobbyForm info={info} />}
+      {!ready || (goStraight && straight !== 'failed') ? (
+        <p className="lobby-wait muted">{straight === 'joining' ? 'Joining…' : 'Loading…'}</p>
+      ) : accountId ? (
+        <SignedInJoin info={info} />
+      ) : (
+        <LobbyForm info={info} />
+      )}
     </div>
+  );
+}
+
+/** Not on a page of this office any more (left it for another page). */
+const elsewhere = () => getState().phase !== 'lobby' && getState().phase !== 'office';
+
+function LobbyHeader({ children }: { children?: ReactNode }) {
+  const ready = useStore((s) => s.accountReady);
+  const signedIn = useStore((s) => !!s.account);
+  return (
+    <header className="lobby-header">
+      <button className="brand link" onClick={() => goHome()}>
+        <span className="brand-mark">◆</span> Workchop
+      </button>
+      <div className="lobby-header-end">
+        {children}
+        {ready && (signedIn ? <AccountButton /> : <SignInButton />)}
+      </div>
+    </header>
+  );
+}
+
+function LobbyMessage({ title, text, locked, children }: { title: string; text: ReactNode; locked?: boolean; children?: ReactNode }) {
+  return (
+    <div className="lobby">
+      <LobbyHeader />
+      <div className="lobby-message">
+        <div className="card narrow">
+          {locked && (
+            <span className="auth-icon">
+              <LockIcon size={24} />
+            </span>
+          )}
+          <h2>{title}</h2>
+          <p className="muted">{text}</p>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Why you can't come in (GET /api/offices/:id answered 403), and what to do about it. */
+function AccessDeniedPage({ reason }: { reason: AccessDenied }) {
+  const account = useStore((s) => s.account);
+  const signIn = useStore(canSignIn);
+  const home = (
+    <button className="btn wide" onClick={() => goHome()}>
+      Back home
+    </button>
+  );
+  if (account && reason === 'members-only') {
+    return (
+      <LobbyMessage
+        title="Members only"
+        locked
+        text={
+          <>
+            You’re signed in as <strong>{account.name}</strong>. Ask an admin to add {account.email ? <strong>{account.email}</strong> : 'you'}.
+          </>
+        }
+      >
+        <div className="lobby-message-actions">
+          <button className="btn primary wide" onClick={() => void signOut()}>
+            Use another account
+          </button>
+          {home}
+        </div>
+      </LobbyMessage>
+    );
+  }
+  const text =
+    reason === 'link'
+      ? `This guest link no longer works. Ask whoever sent it for a new one${account || !signIn ? '' : ', or sign in if you’re a member'}.`
+      : 'This workspace is for its members. Sign in with the account they added, or open the guest link you were sent.';
+  return (
+    <LobbyMessage title={reason === 'link' ? 'Link expired' : 'Members only'} text={text} locked>
+      {!account && signIn && (
+        <div className="lobby-sign-in">
+          <SignInOptions next={location.pathname} />
+        </div>
+      )}
+      {home}
+    </LobbyMessage>
   );
 }
 
@@ -124,6 +254,9 @@ function useJoin(info: OfficeInfo | undefined, prepare?: () => void) {
     try {
       await enterOffice(officeId);
       rememberOffice(officeId, info?.name ?? officeId);
+      // Next time, this account goes straight in here.
+      const account = getState().account;
+      if (account) rememberEntered(account.id, officeId);
     } catch (err) {
       setError((err as Error).message);
       setJoining(false);
@@ -149,6 +282,7 @@ function SignedInJoin({ info }: { info: OfficeInfo | undefined }) {
         <AvatarPreview avatar={me.avatar} height={240} />
         <p className="lobby-me-line">
           <span className="muted">Joining as</span> <strong title={me.name}>{me.name}</strong>
+          {info?.role === 'guest' && <span className="badge neutral">guest</span>}
         </p>
         <button type="button" className="btn small" onClick={() => navigate(withNext('/profile', location.pathname))}>
           <UserEditIcon size={16} /> Edit profile

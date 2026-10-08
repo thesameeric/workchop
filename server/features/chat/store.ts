@@ -187,7 +187,7 @@ export class ChatStore {
   /** Signed-in people who have been to the office, most recent first. */
   async people(officeId: string): Promise<ChatPerson[]> {
     const res = await this.db.query<{ id: string; name: string }>(
-      'SELECT u.id, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.office_id = $1 ORDER BY m.last_visit_at DESC LIMIT 500',
+      'SELECT u.id, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.office_id = $1 ORDER BY m.last_visit_at DESC NULLS LAST, m.joined_at DESC LIMIT 500',
       [officeId],
     );
     return res.rows.map((r) => ({ userId: r.id, name: r.name }));

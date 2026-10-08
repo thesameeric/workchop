@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { DIFFICULTY_LABEL, plantSpecies, type PlantSpecies } from '../../../../shared/plants';
 import type { OfficeItem } from '../../../../shared/types';
 import { deskOf, deskOwner, MAX_NOTE_LENGTH, NOTE_COLORS, type DeskNote } from '../../../../shared/world';
+import { may } from '../../../../shared/workspace';
 import { colorFor, initials } from '../../lib/color';
-import { leaveOffice } from '../../lib/session';
+import { backToLobby } from '../../lib/session';
 import { ago } from '../../lib/time';
-import { canSignIn, setPanel, setState, toast, useStore } from '../../state/store';
+import { canBuild, canSignIn, setPanel, toast, useStore } from '../../state/store';
 import {
   CloseIcon,
   DeskIcon,
@@ -155,12 +156,14 @@ function Meter({ value }: { value: number }) {
 
 function DeskCard({ desk }: { desk: OfficeItem }) {
   const owner = deskOwner(desk);
-  const account = useStore((s) => s.account);
-  if (!owner) return <FreeDesk desk={desk} signedIn={!!account} />;
+  if (!owner) return <FreeDesk desk={desk} />;
   return <ClaimedDesk desk={desk} ownerId={owner.ownerUserId} ownerName={owner.ownerName} />;
 }
 
-function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
+/** A desk nobody has: members can make it theirs. */
+function FreeDesk({ desk }: { desk: OfficeItem }) {
+  const member = useStore((s) => may(s.role, 'see-members'));
+  const signedIn = useStore((s) => !!s.account);
   const mine = useStore((s) => (s.account && s.office ? deskOf(s.office, s.account.id) : undefined));
   const signInOffered = useStore(canSignIn);
   const [busy, setBusy] = useState(false);
@@ -175,7 +178,7 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
   return (
     <>
       <CardHead icon={<DeskIcon size={20} />} title="Free desk" subtitle="Nobody has claimed it yet" />
-      {signedIn ? (
+      {member ? (
         <>
           <p className="wc-text">Make it yours: your name goes on it, and people can leave you notes here.</p>
           <div className="wc-actions">
@@ -184,25 +187,17 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
             </button>
           </div>
         </>
-      ) : signInOffered ? (
+      ) : signInOffered && !signedIn ? (
         <>
           <p className="wc-text">Sign in to claim a desk: your name goes on it, and people can leave you notes.</p>
           <div className="wc-actions">
-            <button
-              className="btn small"
-              onClick={() => {
-                const { officeId } = useStore.getState();
-                leaveOffice();
-                setState({ phase: 'lobby', officeId });
-              }}
-              title="Takes you to the lobby to sign in; you'll come back here after"
-            >
+            <button className="btn small" onClick={backToLobby} title="Takes you to the lobby to sign in; you'll come back here after">
               <SignInIcon size={15} /> Sign in
             </button>
           </div>
         </>
       ) : (
-        <p className="wc-text">Desks are for signed-in members. You can still leave notes on claimed desks.</p>
+        <p className="wc-text">Desks are for members of this workspace. You can still leave notes on claimed desks.</p>
       )}
     </>
   );
@@ -211,7 +206,7 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
 function ClaimedDesk({ desk, ownerId, ownerName }: { desk: OfficeItem; ownerId: string; ownerName: string }) {
   const isMine = useStore((s) => s.account?.id === ownerId);
   const count = useWorld((s) => s.stickies[ownerId]?.count ?? 0);
-  const mayEdit = useStore((s) => !!s.office && (s.office.settings.buildPolicy === 'everyone' || s.isOwner));
+  const mayEdit = useStore(canBuild);
   const [releasing, setReleasing] = useState(false);
   const release = async () => {
     if (!isMine && !confirm(`Free ${ownerName}’s desk? Their notes stay with them.`)) return;

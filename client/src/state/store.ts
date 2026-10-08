@@ -2,12 +2,13 @@ import { create } from 'zustand';
 import type { AccountUser, SignInProviders } from '../../../shared/account';
 import type { SpotifySession } from '../../../shared/music';
 import type { AvatarConfig, Office, PlayerState, Status } from '../../../shared/types';
+import { may, type GuestAccess, type OfficeKind, type Role } from '../../../shared/workspace';
 import { loadProfile } from '../lib/storage';
 import type { IconComponent } from '../ui/icons';
 
 export type Phase = 'landing' | 'lobby' | 'office' | 'auth' | 'profile' | 'welcome';
-/** The page shown in the 'auth' phase (its path: /signin, /signup…). */
-export type AuthPage = 'signin' | 'signup' | 'forgot' | 'reset' | 'confirm-email';
+/** The page shown in the 'auth' phase (its path: /signin, /signup…, /invite). */
+export type AuthPage = 'signin' | 'signup' | 'forgot' | 'reset' | 'confirm-email' | 'invite';
 /** The open side panel: 'none', or the id of a panel in ui/panels.tsx ('chat', 'people', 'build', 'music'…). */
 export type Panel = string;
 export type BuildTool = 'select' | 'place' | 'zone';
@@ -43,7 +44,7 @@ interface State {
   phase: Phase;
   officeId: string | null;
   authPage: AuthPage;
-  /** The token from an emailed link (`/reset#t=…`), taken out of the address. */
+  /** The token from an emailed link (`/reset#t=…`) or a guest link (`/o/<id>#guest=…`), taken out of the address. */
   linkToken: string | null;
   connection: 'online' | 'reconnecting';
 
@@ -55,7 +56,13 @@ interface State {
   providers: SignInProviders;
 
   selfId: string | null;
+  /** The office's owner, or (signed out) the holder of its owner key from before accounts. */
   isOwner: boolean;
+  /** Your role in the office you're in (null outside one). */
+  role: Role | null;
+  kind: OfficeKind;
+  /** Who besides members may come in. */
+  guests: GuestAccess;
   office: Office | null;
   players: Record<string, RemotePlayer>;
 
@@ -68,6 +75,8 @@ interface State {
   linked: Record<string, true>;
   streams: Record<string, MediaStream>;
   speaking: Record<string, boolean>;
+  /** The browser won't play people's voices until the next click. */
+  audioBlocked: boolean;
 
   /** Asks the chat to open a conversation with this player (see messagePlayer); the chat clears it. */
   chatWith: string | null;
@@ -76,6 +85,8 @@ interface State {
 
   panel: Panel;
   modal: Modal;
+  /** The section the Settings window opens at (its id), or the first. */
+  settingsSection: string | null;
   mode: 'play' | 'build';
   build: {
     tool: BuildTool;
@@ -148,6 +159,9 @@ export const useStore = create<State>()(() => ({
   providers: { google: false, apple: false, github: false, dev: false, password: false, emailLinks: false },
   selfId: null,
   isOwner: false,
+  role: null,
+  kind: 'team',
+  guests: 'off',
   office: null,
   players: {},
   me: { name: profile.name, avatar: profile.avatar, status: 'available' },
@@ -156,10 +170,12 @@ export const useStore = create<State>()(() => ({
   linked: {},
   streams: {},
   speaking: {},
+  audioBlocked: false,
   chatWith: null,
   emotes: {},
   panel: 'none',
   modal: 'none',
+  settingsSection: null,
   mode: 'play',
   build: initialBuild,
   spotlight: null,
@@ -199,9 +215,14 @@ export function dismissToast(id: number): void {
   setState((s) => (s.toasts.some((t) => t.id === id) ? { toasts: s.toasts.filter((t) => t.id !== id) } : {}));
 }
 
-export function canBuild(): boolean {
-  const { office, isOwner } = getState();
-  return !!office && (office.settings.buildPolicy === 'everyone' || isOwner);
+/** Whether you may edit the office: owners and admins always, members when everyone may, guests only in open offices. */
+export function canBuild(s: Pick<State, 'office' | 'role' | 'isOwner' | 'guests'> = getState()): boolean {
+  return !!s.office && (s.isOwner || may(s.role, 'build', { buildPolicy: s.office.settings.buildPolicy, guests: s.guests }));
+}
+
+/** Who may edit the office, for those who may not. */
+export function buildRule(s: Pick<State, 'office'> = getState()): string {
+  return s.office?.settings.buildPolicy === 'everyone' ? 'Only members can edit this office.' : 'Only the owner and admins can edit this office.';
 }
 
 /** Whether this server offers any way to sign in. */

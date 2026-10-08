@@ -57,4 +57,19 @@ export const mailTemplates = {
       null,
       'If you didn’t do this, sign in another way (or ask whoever runs your Workchop) and change it back.',
     ),
+  /** `by`: who added them; `workspace`: its name. */
+  added: (link: string, by: { name: string; email: string }, workspace: string) =>
+    compose(
+      `${by.name} added you to ${workspace}`,
+      `${by.name} (${by.email}) added you to the Workchop workspace ${workspace}. Open it with the link below.`,
+      { label: `Open ${workspace}`, link },
+      'If you don’t know them, you can ignore this email, or leave the workspace from its settings.',
+    ),
+  invited: (link: string, by: { name: string; email: string }, workspace: string) =>
+    compose(
+      `${by.name} invited you to ${workspace}`,
+      `${by.name} (${by.email}) invited you to the Workchop workspace ${workspace}. Accept with the link below. It works for 14 days.`,
+      { label: 'Accept the invitation', link },
+      'If you don’t know them, you can ignore this email.',
+    ),
 };

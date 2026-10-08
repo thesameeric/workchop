@@ -5,7 +5,7 @@ import { FLOOR_STYLES, MAX_SIZE, MIN_SIZE, ZONE_COLORS } from '../../../shared/o
 import type { FloorStyle, OfficeSettings, Zone } from '../../../shared/types';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
-import { canBuild, setState, useStore } from '../state/store';
+import { buildRule, canBuild, setState, useStore } from '../state/store';
 import { buildActions } from '../world/Ground';
 import { Swatches } from './AvatarEditor';
 import { CopyIcon, LockIcon, PinIcon, RotateIcon, TrashIcon } from './icons';
@@ -163,6 +163,7 @@ function AreasTab() {
 function OfficeTab() {
   const settings = useStore((s) => s.office!.settings);
   const isOwner = useStore((s) => s.isOwner);
+  const open = useStore((s) => s.guests === 'open');
   const [name, setName] = useState(settings.name);
   const [size, setSize] = useState({ width: settings.width, depth: settings.depth });
   useEffect(() => setName(settings.name), [settings.name]);
@@ -221,8 +222,8 @@ function OfficeTab() {
         <label className="field">
           <span>Who can edit</span>
           <select value={settings.buildPolicy} onChange={(e) => save({ buildPolicy: e.target.value as OfficeSettings['buildPolicy'] })}>
-            <option value="everyone">Everyone in the office</option>
-            <option value="owner">Only me (owner)</option>
+            <option value="everyone">{open ? 'Everyone in the office' : 'All members'}</option>
+            <option value="owner">The owner and admins</option>
           </select>
         </label>
       )}
@@ -232,13 +233,13 @@ function OfficeTab() {
 
 export function BuildPanel() {
   const [tab, setTab] = useState<Tab>('items');
-  useStore((s) => s.office?.settings.buildPolicy);
-  useStore((s) => s.isOwner);
-  if (!canBuild()) {
+  const allowed = useStore(canBuild);
+  const rule = useStore(buildRule);
+  if (!allowed) {
     return (
       <div className="panel-body">
         <p className="muted center pad">
-          <LockIcon size={16} /> Only the owner can edit this office.
+          <LockIcon size={16} /> {rule}
         </p>
       </div>
     );

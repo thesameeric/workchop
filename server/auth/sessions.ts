@@ -20,6 +20,14 @@ export function newToken(): string {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+/** Compares a secret someone gave with the real one in constant time. */
+export function sameSecret(given: unknown, expected: string | null | undefined): boolean {
+  if (typeof given !== 'string' || !expected) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export interface Session {
   user: AccountUser;
   tokenHash: string;
@@ -70,11 +78,12 @@ export class Sessions {
     return ended.rows.map((r) => r.token_hash);
   }
 
-  /** Drops expired sessions, abandoned sign-ins and unused email links; returns the hashes of the sessions dropped. */
+  /** Drops expired sessions, abandoned sign-ins, unused email links and invitations; returns the hashes of the sessions dropped. */
   async cleanup(): Promise<string[]> {
     const expired = await this.db.query<{ token_hash: string }>('DELETE FROM sessions WHERE expires_at <= now() RETURNING token_hash');
     await this.db.query('DELETE FROM auth_tx WHERE expires_at < now()');
     await this.db.query('DELETE FROM email_tokens WHERE expires_at < now()');
+    await this.db.query('DELETE FROM office_invites WHERE expires_at < now()');
     return expired.rows.map((r) => r.token_hash);
   }
 }

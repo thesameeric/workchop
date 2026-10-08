@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import { createPortal } from 'react-dom';
 import { appInfo } from '../../../shared/apps';
 import { REACTIONS } from '../../../shared/avatar';
+import { may, type Role } from '../../../shared/workspace';
 import { HeadphonesButton } from '../features/audio/Headphones';
 import { toggleFocus } from '../features/audio/focus';
 import { PresenceDockButton, PresenceIcon, PresenceMenu } from '../features/presence/DockButton';
@@ -10,13 +11,14 @@ import { colorFor, initials } from '../lib/color';
 import { media } from '../lib/media';
 import { officeUrl } from '../lib/router';
 import { getSession, leaveOffice } from '../lib/session';
-import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
+import { buildRule, canBuild, setPanel, setState, toast, useStore } from '../state/store';
 import {
   CamIcon,
   CamOffIcon,
   HammerIcon,
   HeadphonesIcon,
   HeadphonesOffIcon,
+  InviteIcon,
   LeaveIcon,
   LinkIcon,
   MicIcon,
@@ -25,10 +27,12 @@ import {
   ScreenIcon,
   SettingsIcon,
   SmileIcon,
+  type IconComponent,
 } from './icons';
 import { AccountMenu, menuKeys, usePopover } from './Account';
 import { useMediaState } from './media';
 import { panelKey, usePanels, type PanelDef } from './panels';
+import { openWorkspaceSettings } from './WorkspaceSettings';
 
 const NARROW = '(max-width: 720px)';
 
@@ -46,15 +50,26 @@ function useNarrow(): boolean {
 /** Most phone browsers can't share the screen. */
 const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia;
 
-export async function copyInvite(): Promise<void> {
+/** Copies the office's link. */
+async function copyLink(): Promise<void> {
   const id = useStore.getState().officeId;
   if (!id) return;
   try {
     await navigator.clipboard.writeText(officeUrl(id));
-    toast('Invite link copied');
+    toast('Link copied');
   } catch {
-    prompt('Copy this invite link:', officeUrl(id));
+    prompt('Copy this link:', officeUrl(id));
   }
+}
+
+/**
+ * Bringing people in: owners and admins invite them (the Workspace settings), members copy the
+ * office's link (which works for members, and for anyone in an open office); guests get nothing.
+ */
+export function inviteAction(role: Role | null): { label: string; icon: IconComponent; run: () => void } | null {
+  if (may(role, 'add-member')) return { label: 'Invite people', icon: InviteIcon, run: openWorkspaceSettings };
+  if (may(role, 'see-members')) return { label: 'Copy link', icon: LinkIcon, run: () => void copyLink() };
+  return null;
 }
 
 export function toggleScreen(): void {
@@ -239,6 +254,7 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
   const [at, setAt] = useState({ right: 0, bottom: 0 });
   const [picking, setPicking] = useState(false);
   const focus = useStore((s) => s.focus);
+  const invite = inviteAction(useStore((s) => s.role));
   const screen = useMediaState().screen;
   const app = usePresence((s) => s.self?.app ?? null);
   // Alerts in the menu (say, GitHub's) show on the button, so they aren't missed.
@@ -313,12 +329,14 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
                 )}
                 <button role="menuitem" onClick={pick(() => setPanel('build'))}>
                   <HammerIcon size={18} />
-                  {canBuild() ? 'Build mode' : 'Build mode (owner only)'}
+                  Build mode
                 </button>
-                <button role="menuitem" onClick={pick(() => void copyInvite())}>
-                  <LinkIcon size={18} />
-                  Copy invite link
-                </button>
+                {invite && (
+                  <button role="menuitem" onClick={pick(invite.run)}>
+                    <invite.icon size={18} />
+                    {invite.label}
+                  </button>
+                )}
                 <button role="menuitem" onClick={pick(() => setState({ modal: 'settings' }))}>
                   <SettingsIcon size={18} />
                   Settings
@@ -344,8 +362,8 @@ export function Dock() {
   // The reactions button while its menu is open.
   const [emoteAnchor, setEmoteAnchor] = useState<HTMLElement | null>(null);
   const closeEmotes = useCallback(() => setEmoteAnchor(null), []);
-  useStore((s) => s.office?.settings.buildPolicy);
-  const buildAllowed = canBuild();
+  const buildAllowed = useStore(canBuild);
+  const invite = inviteAction(useStore((s) => s.role));
 
   return (
     <nav className="dock" aria-label="Controls">
@@ -385,7 +403,7 @@ export function Dock() {
           <button
             className={`dock-btn${panel === 'build' ? ' on' : ''}`}
             onClick={() => setPanel('build')}
-            title={buildAllowed ? 'Build mode (B)' : 'Only the owner can edit this office'}
+            title={buildAllowed ? 'Build mode (B)' : buildRule()}
           >
             <HammerIcon />
           </button>
@@ -405,9 +423,11 @@ export function Dock() {
           {panels.map((p) => (
             <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
           ))}
-          <button className="dock-btn hide-narrow" onClick={copyInvite} title="Copy invite link">
-            <LinkIcon />
-          </button>
+          {invite && (
+            <button className="dock-btn hide-narrow" onClick={invite.run} title={invite.label}>
+              <invite.icon />
+            </button>
+          )}
           <button className="dock-btn" onClick={() => setState({ modal: 'settings' })} title="Settings">
             <SettingsIcon />
           </button>

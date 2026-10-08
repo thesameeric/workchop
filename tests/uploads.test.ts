@@ -87,6 +87,7 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
         dataDir,
         quiet: true,
         iceServers: [],
+        auth: { google: null, apple: null, devLogin: true },
         // Lets the tests appear to come from several addresses.
         clientIpHeader: 'x-test-ip',
         uploads: {
@@ -272,7 +273,7 @@ describe('switching upload storage', () => {
   it('keeps serving files from the store they were saved in', { timeout: 60_000 }, async () => {
     const dataDir = tempDir();
     const db = await createTestDb();
-    const options = { port: 0, host: '127.0.0.1', db, dataDir, quiet: true, iceServers: [] };
+    const options = { port: 0, host: '127.0.0.1', db, dataDir, quiet: true, iceServers: [], auth: { google: null, apple: null, devLogin: true } };
     const first = await startServer({ ...options, uploads: { storage: 'fs' } });
     const office = await createOffice(`http://127.0.0.1:${first.port}`);
     const { socket, res: joined } = await join(`http://127.0.0.1:${first.port}`, office.id, 'A');

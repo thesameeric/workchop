@@ -1,15 +1,21 @@
-import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import type { Space } from '../../../shared/account';
 import { reactionForKey } from '../../../shared/avatar';
 import { toggleFocus } from '../features/audio/focus';
 import { FocusIndicator } from '../features/audio/Headphones';
+import { fetchSpaces } from '../lib/api';
+import { colorFor, initials } from '../lib/color';
 import { media } from '../lib/media';
-import { getSession } from '../lib/session';
+import { goHome, navigate } from '../lib/router';
+import { closeOffice, getSession, leaveOffice } from '../lib/session';
 import { setPanel, setState, useStore } from '../state/store';
 import { isTyping } from '../world/input';
 import { loadWorldModules } from '../world/extensions';
 import { interact } from '../world/movement';
-import { Dock, copyInvite } from './Dock';
-import { CloseIcon, HelpIcon, LinkIcon } from './icons';
+import { menuKeys, usePopover } from './Account';
+import { Dock, inviteAction } from './Dock';
+import { AddIcon, CheckIcon, ChevronDownIcon, CloseIcon, HelpIcon, HomeIcon, VolumeOffIcon } from './icons';
 import { Modals } from './Modals';
 import { NowPlayingPill } from './MusicPanel';
 import { Overlays } from './overlays';
@@ -48,23 +54,133 @@ class WorldBoundary extends Component<{ children: ReactNode }, { failed: boolean
   }
 }
 
-function TopBar() {
+/** The workspace switcher: your other workspaces, all of them (home), and making a new one. */
+function WorkspaceMenu({ onClose }: { onClose: (refocus?: boolean) => void }) {
+  const officeId = useStore((s) => s.officeId);
+  const invite = inviteAction(useStore((s) => s.role));
+  const [spaces, setSpaces] = useState<Space[] | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchSpaces().then(
+      (list) => alive && setSpaces(list),
+      () => alive && setSpaces([]),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // The first workspace takes the focus once they're here, for the keyboard.
+  useEffect(() => {
+    if (spaces) ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [spaces]);
+  const pick = (run: () => void) => () => {
+    onClose();
+    run();
+  };
+  return (
+    <div className="account-menu workspace-menu" role="menu" aria-label="Workspaces" ref={ref} onKeyDown={(e) => menuKeys(e, onClose)}>
+      <p className="menu-label">Your workspaces</p>
+      {spaces === null && <p className="menu-label muted">Loading…</p>}
+      {spaces?.map((s) => {
+        const name = s.name || 'Untitled office';
+        return (
+          <button key={s.id} role="menuitem" aria-current={s.id === officeId} onClick={pick(() => s.id !== officeId && navigate(`/o/${s.id}`))}>
+            <span className="menu-space-icon" style={{ background: colorFor(name) }} aria-hidden="true">
+              {initials(name)}
+            </span>
+            <span className="menu-text">{name}</span>
+            {s.id === officeId && <CheckIcon size={16} />}
+          </button>
+        );
+      })}
+      <hr />
+      {invite && (
+        <button role="menuitem" onClick={pick(invite.run)}>
+          <invite.icon size={18} />
+          {invite.label}
+        </button>
+      )}
+      <button role="menuitem" onClick={pick(leaveOffice)}>
+        <HomeIcon size={18} />
+        All workspaces
+      </button>
+      <button
+        role="menuitem"
+        onClick={pick(() => {
+          closeOffice();
+          goHome('/#create');
+        })}
+      >
+        <AddIcon size={18} />
+        Create workspace
+      </button>
+    </div>
+  );
+}
+
+/** The office's name, your role and who's here; for signed-in people it opens the workspace switcher. */
+function OfficeChip() {
   const name = useStore((s) => s.office?.settings.name ?? '');
   const count = useStore((s) => Object.keys(s.players).length + 1);
-  const isOwner = useStore((s) => s.isOwner);
+  const badge = useStore((s) => (s.isOwner ? 'owner' : s.role === 'admin' || s.role === 'guest' ? s.role : null));
+  const signedIn = useStore((s) => !!s.account);
+  const { open, setOpen, close, ref, menuRef, buttonRef } = usePopover();
+  const [at, setAt] = useState({ left: 0, top: 0 });
+  const toggle = () => {
+    // Over the video tiles too: the menu goes in a portal, under the chip.
+    const r = ref.current!.getBoundingClientRect();
+    setAt({ left: r.left, top: r.bottom + 8 });
+    setOpen((v) => !v);
+  };
+  const title = (
+    <>
+      <span className="brand-mark">◆</span>
+      <strong>{name}</strong>
+    </>
+  );
+  return (
+    <div className="office-chip" ref={ref}>
+      {signedIn ? (
+        <button className="office-switch" ref={buttonRef} onClick={toggle} aria-haspopup="menu" aria-expanded={open} title="Switch workspace">
+          {title}
+          <ChevronDownIcon size={14} />
+        </button>
+      ) : (
+        title
+      )}
+      {badge && <span className="badge">{badge}</span>}
+      <span className="online-dot" />
+      <span className="muted">{count} online</span>
+      {open &&
+        createPortal(
+          <div className="dock-menu" ref={menuRef} style={at}>
+            <WorkspaceMenu onClose={close} />
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/** The browser blocked people's voices (you came straight in): a click lets them play. */
+function AudioBlocked() {
+  const blocked = useStore((s) => s.audioBlocked);
+  if (!blocked) return null;
+  return (
+    <button className="audio-blocked" onClick={() => getSession()?.unblockAudio()}>
+      <VolumeOffIcon size={16} />
+      Audio blocked — click to hear people
+    </button>
+  );
+}
+
+function TopBar() {
   const items = useTopBarItems();
   return (
     <div className="topbar">
-      <div className="office-chip">
-        <span className="brand-mark">◆</span>
-        <strong>{name}</strong>
-        {isOwner && <span className="badge">owner</span>}
-        <span className="online-dot" />
-        <span className="muted">{count} online</span>
-        <button className="icon-btn" onClick={copyInvite} title="Copy invite link">
-          <LinkIcon size={16} />
-        </button>
-      </div>
+      <OfficeChip />
+      <AudioBlocked />
       <ZoneIndicator />
       <NowPlayingPill />
       {items.map((item) => (

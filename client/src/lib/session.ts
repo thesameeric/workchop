@@ -12,7 +12,8 @@ import type {
   ServerToClientEvents,
 } from '../../../shared/types';
 import type { UploadedFile } from '../../../shared/uploads';
-import { getState, initialBuild, personalMusicVolume, setState, toast, type RemotePlayer } from '../state/store';
+import type { AccessDenied, Role } from '../../../shared/workspace';
+import { canBuild, getState, initialBuild, personalMusicVolume, setState, toast, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
 import { accountUpdated, refreshAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
@@ -23,7 +24,8 @@ import { SpeakingDetector } from './levels';
 import { media } from './media';
 import { PeerManager } from './peers';
 import { local, remoteTargets } from './positions';
-import { getOwnerKey } from './storage';
+import { goHome } from './router';
+import { forgetGuestToken, getGuestToken, getOwnerKey } from './storage';
 import { postFile, type UploadOptions } from './upload';
 
 /** The office connection, typed with every event (features add theirs to the shared event maps). */
@@ -33,6 +35,18 @@ function toRemote(p: PlayerState): RemotePlayer {
   const { x: _x, z: _z, ry: _ry, anim: _anim, ...rest } = p;
   return rest;
 }
+
+/** The server didn't let you in; `reason` says why when it's about access (sign in, members only, an old guest link). */
+export class JoinRefused extends Error {
+  constructor(
+    message: string,
+    readonly reason: AccessDenied | null,
+  ) {
+    super(message);
+  }
+}
+
+const ROLE_NAMES: Record<Role, string> = { owner: 'the owner', admin: 'an admin', member: 'a member', guest: 'a guest' };
 
 /** Everything that happens while you're inside an office: socket, calls, audio. */
 export class OfficeSession {
@@ -55,6 +69,8 @@ export class OfficeSession {
   private leaveHandlers = new Set<() => void>();
   private uploadMaxBytes: number | undefined;
   private closed = false;
+  /** You're leaving the workspace yourself: being removed from it needs no message. */
+  leaving = false;
   readonly radio = new LoungeRadio((itemId, durations) => this.music({ t: 'track:durations', itemId, durations }));
   readonly spotify = new SpotifyListenAlong((itemId, update, start) => this.socket.emit('spotify:session', itemId, update, start));
   private spotifyClientId: string | null = null;
@@ -87,7 +103,7 @@ export class OfficeSession {
     await new Promise<void>((resolve, reject) => {
       const onFirst = (res: JoinResponse) => {
         if (res.ok) resolve();
-        else reject(new Error(res.error));
+        else reject(new JoinRefused(res.error, res.reason ?? null));
       };
       this.socket.on('connect', () => this.sendJoin(onFirst));
       this.socket.on('connect_error', () => {
@@ -107,13 +123,17 @@ export class OfficeSession {
         avatar: me.avatar,
         status: me.status,
         ownerKey: getOwnerKey(this.officeId),
+        guest: getGuestToken(this.officeId),
         mic: media.micOn,
         cam: media.camOn || media.screenOn,
       },
       (res) => {
         if (!res.ok) {
+          if (res.reason === 'link') forgetGuestToken(this.officeId);
           if (!this.hasJoined) onFirst(res);
           else toast(res.error, 'error');
+          // Let in no longer (say, removed or the guest link reset while away): the lobby says why.
+          if (this.hasJoined && res.reason) backToLobby();
           return;
         }
         const rejoin = this.hasJoined;
@@ -139,6 +159,9 @@ export class OfficeSession {
           connection: 'online',
           selfId: res.selfId,
           isOwner: res.isOwner,
+          role: res.role,
+          kind: res.kind,
+          guests: res.guests,
           office: res.office,
           players,
           linked: {},
@@ -334,6 +357,20 @@ export class OfficeSession {
     });
     s.on('notice', (text) => toast(text, 'error'));
     s.on('account:updated', (user) => accountUpdated(user));
+    s.on('office:role', (role, guests) => {
+      const before = getState().role;
+      // As the server has it: owner rights go with the role from now on.
+      setState({ role, guests, isOwner: role === 'owner' });
+      // Out of build mode if you may no longer edit.
+      this.setOffice(getState().office);
+      if (role !== before) toast(`You’re now ${ROLE_NAMES[role]} here.`);
+    });
+    s.on('office:removed', (reason) => {
+      if (this.leaving) return;
+      const name = getState().office?.settings.name || 'this office';
+      leaveOffice();
+      toast(reason === 'guests-off' ? `Guests can no longer come into ${name}.` : `You were removed from ${name}.`, 'error');
+    });
     s.on('spotify:session', (itemId, session) => {
       setState((st) => {
         const spotifySessions = { ...st.spotifySessions };
@@ -344,13 +381,13 @@ export class OfficeSession {
     });
   }
 
-  private setOffice(office: NonNullable<ReturnType<typeof getState>['office']>): void {
+  private setOffice(office: ReturnType<typeof getState>['office']): void {
+    if (!office) return;
     setState((st) => {
       const build = { ...st.build };
       if (build.selectedId && !office.items.some((i) => i.id === build.selectedId)) build.selectedId = null;
       if (build.selectedZoneId && !office.zones.some((z) => z.id === build.selectedZoneId)) build.selectedZoneId = null;
-      const allowed = office.settings.buildPolicy === 'everyone' || st.isOwner;
-      return allowed ? { office, build } : { office, build: initialBuild, mode: 'play', panel: st.panel === 'build' ? 'none' : st.panel };
+      return canBuild({ ...st, office }) ? { office, build } : { office, build: initialBuild, mode: 'play', panel: st.panel === 'build' ? 'none' : st.panel };
     });
     // Make sure edits didn't leave us stuck inside furniture or outside the floor.
     if (!local.seat && isBlocked(local.x, local.z, buildColliders(office), office.settings)) {
@@ -442,10 +479,27 @@ export class OfficeSession {
     const current = (el.srcObject as MediaStream | null)?.getAudioTracks()[0] ?? null;
     if (current !== audioTrack) {
       el.srcObject = audioTrack ? new MediaStream([audioTrack]) : null;
-      void el.play().catch(() => {});
+      void el.play().catch(this.playFailed);
     }
     this.speaking.watch(id, audioTrack);
   }
+
+  /** The browser wants a click before playing sound (you came straight in, without the lobby's). */
+  private playFailed = (err: unknown) => {
+    if ((err as { name?: string })?.name !== 'NotAllowedError' || this.closed) return;
+    setState({ audioBlocked: true });
+    // Any click or key press lets it play.
+    window.addEventListener('pointerdown', this.unblockAudio, true);
+    window.addEventListener('keydown', this.unblockAudio, true);
+  };
+
+  /** Plays people's voices again after the browser blocked them; call it from a click. */
+  readonly unblockAudio = (): void => {
+    window.removeEventListener('pointerdown', this.unblockAudio, true);
+    window.removeEventListener('keydown', this.unblockAudio, true);
+    setState({ audioBlocked: false });
+    for (const el of this.audio.values()) if (el.srcObject) void el.play().catch(this.playFailed);
+  };
 
   private applySink(el: HTMLAudioElement): void {
     const sink = media.audioOutputId;
@@ -511,6 +565,8 @@ export class OfficeSession {
 
   leave(): void {
     this.closed = true;
+    window.removeEventListener('pointerdown', this.unblockAudio, true);
+    window.removeEventListener('keydown', this.unblockAudio, true);
     const leaving = [...this.leaveHandlers];
     this.leaveHandlers.clear();
     for (const handler of leaving) guard(handler);
@@ -607,7 +663,8 @@ export async function enterOffice(officeId: string): Promise<void> {
   }
 }
 
-export function leaveOffice(): void {
+/** Ends the office session (on the way to another page; the caller goes there). */
+export function closeOffice(): void {
   current?.leave();
   current = null;
   media.stopAll();
@@ -615,10 +672,12 @@ export function leaveOffice(): void {
     phase: 'landing',
     officeId: null,
     office: null,
+    role: null,
     players: {},
     linked: {},
     streams: {},
     speaking: {},
+    audioBlocked: false,
     chatWith: null,
     focus: false,
     emotes: {},
@@ -629,4 +688,17 @@ export function leaveOffice(): void {
     spotlight: null,
     selfId: null,
   });
+}
+
+/** "Leave office": home, where you stay (it no longer goes on to your default workspace in this tab). */
+export function leaveOffice(): void {
+  closeOffice();
+  goHome();
+}
+
+/** Back to this office's lobby: to sign in, or to come in again as who you are now. */
+export function backToLobby(): void {
+  const { officeId } = getState();
+  closeOffice();
+  if (officeId) setState({ phase: 'lobby', officeId });
 }

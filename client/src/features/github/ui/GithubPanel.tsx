@@ -1,9 +1,10 @@
 import { useMemo, useRef, type MouseEvent, type ReactNode } from 'react';
 import type { GithubBucket, GithubCounts, GithubInbox, GithubItem, GithubStatus } from '../../../../../shared/github';
+import { backToLobby } from '../../../lib/session';
 import { useStore } from '../../../state/store';
 import { CheckAllIcon, CheckIcon, GithubIcon, MarkReadIcon } from '../../../ui/icons';
 import type { GithubScope } from '../api';
-import { connectGithub, markAllRead, markDone, markRead, rejoin } from '../data';
+import { connectGithub, markAllRead, markDone, markRead } from '../data';
 import { reasonText, relativeTime, RUN_STATUS, webUrl } from '../format';
 import { needsYou, useGithub } from '../state';
 import { ItemIcon, SetupHints, SignInToConnect, useTick } from './parts';
@@ -285,7 +286,7 @@ export function GithubPanel() {
           <strong>Rejoin to see your inbox</strong>
         </p>
         <p className="muted small">You signed in after joining this office. Come in again to see your GitHub notifications here.</p>
-        <button className="btn primary" onClick={rejoin}>
+        <button className="btn primary" onClick={backToLobby}>
           Rejoin
         </button>
       </Prompt>

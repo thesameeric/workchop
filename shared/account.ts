@@ -1,6 +1,7 @@
 import { sanitizeAvatar, sanitizeName, sanitizeStatus } from './avatar';
 import { clip } from './text';
 import type { AvatarConfig, Status } from './types';
+import type { MemberRole, OfficeKind } from './workspace';
 
 // Accounts: people who signed in (email and password, Google, Apple, GitHub, or the dev login).
 // Guests have none.
@@ -56,12 +57,14 @@ export interface SignInMethods {
   hasPassword: boolean;
 }
 
-/** A place someone signed in has been to, newest first in GET /api/me/spaces. */
+/** A workspace someone belongs to: in GET /api/me/spaces, most recently visited first, then those not visited yet. */
 export interface Space {
   id: string;
   name: string;
-  role: 'owner' | 'member';
-  lastVisitAt: number;
+  kind: OfficeKind;
+  role: MemberRole;
+  /** Their last visit; null when they haven't been there yet. */
+  lastVisitAt: number | null;
   online: number;
 }
 

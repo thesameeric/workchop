@@ -143,6 +143,44 @@ export const coreMigrations: Migration[] = [
       -- How the person knows a sign-in, when the provider names it (a GitHub login).
       ALTER TABLE auth_identities ADD COLUMN label text;`,
   },
+  {
+    id: 5,
+    name: 'workspaces',
+    sql: `
+      -- The kind is fixed when the office is made. Offices made before workspaces stay open to
+      -- anyone with the address; new ones let in members only, until a guest link is turned on.
+      ALTER TABLE offices
+        ADD COLUMN kind text NOT NULL DEFAULT 'team' CHECK (kind IN ('team', 'support')),
+        ADD COLUMN guest_access text NOT NULL DEFAULT 'open' CHECK (guest_access IN ('off', 'link', 'open')),
+        ADD COLUMN guest_token text;
+      ALTER TABLE offices ALTER COLUMN guest_access SET DEFAULT 'off';
+      -- Owners, admins and members. Where an office has several owners, the earliest keeps it and
+      -- the others become admins.
+      ALTER TABLE memberships DROP CONSTRAINT memberships_role_check;
+      ALTER TABLE memberships ADD CONSTRAINT memberships_role_check CHECK (role IN ('owner', 'admin', 'member'));
+      WITH ranked AS (
+        SELECT user_id, office_id, row_number() OVER (PARTITION BY office_id ORDER BY joined_at, user_id) AS n
+        FROM memberships WHERE role = 'owner'
+      )
+      UPDATE memberships m SET role = 'admin' FROM ranked r WHERE m.user_id = r.user_id AND m.office_id = r.office_id AND r.n > 1;
+      CREATE UNIQUE INDEX memberships_one_owner_idx ON memberships (office_id) WHERE role = 'owner';
+      -- People added to an office haven't been there yet (null) until they first come in.
+      ALTER TABLE memberships ALTER COLUMN last_visit_at DROP NOT NULL, ALTER COLUMN last_visit_at DROP DEFAULT;
+      -- People asked to join by an address no account has verified yet, by a SHA-256 of the emailed token.
+      CREATE TABLE office_invites (
+        id         text PRIMARY KEY,
+        office_id  text NOT NULL REFERENCES offices ON DELETE CASCADE,
+        email      text NOT NULL CHECK (email = lower(email)),
+        role       text NOT NULL CHECK (role IN ('admin', 'member')),
+        invited_by text REFERENCES users ON DELETE SET NULL,
+        token_hash text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        expires_at timestamptz NOT NULL,
+        UNIQUE (office_id, email)
+      );
+      CREATE INDEX office_invites_email_idx ON office_invites (email);
+      CREATE INDEX office_invites_expires_idx ON office_invites (expires_at);`,
+  },
 ];
 
 /** Core migrations followed by each feature's, checked for clashing ids. */

@@ -590,6 +590,9 @@ export function createAuth(deps: AuthDeps) {
     sessions,
     userFromRequest,
     requireUser,
+    startSession,
+    endSessions,
+    hashPassword: emailSignIn.hashPassword,
     failGithubSignIn,
     socketMiddleware,
     async close() {

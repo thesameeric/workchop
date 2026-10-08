@@ -21,6 +21,24 @@ function write(key: string, value: unknown): void {
   }
 }
 
+/** A value kept in this tab only (null when storage is unavailable). */
+function tabRead(key: string): string | null {
+  try {
+    return sessionStorage.getItem(PREFIX + key);
+  } catch {
+    return null;
+  }
+}
+
+function tabWrite(key: string, value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(PREFIX + key);
+    else sessionStorage.setItem(PREFIX + key, value);
+  } catch {
+    // Not kept, then.
+  }
+}
+
 export interface Profile {
   name: string;
   avatar: AvatarConfig;
@@ -56,28 +74,85 @@ export function takeSignUpNext(): string | null {
  * signing in; null clears it.
  */
 export function setPendingConfirmation(token: string | null): void {
-  try {
-    if (token) sessionStorage.setItem(PREFIX + 'confirm-email', token);
-    else sessionStorage.removeItem(PREFIX + 'confirm-email');
-  } catch {
-    // Then the link has to be opened again after signing in.
-  }
+  tabWrite('confirm-email', token || null);
 }
 
 export function pendingConfirmation(): string | null {
-  try {
-    return sessionStorage.getItem(PREFIX + 'confirm-email');
-  } catch {
-    return null;
-  }
+  return tabRead('confirm-email');
+}
+
+/** Owner keys of offices made on this browser before accounts (the server no longer hands out new ones). */
+function owners(): Record<string, string> {
+  const all = read<unknown>('owners');
+  if (!all || typeof all !== 'object') return {};
+  return Object.fromEntries(Object.entries(all).filter((e): e is [string, string] => typeof e[1] === 'string'));
 }
 
 export function getOwnerKey(officeId: string): string | undefined {
-  return read<Record<string, string>>('owners')?.[officeId];
+  return owners()[officeId];
 }
 
-export function setOwnerKey(officeId: string, key: string): void {
-  write('owners', { ...(read<Record<string, string>>('owners') ?? {}), [officeId]: key });
+/** The offices made on this browser, to add to your account (POST /api/offices/claim). */
+export function ownerKeys(): { id: string; ownerKey: string }[] {
+  return Object.entries(owners()).map(([id, ownerKey]) => ({ id, ownerKey }));
+}
+
+export function forgetOwnerKeys(ids: string[]): void {
+  const left = owners();
+  for (const id of ids) delete left[id];
+  write('owners', left);
+}
+
+/** Guest link tokens (`/o/<id>#guest=…`) by office, sent when looking it up and joining. */
+export function getGuestToken(officeId: string): string | undefined {
+  const token = read<Record<string, unknown>>('guest-links')?.[officeId];
+  return typeof token === 'string' ? token : undefined;
+}
+
+export function setGuestToken(officeId: string, token: string): void {
+  write('guest-links', { ...(read<Record<string, unknown>>('guest-links') ?? {}), [officeId]: token });
+}
+
+/** A guest link that no longer works. */
+export function forgetGuestToken(officeId: string): void {
+  const links = { ...(read<Record<string, unknown>>('guest-links') ?? {}) };
+  if (!(officeId in links)) return;
+  delete links[officeId];
+  write('guest-links', links);
+}
+
+/** Workspaces each account came into on this browser (`<accountId>:<officeId>`), most recent last. */
+function entered(): string[] {
+  const list = read<unknown>('entered');
+  return Array.isArray(list) ? list.filter((e): e is string => typeof e === 'string') : [];
+}
+
+/** Whether this account came into this workspace on this browser before (then it skips the lobby). */
+export function enteredBefore(accountId: string, officeId: string): boolean {
+  return entered().includes(`${accountId}:${officeId}`);
+}
+
+export function rememberEntered(accountId: string, officeId: string): void {
+  const key = `${accountId}:${officeId}`;
+  write('entered', [...entered().filter((e) => e !== key), key].slice(-200));
+}
+
+/** You went home in this tab (left an office, or chose Home): it stops sending you to your default workspace. */
+export function chooseHome(): void {
+  tabWrite('home', '1');
+}
+
+export function choseHome(): boolean {
+  return tabRead('home') === '1';
+}
+
+/** An invitation link opened in this tab, kept while signing in (null clears it). */
+export function setPendingInvite(token: string | null): void {
+  tabWrite('invite', token);
+}
+
+export function pendingInvite(): string | null {
+  return tabRead('invite');
 }
 
 export interface RecentOffice {
