@@ -199,6 +199,14 @@ describe('sign-in', () => {
     // Other parts of the profile are kept.
     await jar.fetch(`${base}/api/me`, json({ profile: { status: 'away' } }, 'PATCH'));
     expect((await me(jar))?.profile).toMatchObject({ status: 'away', settings: { theme: 'dark' } });
+    // Settings are merged key by key, so devices saving different ones keep each other's.
+    await jar.fetch(`${base}/api/me`, json({ profile: { settings: { 'weather.unit': 'F' } } }, 'PATCH'));
+    await jar.fetch(`${base}/api/me`, json({ profile: { settings: { theme: 'light' } } }, 'PATCH'));
+    expect((await me(jar))?.profile.settings).toEqual({ theme: 'light', long: 'x'.repeat(200), 'weather.unit': 'F' });
+    const many = Object.fromEntries(Array.from({ length: 48 }, (_, i) => [`k${i}`, i]));
+    const tooMany = await jar.fetch(`${base}/api/me`, json({ profile: { settings: many } }, 'PATCH'));
+    expect(tooMany.status).toBe(400);
+    expect(Object.keys((await me(jar))!.profile.settings!)).toHaveLength(3);
     expect((await jar.fetch(`${base}/api/me`, json({ name: ' ' }, 'PATCH'))).status).toBe(400);
     expect((await fetch(`${base}/api/me`, json({ name: 'x' }, 'PATCH'))).status).toBe(401);
 

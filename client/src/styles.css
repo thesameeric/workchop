@@ -486,6 +486,11 @@ kbd {
 
 .account {
   position: relative;
+  flex: none;
+}
+
+.account > .btn {
+  white-space: nowrap;
 }
 
 .account-btn {
@@ -578,8 +583,14 @@ kbd {
   font-weight: 500;
 }
 
-.account-menu button[role='menuitem']:hover {
+.account-menu button[role='menuitem']:hover,
+.account-menu button[role='menuitem']:focus-visible {
   background: var(--primary-soft);
+}
+
+.account-menu button[role='menuitem']:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .sign-in-menu {
@@ -646,7 +657,7 @@ kbd {
 }
 
 .provider-btn:focus-visible {
-  outline: 3px solid var(--primary-soft);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
@@ -682,6 +693,7 @@ kbd {
 
 /* Your spaces */
 .spaces h1 {
+  overflow-wrap: anywhere;
   font-size: clamp(1.8rem, 3.4vw, 2.6rem);
   line-height: 1.1;
   letter-spacing: -0.03em;
@@ -857,6 +869,11 @@ kbd {
   align-items: center;
   gap: 16px;
   min-width: 0;
+}
+
+.lobby-wait {
+  text-align: center;
+  padding: 48px 24px;
 }
 
 .lobby-body {
@@ -1500,7 +1517,8 @@ kbd {
   border-color: var(--glass-line);
 }
 
-.dock-menu .account-menu button[role='menuitem']:hover {
+.dock-menu .account-menu button[role='menuitem']:hover,
+.dock-menu .account-menu button[role='menuitem']:focus-visible {
   background: var(--glass-raised);
 }
 
@@ -2337,9 +2355,20 @@ kbd {
     min-height: 64px;
   }
 
-  .account-name,
-  .lobby-office {
+  .account-name {
     display: none;
+  }
+
+  .lobby-header,
+  .lobby-header-end {
+    gap: 10px;
+  }
+
+  .lobby-office > * {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .account-btn {

@@ -118,7 +118,14 @@ function ConnectionBanner() {
 /** Global keyboard shortcuts while inside an office. */
 function useShortcuts() {
   useEffect(() => {
+    // Enter opens the chat, but presses a button reached with the keyboard or in a menu (a clicked
+    // button keeps the focus too, and Enter still means chat there).
+    let byKey = false;
+    let keyFocused: EventTarget | null = null;
+    const onPointer = () => (byKey = false);
+    const onFocus = (e: FocusEvent) => (keyFocused = byKey ? e.target : null);
     const onKey = (e: KeyboardEvent) => {
+      byKey = true;
       if (isTyping() || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       const { modal, mode } = useStore.getState();
       if (modal !== 'none') return;
@@ -127,6 +134,8 @@ function useShortcuts() {
       else if (e.code === 'KeyV') void media.setCam(!media.camOn);
       else if (e.code === 'KeyB') setPanel('build');
       else if (e.code === 'Enter') {
+        const target = e.target as Element;
+        if (target.matches?.('button, a') && (target === keyFocused || target.closest('[role="menu"]'))) return;
         e.preventDefault();
         setState({ panel: 'chat', unread: 0, mode: 'play' });
       } else if (e.code === 'Escape' && mode === 'play') {
@@ -136,7 +145,13 @@ function useShortcuts() {
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointer, true);
+    window.addEventListener('focusin', onFocus);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointer, true);
+      window.removeEventListener('focusin', onFocus);
+    };
   }, []);
 }
 

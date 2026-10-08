@@ -14,7 +14,7 @@ import type {
 import type { UploadedFile } from '../../../shared/uploads';
 import { getState, initialBuild, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
-import { applyAccount, refreshAccount, saveCharacter } from './account';
+import { accountUpdated, refreshAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
 import { serverNow, syncClock } from './clock';
 import { LoungeRadio } from './radio';
@@ -52,7 +52,7 @@ export class OfficeSession {
   /** The current connection's id and upload key, while joined. */
   private joined: { selfId: string; uploadKey: string } | null = null;
   private joinedHandlers = new Set<(rejoin: boolean) => void>();
-  private leaveHandlers: (() => void)[] = [];
+  private leaveHandlers = new Set<() => void>();
   private uploadMaxBytes: number | undefined;
   private closed = false;
   readonly radio = new LoungeRadio((itemId, durations) => this.music({ t: 'track:durations', itemId, durations }));
@@ -61,6 +61,8 @@ export class OfficeSession {
 
   constructor(readonly officeId: string) {
     this.socket = io({ autoConnect: false });
+    // The app's own handlers come first, so features' handlers for the same event see its effect.
+    this.wireSocket();
     this.audioRoot = document.createElement('div');
     this.audioRoot.hidden = true;
     document.body.appendChild(this.audioRoot);
@@ -78,7 +80,6 @@ export class OfficeSession {
     // On Cloudflare Containers the server stops some minutes after its last ordinary request, and
     // realtime traffic doesn't count: check in now and then so it keeps running while people are here.
     this.timers.push(setInterval(() => void fetch('/api/health', { cache: 'no-store' }).catch(() => {}), 4 * 60_000));
-    this.wireSocket();
     this.unsubs.push(media.subscribe(() => this.onMediaChange()));
     this.onMediaChange();
     this.timers.push(setInterval(() => this.updateVolumes(), 120));
@@ -168,17 +169,19 @@ export class OfficeSession {
 
   /**
    * Runs `handler` after every successful join: the first one, and each rejoin after a reconnect
-   * (the server then has a fresh player for you, so resend anything it should know). Returns an
-   * unsubscribe function.
+   * (the server then has a fresh player for you, so resend anything it should know). Added while
+   * already in the office, it also runs right away (with `false`). Returns an unsubscribe function.
    */
   onJoined(handler: (rejoin: boolean) => void): () => void {
     this.joinedHandlers.add(handler);
+    if (this.joined) guard(() => handler(false));
     return () => void this.joinedHandlers.delete(handler);
   }
 
-  /** Runs `handler` when you leave the office (before the socket closes). */
-  onLeave(handler: () => void): void {
-    this.leaveHandlers.push(handler);
+  /** Runs `handler` when you leave the office (before the socket closes). Returns an unsubscribe function. */
+  onLeave(handler: () => void): () => void {
+    this.leaveHandlers.add(handler);
+    return () => void this.leaveHandlers.delete(handler);
   }
 
   /**
@@ -327,7 +330,7 @@ export class OfficeSession {
       if (reason) toast(reason, 'error');
     });
     s.on('notice', (text) => toast(text, 'error'));
-    s.on('account:updated', (user) => applyAccount(user));
+    s.on('account:updated', (user) => accountUpdated(user));
     s.on('spotify:session', (itemId, session) => {
       setState((st) => {
         const spotifySessions = { ...st.spotifySessions };
@@ -503,7 +506,9 @@ export class OfficeSession {
 
   leave(): void {
     this.closed = true;
-    for (const handler of this.leaveHandlers.splice(0)) guard(handler);
+    const leaving = [...this.leaveHandlers];
+    this.leaveHandlers.clear();
+    for (const handler of leaving) guard(handler);
     for (const t of this.timers) clearInterval(t);
     clearTimeout(this.iceTimer);
     this.radio.stop();
@@ -535,26 +540,44 @@ export function getSession(): OfficeSession | null {
   return current;
 }
 
-/** What a feature does with each office session; it may return a cleanup, run when you leave. */
+/**
+ * What a feature does with each office session. It may return a cleanup, which runs when you leave,
+ * or on the spot when the hook is replaced (a hot reload) or unregistered while you're in an office.
+ */
 export type SessionHook = (session: OfficeSession) => void | (() => void);
-const sessionHooks = new Set<SessionHook>();
+const sessionHooks = new Map<string, SessionHook>();
+/** The cleanups of the hooks that ran for the current session, by hook id. */
+const cleanups = new Map<string, () => void>();
 
-function runHook(session: OfficeSession, hook: SessionHook): void {
+function runHook(session: OfficeSession, id: string, hook: SessionHook): void {
   guard(() => {
     const cleanup = hook(session);
-    if (typeof cleanup === 'function') session.onLeave(cleanup);
+    if (typeof cleanup === 'function') cleanups.set(id, cleanup);
   });
+}
+
+function stopHook(id: string): void {
+  const cleanup = cleanups.get(id);
+  cleanups.delete(id);
+  if (cleanup) guard(cleanup);
 }
 
 /**
  * Runs `hook` for every office session as it is created: its socket exists but isn't connected yet,
  * so handlers added with `session.socket.on(…)` see everything from the join on. Use
- * `session.onJoined` to act once in the office. Returns a function that unregisters the hook.
+ * `session.onJoined` to act once in the office. Registering an `id` again replaces that hook (the
+ * old one's cleanup runs first, so undo there what it added, e.g. with `socket.off`). Returns a
+ * function that unregisters the hook.
  */
-export function onSession(hook: SessionHook): () => void {
-  sessionHooks.add(hook);
-  if (current) runHook(current, hook);
-  return () => void sessionHooks.delete(hook);
+export function onSession(id: string, hook: SessionHook): () => void {
+  stopHook(id);
+  sessionHooks.set(id, hook);
+  if (current) runHook(current, id, hook);
+  return () => {
+    if (sessionHooks.get(id) !== hook) return;
+    sessionHooks.delete(id);
+    stopHook(id);
+  };
 }
 
 // For automated tests and debugging in the browser console.
@@ -567,13 +590,14 @@ export function onSession(hook: SessionHook): () => void {
 
 export async function enterOffice(officeId: string): Promise<void> {
   current?.leave();
-  current = new OfficeSession(officeId);
-  for (const hook of sessionHooks) runHook(current, hook);
+  const session = (current = new OfficeSession(officeId));
+  session.onLeave(() => [...cleanups.keys()].forEach(stopHook));
+  for (const [id, hook] of sessionHooks) runHook(session, id, hook);
   try {
-    await current.join();
+    await session.join();
   } catch (err) {
-    current.leave();
-    current = null;
+    session.leave();
+    if (current === session) current = null;
     throw err;
   }
 }

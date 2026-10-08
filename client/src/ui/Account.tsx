@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { AccountUser } from '../../../shared/account';
 import { signInUrl, signInWithDev, signOut } from '../lib/account';
 import { colorFor, initials } from '../lib/color';
@@ -7,19 +7,29 @@ import { ChevronDownIcon, SignInIcon, SignOutIcon, UserEditIcon } from './icons'
 
 /**
  * Open/close state for a menu that closes on Escape or a click outside `ref` (the button and menu)
- * and `menuRef` (the menu, when it is rendered elsewhere, e.g. in a portal).
+ * and `menuRef` (the menu, when it is rendered elsewhere, e.g. in a portal). `close(true)` also
+ * puts the focus back on `buttonRef`, as Escape does.
  */
 export function usePopover() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const close = (refocus = false) => {
+    setOpen(false);
+    if (refocus) buttonRef.current?.focus();
+  };
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node;
       if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
     window.addEventListener('pointerdown', onDown);
     window.addEventListener('keydown', onKey);
     return () => {
@@ -27,7 +37,35 @@ export function usePopover() {
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
-  return { open, setOpen, ref, menuRef };
+  return { open, setOpen, close, ref, menuRef, buttonRef };
+}
+
+/**
+ * Keyboard use of a menu: arrows, Home and End move between its items, Escape and Tab close it
+ * (Escape back to its button). Keys used here don't reach the office's shortcuts or movement.
+ */
+function menuKeys(e: KeyboardEvent<HTMLElement>, close: (refocus?: boolean) => void): void {
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  let next: number;
+  if (e.key === 'ArrowDown') next = at < 0 ? 0 : (at + 1) % items.length;
+  else if (e.key === 'ArrowUp') next = at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = items.length - 1;
+  else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    close(true);
+    return;
+  } else if (e.key === 'Tab') {
+    // Back to the button: Tab then goes on from there, Shift+Tab stays on it.
+    if (e.shiftKey) e.preventDefault();
+    close(true);
+    return;
+  } else return;
+  e.preventDefault();
+  e.stopPropagation();
+  items[next]?.focus();
 }
 
 /** The account's picture (Google's), or its initials. */
@@ -43,15 +81,24 @@ export function UserAvatar({ user, size = 32 }: { user: AccountUser; size?: numb
   );
 }
 
-/** Who you're signed in as, and "Sign out" (plus "Edit character" inside an office). */
-export function AccountMenu({ user, onClose, onEditCharacter }: { user: AccountUser; onClose: () => void; onEditCharacter?: () => void }) {
+/**
+ * Who you're signed in as, and "Sign out" (plus "Edit character" inside an office). It takes the
+ * focus when it opens, so it can be used from the keyboard.
+ */
+export function AccountMenu({ user, onClose, onEditCharacter }: { user: AccountUser; onClose: (refocus?: boolean) => void; onEditCharacter?: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus(), []);
   return (
-    <div className="account-menu" role="menu" aria-label="Account">
+    <div className="account-menu" role="menu" aria-label="Account" ref={ref} onKeyDown={(e) => menuKeys(e, onClose)}>
       <div className="account-head">
         <UserAvatar user={user} size={40} />
         <div className="account-who">
-          <strong>{user.name}</strong>
-          {user.email && <span className="muted small">{user.email}</span>}
+          <strong title={user.name}>{user.name}</strong>
+          {user.email && (
+            <span className="muted small" title={user.email}>
+              {user.email}
+            </span>
+          )}
         </div>
       </div>
       {onEditCharacter && (
@@ -83,16 +130,16 @@ export function AccountMenu({ user, onClose, onEditCharacter }: { user: AccountU
 /** The signed-in person's button for page headers (nothing for guests). */
 export function AccountButton() {
   const account = useStore((s) => s.account);
-  const { open, setOpen, ref } = usePopover();
+  const { open, setOpen, close, ref, buttonRef } = usePopover();
   if (!account) return null;
   return (
     <div className="account" ref={ref}>
-      <button className="account-btn" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title="Your account">
+      <button className="account-btn" ref={buttonRef} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title="Your account">
         <UserAvatar user={account} size={30} />
         <span className="account-name">{account.name}</span>
         <ChevronDownIcon size={16} />
       </button>
-      {open && <AccountMenu user={account} onClose={() => setOpen(false)} />}
+      {open && <AccountMenu user={account} onClose={close} />}
     </div>
   );
 }
@@ -187,11 +234,11 @@ export function SignInOptions() {
 /** "Sign in" for guests in a page header, opening the sign-in options (nothing when sign-in is off). */
 export function SignInButton() {
   const providers = useStore((s) => s.providers);
-  const { open, setOpen, ref } = usePopover();
+  const { open, setOpen, ref, buttonRef } = usePopover();
   if (!providers.google && !providers.apple && !providers.dev) return null;
   return (
     <div className="account" ref={ref}>
-      <button className="btn small" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button className="btn small" ref={buttonRef} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <SignInIcon size={16} />
         Sign in
       </button>

@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import { parseCookie, stringifySetCookie } from 'cookie';
 import express from 'express';
 import * as client from 'openid-client';
-import { sanitizeProfile, sanitizeUserName, type AccountUser } from '../../shared/account';
+import { MAX_SETTINGS, sanitizeProfile, sanitizeUserName, type AccountUser } from '../../shared/account';
 import { clip } from '../../shared/text';
-import type { Accounts } from '../accounts';
+import { TooManySettings, type Accounts } from '../accounts';
 import type { Db } from '../db';
 import type { ClientSocket } from '../realtime';
 import { APPLE_ISSUER, appleProvider, checkPrivateKey, GOOGLE_ISSUER, googleProvider, parsePrivateKey, type AppleConfig, type GoogleConfig, type OidcProvider } from './oidc';
@@ -333,7 +333,14 @@ export function createAuth(deps: AuthDeps) {
       }
     }
     const profile = 'profile' in body ? sanitizeProfile(body.profile) : undefined;
-    const updated = await accounts.update(user.id, { name, profile });
+    let updated: AccountUser | null;
+    try {
+      updated = await accounts.update(user.id, { name, profile });
+    } catch (err) {
+      if (!(err instanceof TooManySettings)) throw err;
+      res.status(400).json({ error: `An account can keep at most ${MAX_SETTINGS} settings.` });
+      return;
+    }
     if (updated) deps.onUserUpdated?.(updated);
     res.json({ user: updated });
   });

@@ -7,7 +7,7 @@ import { AwsClient } from 'aws4fetch';
 import express from 'express';
 import { isValidId } from '../shared/office';
 import { clip } from '../shared/text';
-import type { UploadedFile } from '../shared/uploads';
+import { tooLarge, type UploadedFile } from '../shared/uploads';
 import type { Db, Tx } from './db';
 import { windowLimiter } from './limits';
 
@@ -241,7 +241,6 @@ export function createUploads(deps: UploadDeps) {
   const store = stores[kind];
   if (!store) throw new Error(S3_MISSING);
   const parseBody = express.raw({ type: () => true, limit: options.maxBytes });
-  const maxMb = Math.round((options.maxBytes / MB) * 10) / 10;
   const quotaFull = () => new UploadError(413, `This office has used up its ${Math.round(options.quotaBytes / MB)} MB of file storage.`);
   const mayStart = windowLimiter(PER_VISITOR_FILES, PER_VISITOR_WINDOW);
   const inProgress = new Map<string, number>();
@@ -252,7 +251,7 @@ export function createUploads(deps: UploadDeps) {
       parseBody(req, res, (err?: unknown) => {
         if (err) {
           const status = (err as { status?: number }).status;
-          reject(new UploadError(status === 413 ? 413 : 400, status === 413 ? `Files can be at most ${maxMb} MB.` : 'Could not read the file.'));
+          reject(new UploadError(status === 413 ? 413 : 400, status === 413 ? tooLarge(options.maxBytes) : 'Could not read the file.'));
         } else resolve(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
       });
     });
@@ -277,7 +276,7 @@ export function createUploads(deps: UploadDeps) {
       if (!who) throw new UploadError(403, 'Join the office before uploading files.');
       // Refuse big files before reading them.
       const declared = Number(req.get('content-length'));
-      if (declared > options.maxBytes) throw new UploadError(413, `Files can be at most ${maxMb} MB.`);
+      if (declared > options.maxBytes) throw new UploadError(413, tooLarge(options.maxBytes));
       const ip = deps.clientIp(req);
       // Without a Content-Length (a chunked body), the file may be as big as allowed.
       const known = Number.isSafeInteger(declared) && declared >= 0;

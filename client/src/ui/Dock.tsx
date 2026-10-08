@@ -9,7 +9,7 @@ import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
 import { CamIcon, CamOffIcon, HammerIcon, LeaveIcon, LinkIcon, MicIcon, MicOffIcon, ScreenIcon, SettingsIcon, SmileIcon } from './icons';
 import { AccountMenu, usePopover } from './Account';
 import { useMediaState } from './media';
-import { usePanels, type PanelDef } from './panels';
+import { panelKey, usePanels, type PanelDef } from './panels';
 
 export async function copyInvite(): Promise<void> {
   const id = useStore.getState().officeId;
@@ -59,7 +59,7 @@ function EmoteMenu({ onClose }: { onClose: () => void }) {
 function MeButton() {
   const me = useStore((s) => s.me);
   const account = useStore((s) => s.account);
-  const { open, setOpen, ref, menuRef } = usePopover();
+  const { open, setOpen, close, ref, menuRef, buttonRef } = usePopover();
   const [at, setAt] = useState({ left: 0, bottom: 0 });
   const editCharacter = () => setState({ modal: 'avatar' });
   const toggle = () => {
@@ -72,6 +72,7 @@ function MeButton() {
     <div ref={ref}>
       <button
         className="me-btn"
+        ref={buttonRef}
         onClick={() => (account ? toggle() : editCharacter())}
         title={account ? 'Your account' : 'Edit your character'}
         aria-haspopup={account ? 'menu' : undefined}
@@ -87,7 +88,7 @@ function MeButton() {
         account &&
         createPortal(
           <div className="dock-menu" ref={menuRef} style={at}>
-            <AccountMenu user={account} onClose={() => setOpen(false)} onEditCharacter={editCharacter} />
+            <AccountMenu user={account} onClose={close} onEditCharacter={editCharacter} />
           </div>,
           document.body,
         )}
@@ -151,7 +152,7 @@ export function Dock() {
         {panels
           .filter((p) => p.dock !== false)
           .map((p) => (
-            <PanelButton key={p.id} panel={p} open={panel === p.id} />
+            <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
           ))}
         <button className="dock-btn hide-mobile" onClick={copyInvite} title="Copy invite link">
           <LinkIcon />

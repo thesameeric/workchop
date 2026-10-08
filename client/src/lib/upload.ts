@@ -1,4 +1,4 @@
-import type { UploadedFile } from '../../../shared/uploads';
+import { tooLarge, type UploadedFile } from '../../../shared/uploads';
 
 export interface UploadOptions {
   /** The name to store it under (default: the File's own name). */
@@ -9,14 +9,9 @@ export interface UploadOptions {
   signal?: AbortSignal;
 }
 
-const MB = 1024 * 1024;
 /** Busy answers (429/503) are retried this many times when the server asks for a short wait. */
 const ATTEMPTS = 3;
 const MAX_RETRY_WAIT_S = 10;
-
-export function tooLarge(maxBytes: number): string {
-  return `File too large (max ${Math.round((maxBytes / MB) * 10) / 10} MB)`;
-}
 
 const aborted = () => new DOMException('The upload was cancelled.', 'AbortError');
 
@@ -77,8 +72,10 @@ export async function postFile(url: string, file: Blob, headers: Record<string, 
       await wait(res.retryAfter * 1000, opts.signal);
       continue;
     }
-    // The server's reason, e.g. for a 413 when the office's storage is full (too big is caught above).
+    // The server's reason, e.g. for a 413 when the office's storage is full. A 413 without one comes
+    // from a proxy in front of it.
     const error = (res.body as { error?: unknown } | null)?.error;
-    throw new Error(typeof error === 'string' && error ? error : `Upload failed (${res.status})`);
+    if (typeof error === 'string' && error) throw new Error(error);
+    throw new Error(res.status === 413 ? tooLarge(maxBytes) : `Upload failed (${res.status})`);
   }
 }

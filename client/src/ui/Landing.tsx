@@ -77,7 +77,7 @@ function YourSpaces({ account }: { account: AccountUser }) {
 
   return (
     <section className="spaces">
-      <h1>Welcome back, {account.name.split(' ')[0]}.</h1>
+      <h1>Welcome, {account.name.split(' ')[0]}.</h1>
       <h2>Your spaces</h2>
       {spaces === null && !failed && <p className="muted">Loading…</p>}
       {spaces === null && failed && (
@@ -145,6 +145,7 @@ function Intro() {
 }
 
 export function Landing() {
+  const ready = useStore((s) => s.accountReady);
   const account = useStore((s) => s.account);
   const [name, setName] = useState('');
   const [template, setTemplate] = useState<TemplateId>('startup');
@@ -184,7 +185,8 @@ export function Landing() {
         <AccountButton />
       </header>
       <main className="landing-main">
-        {account ? <YourSpaces account={account} /> : <Intro />}
+        {/* Until we know who you are, neither the guest intro nor your spaces (one would flash). */}
+        {!ready ? <div aria-busy="true" /> : account ? <YourSpaces account={account} /> : <Intro />}
         <section className="landing-cards">
           <form className="card" onSubmit={create}>
             <h2>Create an office</h2>
@@ -216,7 +218,7 @@ export function Landing() {
               <input value={joinText} onChange={(e) => setJoinText(e.target.value)} placeholder="https://…/o/abc123" />
             </label>
             <button className="btn wide">Join</button>
-            {!account && recent.length > 0 && (
+            {ready && !account && recent.length > 0 && (
               <div className="recent">
                 <span className="muted">Recent</span>
                 {recent.map((r) => (

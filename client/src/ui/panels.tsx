@@ -35,6 +35,8 @@ const panels = createRegistry<PanelDef>();
 export const registerPanel = panels.register;
 export const getPanel = panels.get;
 export const usePanels = panels.useList;
+/** The React key for a panel's dock button (it changes when the panel is registered again). */
+export const panelKey = panels.keyOf;
 
 registerPanel({
   id: 'chat',
