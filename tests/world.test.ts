@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { appInfo } from '../client/src/features/world/screen';
+import { HUGEICONS } from '../client/src/ui/hugeicons';
+import { appInfo as appDef, HEADS_DOWN, OTHER_APP } from '../shared/apps';
 import { CATALOG_LIST, getEntry } from '../shared/catalog';
 import { applyOp, sanitizeItem, sanitizeOffice } from '../shared/office';
 import { PLANTS, plantSpecies } from '../shared/plants';
@@ -85,6 +88,18 @@ describe('desk monitors', () => {
     for (const c of deskChairs) expect(pairs.has(c.id)).toBe(true);
     // Meeting room chairs face a table, not a desk.
     expect(o.items.filter((i) => i.type === 'chair' && i.x < 10).some((c) => pairs.has(c.id))).toBe(false);
+  });
+
+  it("show someone's app the way the presence feature names it", () => {
+    const figma = appInfo('figma')!;
+    expect(figma).toMatchObject({ label: 'Figma', color: appDef('figma').color });
+    expect(figma.glyph).toBe(String.fromCodePoint(HUGEICONS.figma));
+    expect(figma.doing('Ana')).toBe('Ana is in Figma');
+    expect(appInfo(HEADS_DOWN)!.doing('Ana')).toBe('Ana is heads-down');
+    expect(appInfo(OTHER_APP)!.doing('Ana')).toBe('Ana is working');
+    // Unknown apps show as "Working"; no app (or not an id) is the wallpaper.
+    expect(appInfo('made-up')!.label).toBe('Working');
+    for (const none of [null, undefined, '', 42, { id: 'figma' }]) expect(appInfo(none)).toBeNull();
   });
 });
 
