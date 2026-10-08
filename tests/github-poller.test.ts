@@ -436,8 +436,9 @@ describe('the poller', () => {
 
   it('marks read only what the last poll listed', async () => {
     const u = await connected();
-    const a = mock.addThread(u.ghId, { title: 'A' });
+    // Before A is stamped: it is what the poll lists newest, so marked read up to its time.
     const before = now();
+    const a = mock.addThread(u.ghId, { title: 'A' });
     await u.start();
     const after = now();
     u.take();
