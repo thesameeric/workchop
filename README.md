@@ -20,9 +20,15 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 **The office**
 - Two starting templates: a furnished startup office with desk pods, a glass meeting room, a lounge, a kitchen and ping pong, or a blank floor.
-- **Build mode** (hammer button or `B`): 32 pieces of furniture and structure in 6 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
+- **Build mode** (hammer button or `B`): 45 pieces of furniture, structure and plants in 7 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
 - Office settings: name, floor size, floor style and colour, wall colour, and spawn point. The owner can lock building to themselves.
 - Every edit is synced live to everyone in the office and saved on the server.
+
+**Little things in the world**
+- **Desk monitors** are off until someone sits at the desk: then the screen wakes up (a glow and a logo) and shows the app they're working in, when they share it, or a calm wallpaper with their name and the time. Everyone sees it, and it goes dark a second after they get up.
+- **Lights:** click a floor lamp or desk lamp to switch it on or off for everyone. A **light switch** (Build → Structure; put it against a wall) works the ceiling lights of the private area in front of it, or of the open office: switched off, that area goes dark for everyone, while its lamps and lit monitors keep glowing. Walk up to one and press `E`, or click it.
+- **Plants:** 13 species (Build → Plants), from a monstera and a bird of paradise to a bonsai and a barrel cactus. Small ones stand on desks, tables and shelves. Click one to see what it is: where it comes from, how much light and water it needs, whether it's safe for pets (per the ASPCA where it lists the plant), and a fun fact.
+- **Your desk:** signed-in people click a free desk and choose *Make this my desk* (one per office; claiming another moves you). Your name goes on a name plate. Anyone, guests included, can click your desk and leave you a sticky note (up to 500 characters, in four colours). The notes stack up on the desk for everyone to see, but only you read them: you get a toast when one arrives, or a reminder when you come in, and *My desk* in the dock (in its More menu on phones) lists them to mark as read or throw away. Whoever wrote a note can take it back. Owners and people who can edit the office can free a desk.
 
 **GitHub notifications**
 - People who sign in can connect their GitHub account (optional, needs a GitHub OAuth App, see [GitHub](#github)). The GitHub panel sorts their unread notifications into Mentions, Reviews, Actions and Activity, with a badge for unread mentions, review requests and failed runs. Click one to open it on GitHub. Marking items read or done in the panel does the same on GitHub.
@@ -63,7 +69,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 | Key | Action |
 | --- | --- |
 | `W` `A` `S` `D` / arrows | Move (`Shift` to run) |
-| `E` | Sit / stand |
+| `E` | Sit / stand, or switch the lights or lamp you're next to |
 | `1`–`9`, `0` | Reactions |
 | `M` / `V` | Toggle microphone / camera |
 | `H` | Noise-cancelling headphones (focus mode) |
@@ -196,6 +202,8 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Uploaded files | An S3/R2 bucket when `S3_*` is set, otherwise the database with Postgres, or `DATA_DIR/uploads` with PGlite (`UPLOADS_STORAGE` picks one) |
 | Names and characters of guests | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
+| Lamps and light switches (on or off), who has claimed which desk | With the office (part of each item) |
+| Notes left on desks: text, colour, author, when, read or not | The database (`desk_notes`), until the desk's owner or the author throws them away. Each owner keeps at most 50 per office; the oldest read ones make room |
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
 | Chat: channels, messages, threads, reactions, mentions, who has read what | The database (attached files with the uploads). Kept until deleted, or for `CHAT_RETENTION_DAYS`. Nearby messages and direct messages with guests are never stored |
 | Headphones (focus mode) | In memory only, while you're in the office |
@@ -411,10 +419,11 @@ client/   React + react-three-fiber app (Vite)
   src/features/  Client features, loaded automatically (see Development)
     chat/      Chat panel: channels, direct messages, threads, mentions, reactions, files
     audio/     Headphones (focus mode) and shoulder taps, reaction particles and confetti
-    presence/  Current app: status picker, app chips, desk labels, desktop helper settings
+    presence/  Current app: status picker, app chips, desktop helper settings
     coins/     Wallet panel, tips and their celebrations
     weather/   Local weather: settings, top-bar chip, sky, light and weather effects
     github/    GitHub panel, its settings and live notifications
+    world/     Desk monitors, lights, plant cards, desk claims and notes
 server/   Express + Socket.IO
   realtime.ts  Presence, movement, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   turn.ts      Short-lived Cloudflare TURN credentials
@@ -433,8 +442,10 @@ server/   Express + Socket.IO
   features/coins/  Wallets, the coin ledger, daily and presence coins, tips (tables wallets, coin_*)
   features/weather/  Open-Meteo proxy with a cache per ~11 km cell, location from proxy headers
   features/github/  Connecting GitHub (an OAuth App), encrypted tokens, the notifications poller
+  features/world.ts  Lamps and light switches, desk claims and desk notes (table desk_notes)
 shared/   Code used by both sides: types, furniture catalog, avatar options,
-          office validation and edits, collision, pathfinding and proximity rules
+          office validation and edits, collision, pathfinding and proximity rules,
+          world interactions (world.ts) and what each plant is (plants.ts)
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers and passes on visitors'
              approximate location (wrangler.jsonc, worker.ts, geo.ts)
 helper/   The optional desktop helper for the current-app indicator (workchop-presence.cjs)
@@ -464,15 +475,16 @@ Tests use an in-memory PGlite. They run against real Postgres instead when `TEST
 
 **Adding a client feature:** create `client/src/features/<name>/index.ts` (or `.tsx`); every such file is loaded at startup, so nothing else needs editing. From there:
 
-- `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?, badgeTone?, shortcut? })` from `ui/panels.tsx` adds a side panel and its dock button (chat is 10, music 20, people 30, wallet 35, GitHub 40; `setPanel(id)` toggles it). With `inMore`, the button goes in the dock's More menu on phone-sized screens, where the dock only has room for a few; an alert badge there shows on the More button too.
+- `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?, badgeTone?, shortcut? })` from `ui/panels.tsx` adds a side panel and its dock button (chat is 10, music 20, people 30, wallet 35, My desk 40, GitHub 45; `setPanel(id)` toggles it). With `inMore`, the button goes in the dock's More menu on phone-sized screens, where the dock only has room for a few; an alert badge there shows on the More button too.
 - `registerSettingsSection({ id, title, icon, order, Component })` from `ui/settings.tsx` adds a section to Settings (Appearance is 10, Audio & video 20).
 - `registerTopBarItem({ id, order, Component })` from `ui/topbar.ts` adds something to the top bar, after the music that's playing (weather is 10). `Component` renders null when there's nothing to show.
 - `registerPersonDetail({ id, order, Component })` from `ui/PeoplePanel.tsx` adds a line under other people's names in the People panel (weather is 10). `Component` gets `{ player }` and renders null when there's nothing to show for them.
 - `registerPersonAction({ id, order, Component })` from `ui/personActions.ts` adds a button next to other people in the People panel, after "Go to" and "Message" (coins' "Send coins" is 10). `Component` gets `{ player }` and renders null when it doesn't apply to them.
-- `registerSceneLayer({ id, order, Component })` from `world/layers.ts` adds a component to the 3D office, rendered inside the Canvas after the office (weather is 10). Each layer has its own `Suspense` and error boundary, so it can be `lazy`, and one that fails doesn't take the office down. To change the sky, fog, light, wind (plants sway with it) or how the ground looks, write to `sceneLighting` (same file) from `useFrame` with priority `-1`, so before the office's own components read it each frame. Call `resetSceneLighting()` when your layer unmounts, or the office keeps your sky and light.
+- `registerSceneLayer({ id, order, Component })` from `world/layers.ts` adds a component to the 3D office, rendered inside the Canvas after the office (weather is 10; the world feature's monitors, darkened areas, lamp lights and item cards 20–50). Each layer has its own `Suspense` and error boundary, so it can be `lazy`, and one that fails doesn't take the office down. To change the sky, fog, light, wind (plants sway with it) or how the ground looks, write to `sceneLighting` (same file) from `useFrame` with priority `-1`, so before the office's own components read it each frame. Call `resetSceneLighting()` when your layer unmounts, or the office keeps your sky and light.
 - `onSession(id, (session) => cleanup)` from `lib/session.ts` runs for every office visit, after the socket is created and before it connects: add handlers with `session.socket.on(…)` (typed, including your augmented events; they run after the app's own), act after joining with `session.onJoined((rejoin) => …)` (rejoins follow reconnects), and read `session.officeId` and `session.selfId()`. The function you return runs when the person leaves, and also when the hook is registered again under the same `id` (a hot reload) or unregistered mid-visit, so undo there what the hook added (`socket.off`, the function `onJoined` returns). `session.upload(file, { name, onProgress, signal })` uploads a file into the office and resolves to `{ id, url, name, contentType, size }`, or throws an Error whose message can be shown ("File too large (max 10 MB)", the server's reason…).
 - `toast(text, { kind, icon, action: { label, run } })` from `state/store.ts` shows a message, optionally with an icon and a button.
 - For signed-in people, `getState().account` is their account and `saveAccountSettings({ key: value })` from `lib/account.ts` saves small preferences with it, merged key by key with the saved ones (at most 50 keys per account, so prefix yours, e.g. `weather.unit`; guests have none: show a "Sign in to …" hint instead).
+- The 3D world has hooks too, in `world/extensions.ts`: `registerItemModel(type, Component)` for new item types, `registerItemDecor({ id, types, Component })` for extra 3D parts on items (other scene content is a scene layer, above), `registerItemInteraction(types, { onClick, onHover })` for what clicking an item does, and `registerNearbyAction(id, find)` for what `E` does near something. Keep three.js out of your feature's `index.ts` (it loads with the landing page): put the 3D code in a module you register with `registerWorldModule(() => import('./scene'))`, which loads with the scene. `registerOverlay({ id, order, Component })` from `ui/overlays.tsx` shows something over the office, such as a card pinned next to an item.
 - Item types can keep their own data: give the catalog entry (`shared/catalog.ts`) a `sanitizeData(raw)`, and change the data through your feature's own socket events. Build edits never change it: a moved item keeps its data, a new or copied one starts from `sanitizeData(undefined)`.
 
 Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicons/`. The app ships only the glyphs it uses: to add one, put its name (from `icons.css`) in `client/src/ui/icon-names.json`, export a component for it in `client/src/ui/icons.tsx` and run `npm run icons`. That regenerates `client/src/ui/hugeicons.ts` and the cut-down font `client/src/assets/hgi-subset.woff2`, and needs fontTools (`pip install fonttools brotli`).

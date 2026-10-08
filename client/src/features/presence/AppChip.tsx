@@ -14,14 +14,14 @@ export function AppIcon({ app, size = 14 }: { app: string; size?: number }) {
   );
 }
 
-export type ChipVariant = 'tag' | 'list' | 'tile' | 'screen';
+export type ChipVariant = 'tag' | 'list' | 'tile';
 
 /** "Figma", with its icon and colour: the app someone is working in. */
 export function AppChip({ app, variant = 'list' }: { app: string; variant?: ChipVariant }) {
   const info = appInfo(app);
   return (
     <span className={`app-chip app-chip-${variant}`} style={{ ['--app' as string]: info.color }} title={info.id === 'other' || info.id === 'focus' ? info.label : `In ${info.label}`}>
-      <AppIcon app={app} size={variant === 'tag' ? 11 : variant === 'screen' ? 15 : 12} />
+      <AppIcon app={app} size={variant === 'tag' ? 11 : 12} />
       <span className="app-chip-label">{info.label}</span>
     </span>
   );

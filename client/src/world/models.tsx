@@ -2,10 +2,12 @@ import { useFrame } from '@react-three/fiber';
 import { memo, useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { JukeboxData } from '../../../shared/music';
-import type { ItemData } from '../../../shared/types';
+import type { ItemData, OfficeItem } from '../../../shared/types';
+import type { LightData } from '../../../shared/world';
 import { useStore } from '../state/store';
 import { getEntry } from '../../../shared/catalog';
 import { shade } from '../lib/color';
+import { getItemModel } from './extensions';
 import { sceneLighting } from './layers';
 import { Ball, Box, Cyl } from './prims';
 
@@ -27,7 +29,8 @@ function Desk({ c }: { c: string }) {
       <Box p={[0, 0.66, -0.28]} s={[0.26, 0.02, 0.16]} c={DARK} />
       <Box p={[0, 0.76, -0.3]} s={[0.05, 0.2, 0.04]} c={DARK} />
       <Box p={[0, 0.98, -0.3]} s={[0.86, 0.48, 0.04]} c="#1d1f24" />
-      <Box p={[0, 0.98, -0.277]} s={[0.8, 0.42, 0.005]} c="#3a5fd9" emissive="#3a5fd9" emissiveIntensity={0.55} shadow={false} />
+      {/* The screen is off (glossy black) until someone sits down at the desk. */}
+      <Box p={[0, 0.98, -0.277]} s={[0.8, 0.42, 0.005]} c="#0c0e13" roughness={0.12} metalness={0.3} shadow={false} />
       <Box p={[0, 0.635, 0.05]} s={[0.5, 0.02, 0.15]} c="#e8e8ee" />
       <Box p={[0.38, 0.632, 0.07]} s={[0.08, 0.015, 0.12]} c="#e8e8ee" />
       <Cyl p={[-0.7, 0.675, 0.05]} rad={0.045} h={0.1} c="#ef476f" />
@@ -337,9 +340,8 @@ function Partition({ c }: { c: string }) {
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 /** What's inside sways a little in the wind (sceneLighting), about a point `y` up; not when the device asks for less motion. */
-function Sway({ y, children }: { y: number; children: ReactNode }) {
+export function Sway({ y, children }: { y: number; children: ReactNode }) {
   const ref = useRef<THREE.Group>(null);
-  const phase = useMemo(() => Math.random() * 10, []);
   useFrame(({ clock }) => {
     const g = ref.current;
     if (!g?.parent) return;
@@ -349,10 +351,12 @@ function Sway({ y, children }: { y: number; children: ReactNode }) {
       if (g.rotation.x || g.rotation.z) g.rotation.set(0, 0, 0);
       return;
     }
+    const m = g.parent.matrixWorld.elements;
+    // Out of step with its neighbours, but in step with the hover outline drawn over the same spot.
+    const phase = m[12] * 1.7 + m[14] * 2.3;
     // Swings between upright and leaning away from the wind, at most about 3° (from 10 m/s up).
     const angle = 0.06 * Math.min(wind / 10, 1) * (0.5 + 0.5 * Math.sin(clock.elapsedTime * 2.2 + phase));
     // The wind in the model's own axes (the item may be turned).
-    const m = g.parent.matrixWorld.elements;
     const x = (m[0] * windX + m[2] * windZ) / wind;
     const z = (m[8] * windX + m[10] * windZ) / wind;
     g.rotation.set(angle * z, 0, -angle * x);
@@ -393,12 +397,12 @@ function TallPlant() {
   );
 }
 
-function FloorLamp({ c }: { c: string }) {
+function FloorLamp({ c, on }: { c: string; on: boolean }) {
   return (
     <group>
       <Cyl p={[0, 0.02, 0]} rad={0.17} h={0.04} c={DARK} />
       <Cyl p={[0, 0.78, 0]} rad={0.02} h={1.5} c={METAL} />
-      <Cyl p={[0, 1.6, 0]} rad={0.24} top={0.6} h={0.32} c={c} emissive={c} emissiveIntensity={0.8} />
+      <Cyl p={[0, 1.6, 0]} rad={0.24} top={0.6} h={0.32} c={on ? c : shade(c, -0.35)} emissive={on ? c : undefined} emissiveIntensity={0.8} />
     </group>
   );
 }
@@ -506,8 +510,20 @@ function Jukebox({ c, itemId, data }: { c: string; itemId?: string; data?: Jukeb
   );
 }
 
-/** Renders any catalogue item by type. */
-export const ItemModel = memo(function ItemModel({ type, color, itemId, data }: { type: string; color?: string; itemId?: string; data?: ItemData }) {
+/** Renders any catalogue item by type (`item` is needed by models that features add). */
+export const ItemModel = memo(function ItemModel({
+  type,
+  color,
+  itemId,
+  data,
+  item,
+}: {
+  type: string;
+  color?: string;
+  itemId?: string;
+  data?: ItemData;
+  item?: OfficeItem;
+}) {
   const entry = getEntry(type);
   const c = color ?? entry?.defaultColor ?? '#cccccc';
   switch (type) {
@@ -536,13 +552,16 @@ export const ItemModel = memo(function ItemModel({ type, color, itemId, data }: 
     case 'partition': return <Partition c={c} />;
     case 'plant': return <Plant />;
     case 'tall-plant': return <TallPlant />;
-    case 'floor-lamp': return <FloorLamp c={c} />;
+    case 'floor-lamp': return <FloorLamp c={c} on={(data as Partial<LightData> | undefined)?.on !== false} />;
     case 'art': return <Art c={c} />;
     case 'rug': return <Rug c={c} w={3} d={2} />;
     case 'rug-round': return <RoundRug c={c} />;
     case 'ping-pong': return <PingPong />;
     case 'arcade': return <Arcade c={c} />;
     case 'jukebox': return <Jukebox c={c} itemId={itemId} data={data as JukeboxData | undefined} />;
-    default: return <Box p={[0, 0.25, 0]} s={[0.5, 0.5, 0.5]} c="#ff00ff" />;
+    default: {
+      const Model = getItemModel(type);
+      return Model && item ? <Model item={item} c={c} /> : <Box p={[0, 0.25, 0]} s={[0.5, 0.5, 0.5]} c="#ff00ff" />;
+    }
   }
 });

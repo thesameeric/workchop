@@ -123,3 +123,12 @@ export const CheckIcon = icon('tick-02');
 export const CheckAllIcon = icon('tick-double-02');
 export const PlugIcon = icon('plug-01');
 export const WarningIcon = icon('alert-02');
+// World
+export const PlantIcon = icon('plant-02');
+export const LeafIcon = icon('leaf-01');
+export const HumidityIcon = icon('humidity');
+export const GaugeIcon = icon('dashboard-speed-01');
+export const PawIcon = icon('paw-print');
+export const SparklesIcon = icon('sparkles');
+export const StickyNoteIcon = icon('sticky-note-02');
+export const DeskIcon = icon('desk');

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { getEntry, type Seat } from '../../../shared/catalog';
 import { findFreeSpot, findPath, isBlocked, moveWithCollision } from '../../../shared/geometry';
+import type { Office } from '../../../shared/types';
 import { focusHint } from '../features/audio/focus';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { getState, setState } from '../state/store';
+import { nearbyActionFinders, type NearbyAction } from './extensions';
 import { axis } from './input';
 import { nearestSeat, officeData } from './officeCache';
 
@@ -45,15 +47,27 @@ export function standUp(): void {
   }
 }
 
-export function toggleSit(): void {
+/** The nearest thing to do with E where you stand: sit down, or what features offer (light switches…). */
+function nearestAction(office: Office): NearbyAction | null {
+  const seat = nearestSeat(office, local.x, local.z, SIT_RANGE);
+  let best: NearbyAction | null = seat
+    ? { distance: Math.hypot(seat.x - local.x, seat.z - local.z), hint: 'Press E to sit', run: () => sitOn(seat) }
+    : null;
+  for (const find of nearbyActionFinders()) {
+    const action = find(office, local.x, local.z);
+    if (action && (!best || action.distance < best.distance)) best = action;
+  }
+  return best;
+}
+
+/** E: stand up, or do the nearest thing (sit down, switch the lights…). */
+export function interact(): void {
   if (local.seat) {
     standUp();
     return;
   }
   const office = getState().office;
-  if (!office) return;
-  const seat = nearestSeat(office, local.x, local.z, SIT_RANGE);
-  if (seat) sitOn(seat);
+  if (office) nearestAction(office)?.run();
 }
 
 /** Walk to a point using A*; optionally sit on a seat when arriving. */
@@ -167,9 +181,7 @@ export function stepLocal(dt: number, camera: THREE.Camera): number {
   hintTimer += dt;
   if (hintTimer > 0.25) {
     hintTimer = 0;
-    const hint =
-      focusHint() ??
-      (local.seat ? 'Press E (or move) to stand up' : nearestSeat(office, local.x, local.z, SIT_RANGE) ? 'Press E to sit' : null);
+    const hint = focusHint() ?? (local.seat ? 'Press E (or move) to stand up' : (nearestAction(office)?.hint ?? null));
     if (hint !== getState().hint) setState({ hint });
   }
   return speed;

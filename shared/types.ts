@@ -1,5 +1,6 @@
 import type { AccountUser } from './account';
 import type { JukeboxData, MusicOp, SpotifySession, SpotifySessionUpdate } from './music';
+import type { DeskData, LightData } from './world';
 
 // Types shared by the browser client and the Node server.
 
@@ -64,12 +65,13 @@ export interface OfficeItem {
   color?: string;
   /**
    * Item-specific settings, checked by the item type's `sanitizeData` (shared/catalog.ts). Narrow it
-   * by type: a jukebox's is JukeboxData (see isJukebox in shared/music.ts).
+   * by type: a jukebox's is JukeboxData (see isJukebox in shared/music.ts), a lamp's or light
+   * switch's LightData and a claimed desk's DeskData (shared/world.ts).
    */
   data?: ItemData;
 }
 
-export type ItemData = JukeboxData | Record<string, unknown>;
+export type ItemData = JukeboxData | LightData | DeskData | Record<string, unknown>;
 
 /** A private area: people inside hear only each other, regardless of distance. */
 export interface Zone {

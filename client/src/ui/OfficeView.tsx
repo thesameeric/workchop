@@ -6,17 +6,20 @@ import { media } from '../lib/media';
 import { getSession } from '../lib/session';
 import { setPanel, setState, useStore } from '../state/store';
 import { isTyping } from '../world/input';
-import { toggleSit } from '../world/movement';
+import { loadWorldModules } from '../world/extensions';
+import { interact } from '../world/movement';
 import { Dock, copyInvite } from './Dock';
 import { CloseIcon, HelpIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
 import { NowPlayingPill } from './MusicPanel';
+import { Overlays } from './overlays';
 import { usePanels } from './panels';
 import { topBarItemKey, useTopBarItems } from './topbar';
 import { SelfView, Spotlight, VideoStrip } from './VideoStrip';
 import { WorldLabels, ZoneIndicator } from './WorldLabels';
 
-const World = lazy(() => import('../world/World'));
+// Features' 3D modules load with the scene, so it appears complete.
+const World = lazy(() => Promise.all([import('../world/World'), loadWorldModules()]).then(([world]) => world));
 
 function TopBar() {
   const name = useStore((s) => s.office?.settings.name ?? '');
@@ -107,6 +110,7 @@ function Help() {
         <kbd>D</kbd> / arrows to move, <kbd>Shift</kbd> to run
       </div>
       <div>Click the floor to walk there, click a chair to sit</div>
+      <div>Click plants, lamps and desks to use them</div>
       <div>
         <kbd>E</kbd> sit/stand · <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd> reactions
       </div>
@@ -139,7 +143,7 @@ function useShortcuts() {
       if (isTyping() || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       const { modal, mode } = useStore.getState();
       if (modal !== 'none') return;
-      if (e.code === 'KeyE') toggleSit();
+      if (e.code === 'KeyE') interact();
       else if (e.code === 'KeyM') void media.setMic(!media.micOn);
       else if (e.code === 'KeyV') void media.setCam(!media.camOn);
       else if (e.code === 'KeyB') setPanel('build');
@@ -175,6 +179,7 @@ export function OfficeView() {
         <World />
       </Suspense>
       <WorldLabels />
+      <Overlays />
       <TopBar />
       <VideoStrip />
       <SelfView />

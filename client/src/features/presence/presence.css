@@ -17,10 +17,9 @@
   text-overflow: ellipsis;
 }
 
-/* On name tags, video tiles and desk monitors: always on a dark background. */
+/* On name tags and video tiles: always on a dark background. */
 .app-chip-tag,
-.app-chip-tile,
-.app-chip-screen {
+.app-chip-tile {
   background: color-mix(in srgb, var(--app) 62%, #11131b);
   color: #fff;
 }
@@ -35,13 +34,6 @@
   padding: 0 6px 0 4px;
   font-size: 0.7rem;
   flex: none;
-}
-
-.app-chip-screen {
-  padding: 3px 9px 3px 7px;
-  font-size: 12px;
-  border: 1px solid color-mix(in srgb, var(--app) 70%, #fff);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--app) 55%, transparent);
 }
 
 /* In the people panel (the office HUD is dark glass in both themes). */

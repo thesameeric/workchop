@@ -6,7 +6,6 @@ import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
 import { PlayerApp } from '../features/presence/AppChip';
-import { DeskAppLabels } from '../features/presence/DeskLabels';
 import { Celebrations } from '../features/coins/Celebrations';
 import { LockIcon, MicOffIcon } from './icons';
 
@@ -96,8 +95,6 @@ export function WorldLabels() {
         {zones.map((z) => (
           <ZoneLabel key={z.id} zone={z} active={z.id === activeZoneId} />
         ))}
-        {/* Under the name tags. */}
-        <DeskAppLabels />
         {ids.map((id) => (
           <RemoteLabel key={id} id={id} />
         ))}
