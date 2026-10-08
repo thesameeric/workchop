@@ -2,14 +2,20 @@
 // Code points of the Hugeicons glyphs in client/src/assets/hgi-subset.woff2.
 export const HUGEICONS = {
   'arrow-down-01': 0xf15fc,
+  'arrow-down-left-01': 0xf1605,
   'arrow-expand-02': 0xf160d,
+  'arrow-up-right-01': 0xf1640,
   'bubble-chat': 0xf17e2,
   'building-06': 0xf17ef,
+  'calendar-check-in-01': 0xf185b,
   'cancel-01': 0xf18bc,
+  'clock-01': 0xf19e3,
+  'coins-01': 0xf1a18,
   'computer': 0xf1a59,
   'computer-screen-share': 0xf1a52,
   'copy-01': 0xf1a75,
   'delete-02': 0xf1b35,
+  'gift': 0xf1d6a,
   'hammer': 0xf31a9,
   'headphones': 0xf1e04,
   'help-circle': 0xf1e11,
@@ -20,11 +26,14 @@ export const HUGEICONS = {
   'logout-03': 0xf1ffd,
   'mic-01': 0xf211c,
   'mic-off-01': 0xf211e,
+  'minus-sign': 0xf2139,
   'moon-02': 0xf2174,
   'music-note-03': 0xf21e2,
   'paint-board': 0xf22a4,
   'play': 0xf2348,
+  'plus-sign': 0xf235a,
   'rotate-01': 0xf24a1,
+  'sent': 0xf256f,
   'settings-01': 0xf257f,
   'shuffle': 0xf25ef,
   'smile': 0xf2633,
@@ -37,6 +46,7 @@ export const HUGEICONS = {
   'volume-high': 0xf2981,
   'volume-low': 0xf2982,
   'volume-off': 0xf2986,
+  'wallet-01': 0xf29a9,
 } as const;
 
 export type HugeiconName = keyof typeof HUGEICONS;

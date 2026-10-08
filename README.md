@@ -28,6 +28,10 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Spotify board:** share Spotify playlists, albums, tracks, podcasts, or a **Jam** invite. Everyone opens them in their own Spotify app.
 - **Spotify listen-along** (optional, needs `SPOTIFY_CLIENT_ID`, see below): people connect their own Spotify Premium account, someone presses ▶ "Play for everyone", and everyone connected at that jukebox hears the same track at the same position on their own account. Workchop only syncs what's playing; it never streams audio from one person to another.
 
+**Coins**
+- Signed-in members have a wallet of virtual coins (just for fun: no real money, nothing to buy or cash out). See [Coins](#coins).
+- Thank a coworker with a tip from the Wallet panel (its dock button shows your balance) or the people list, and everyone in the office sees a little celebration over them.
+
 **Getting around**
 - `WASD` or the arrow keys move you relative to the camera, and `Shift` runs. Click the floor to walk there (with pathfinding); click a chair to walk over and sit.
 - Drag to orbit the camera and scroll to zoom. Walls and shelves between you and the camera fade out.
@@ -166,6 +170,7 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Names and characters of guests | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
+| Coin wallets and every coin movement (a ledger) | The database |
 | Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
 | Who's online, positions, calls | In memory only (live state) |
 
@@ -228,6 +233,17 @@ The built-in radio stations work out of the box. Two things to know before addin
   1. Create an app at <https://developer.spotify.com/dashboard>, tick **Web Playback SDK** and **Web API**, and add the redirect URI `https://<your domain>/spotify-callback.html`. For local testing, open Workchop at `http://127.0.0.1:5173` (not `localhost`; Spotify only accepts loopback IPs over plain http) and register `http://127.0.0.1:5173/spotify-callback.html`.
   2. Set `SPOTIFY_CLIENT_ID` (in `.env` for Docker Compose) and restart. No client secret is needed (sign-in uses PKCE).
   3. Every listener needs **Spotify Premium** and a desktop browser. Apps in Spotify's *development mode* work only for accounts you add under *User Management* (currently up to 5). Spotify grants wider access only to established organisations, and its developer policy doesn't allow apps aimed at businesses. So treat listen-along as a feature for small teams and friends, and use the board's links and Jams for everyone else.
+
+### Coins
+
+Every signed-in member has one wallet, the same in every office. Guests see "Sign in to get a wallet". Coins come from:
+
+- a **welcome bonus** of 100 coins the first time they join an office (or open their wallet),
+- a **daily check-in** of 20 coins on their first visit each UTC day,
+- **being present**: 5 coins for every 30 minutes in an office while not *Away* or idle (idle: no walking, chatting or reacting for 10 minutes with mic, camera and screen off), up to 40 a day. The server keeps the time; nothing is reported by the browser,
+- **tips** from coworkers: 1–500 coins with an optional note (140 characters), to someone signed in and in the same office, up to 10 tips a minute. Everyone there sees the shout-out and its note.
+
+The server decides everything. Each change runs in one database transaction that locks the wallets involved (always in the same order, so two tips can't deadlock), refuses to go below zero (also enforced by a `CHECK` on the balance), and writes a ledger row with the new balance. Unique keys make the daily bonus, presence coins and tips happen at most once, even when a tip is retried. An office's owner can turn coins off there (Wallet panel → *Coins in this office*): tipping is hidden and nobody earns coins in that office, while wallets stay as they are. Coins need no configuration.
 
 ## How it works
 

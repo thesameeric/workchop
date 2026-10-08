@@ -6,6 +6,7 @@ import { local, remoteTargets } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { setState, useStore } from '../state/store';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon } from './icons';
+import { personActionKey, usePersonActions } from './personActions';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
 
@@ -23,6 +24,7 @@ export function PeoplePanel() {
   const linked = useStore((s) => s.linked);
   const me = useStore((s) => s.me);
   const mic = useStore((s) => s.media.mic);
+  const actions = usePersonActions();
   useTick(500);
 
   const others = Object.values(players)
@@ -82,6 +84,9 @@ export function PeoplePanel() {
             >
               <ChatIcon size={16} />
             </button>
+            {actions.map((a) => (
+              <a.Component key={personActionKey(a)} player={p} />
+            ))}
           </div>
         </div>
       ))}
