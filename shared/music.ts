@@ -1,5 +1,6 @@
 import { getEntry } from './catalog';
 import { zoneAt } from './geometry';
+import { clip } from './text';
 import type { Office, OfficeItem, Zone } from './types';
 
 /**
@@ -103,7 +104,7 @@ export function parseSpotifyLink(raw: string): { url: string; kind: SpotifyKind;
 
 function cleanText(v: unknown, max: number): string | undefined {
   if (typeof v !== 'string') return undefined;
-  const t = v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
+  const t = clip(v.replace(/[\u0000-\u001f\u007f]/g, '').trim(), max);
   return t || undefined;
 }
 
@@ -143,9 +144,9 @@ function sanitizeLink(raw: unknown): MusicLink | null {
 function fileName(url: string): string {
   const last = new URL(url).pathname.split('/').pop() || url;
   try {
-    return decodeURIComponent(last).slice(0, 120);
+    return clip(decodeURIComponent(last), 120);
   } catch {
-    return last.slice(0, 120); // Malformed %-escapes.
+    return clip(last, 120); // Malformed %-escapes.
   }
 }
 

@@ -1,3 +1,4 @@
+import { clip } from './text';
 import type { AvatarConfig, FacialHair, GlassesStyle, HairStyle, HatStyle, Status, TopStyle } from './types';
 
 export const HAIR_STYLES: HairStyle[] = ['none', 'short', 'long', 'bun', 'ponytail', 'mohawk', 'curly', 'spiky'];
@@ -90,5 +91,5 @@ export function sanitizeStatus(v: unknown): Status {
 export function sanitizeName(v: unknown, max = 32): string {
   if (typeof v !== 'string') return '';
   // Strip control characters and collapse whitespace.
-  return v.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return clip(v.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim(), max);
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connect, type Socket } from 'socket.io-client';
@@ -7,6 +7,7 @@ import { DEFAULT_AVATAR } from '../shared/avatar';
 import type { SpotifySession } from '../shared/music';
 import type { ClientToServerEvents, JoinResponse, ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
+import { createTestDb } from './helpers/db';
 
 type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -17,9 +18,9 @@ const clients: Client[] = [];
 
 beforeAll(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), 'workchop-test-'));
-  server = await startServer({ port: 0, host: '127.0.0.1', dataDir, quiet: true, iceServers: [] });
+  server = await startServer({ port: 0, host: '127.0.0.1', dataDir, db: await createTestDb(), quiet: true, iceServers: [] });
   base = `http://127.0.0.1:${server.port}`;
-});
+}, 60_000);
 
 afterAll(async () => {
   for (const c of clients) c.disconnect();
@@ -45,6 +46,15 @@ async function join(officeId: string, name: string, ownerKey?: string) {
   });
   if (!res.ok) throw new Error(res.error);
   return { socket, res };
+}
+
+/** The office as saved in the database. */
+async function saved(id: string) {
+  const res = await server.db.query<{ data: { items: { id: string; data?: { station: string; links: { url: string }[] } }[]; settings: { buildPolicy: string } } }>(
+    'SELECT data FROM offices WHERE id = $1',
+    [id],
+  );
+  return { office: res.rows[0].data };
 }
 
 function next<E extends keyof ServerToClientEvents>(socket: Client, event: E, ms = 2000): Promise<Parameters<ServerToClientEvents[E]>> {
@@ -77,6 +87,28 @@ describe('REST API', () => {
     expect(info).toMatchObject({ id, name: 'Test HQ', online: 0 });
     expect((await fetch(`${base}/api/offices/does-not-exist`)).status).toBe(404);
     expect((await fetch(`${base}/api/offices/..%2F..%2Fetc`)).status).toBe(404);
+  });
+
+  it('saves names cut in the middle of an emoji', async () => {
+    // Names are cut at a length limit; half an emoji left at the end can't be stored as JSON in Postgres.
+    const res = await fetch(`${base}/api/offices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'a'.repeat(47) + '😀 party' }),
+    });
+    expect(res.status).toBe(201);
+    const { id, ownerKey } = (await res.json()) as { id: string; ownerKey: string };
+    expect(((await (await fetch(`${base}/api/offices/${id}`)).json()) as { name: string }).name).toBe('a'.repeat(47));
+    const owner = await join(id, 'Owner', ownerKey);
+    const renamed = next(owner.socket, 'office:op');
+    owner.socket.emit('office:op', { t: 'settings', settings: { name: 'b'.repeat(47) + '🎉 x' } });
+    await renamed;
+    owner.socket.emit('office:op', { t: 'add', item: { id: 'sofa1', type: 'sofa', x: 5, z: 5, rot: 0 } });
+    await next(owner.socket, 'office:op');
+    await server.store.flush();
+    const stored = (await saved(id)).office as unknown as { settings: { name: string }; items: { id: string }[] };
+    expect(stored.settings.name).toBe('b'.repeat(47));
+    expect(stored.items.some((i) => i.id === 'sofa1')).toBe(true);
   });
 
   it('serves ICE configuration', async () => {
@@ -193,11 +225,11 @@ describe('realtime', () => {
     owner.socket.emit('office:op', { t: 'add', item: { id: 'x', type: 'death-star', x: 1, z: 1, rot: 0 } });
     expect((await invalid)[1]).toMatch(/invalid/i);
 
-    // Everything is written to disk, and the owner key is never sent to clients.
+    // Everything is saved, and the owner key is never sent to clients.
     await server.store.flush();
-    const saved = JSON.parse(readFileSync(path.join(dataDir, `${id}.json`), 'utf8'));
-    expect(saved.office.items.some((i: { id: string }) => i.id === 'sofa1')).toBe(true);
-    expect(saved.office.settings.buildPolicy).toBe('owner');
+    const stored = await saved(id);
+    expect(stored.office.items.some((i) => i.id === 'sofa1')).toBe(true);
+    expect(stored.office.settings.buildPolicy).toBe('owner');
     expect(JSON.stringify(guest.res)).not.toContain(ownerKey);
   });
 
@@ -242,10 +274,9 @@ describe('realtime', () => {
     expect(retypeOp.t === 'update' && retypeOp.item.data?.stream).toBeUndefined();
 
     await server.store.flush();
-    const saved = JSON.parse(readFileSync(path.join(dataDir, `${id}.json`), 'utf8'));
-    const savedBox = saved.office.items.find((i: { id: string }) => i.id === jukebox.id);
-    expect(savedBox.data.station).toBe('ambient');
-    expect(savedBox.data.links[0].url).toBe('https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3');
+    const savedBox = (await saved(id)).office.items.find((i) => i.id === jukebox.id)!;
+    expect(savedBox.data?.station).toBe('ambient');
+    expect(savedBox.data?.links[0].url).toBe('https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3');
   });
 
   it('runs Spotify listen-along sessions: start, take over, stop, and end when the DJ leaves', async () => {

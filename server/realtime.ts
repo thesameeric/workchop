@@ -1,8 +1,10 @@
-import type { Server, Socket } from 'socket.io';
+import crypto from 'node:crypto';
+import type { DefaultEventsMap, Server, Socket } from 'socket.io';
 import { EMOTES, sanitizeAvatar, sanitizeName, sanitizeStatus } from '../shared/avatar';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
+import { clip } from '../shared/text';
 import type {
   AnimState,
   ChatMessage,
@@ -13,6 +15,7 @@ import type {
   PlayerState,
   ServerToClientEvents,
 } from '../shared/types';
+import type { Accounts } from './accounts';
 import { applyMusicOp, fetchLinkMeta } from './music';
 import type { OfficeStore } from './officeStore';
 import { randomId } from './officeStore';
@@ -21,8 +24,65 @@ import { type LinkChanges, Room } from './room';
 export const MAX_PLAYERS_PER_ROOM = 100;
 const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
 
-type IO = Server<ClientToServerEvents, ServerToClientEvents>;
-type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
+/** The signed-in person behind a socket (set from the session cookie when it connects). */
+export interface SocketUser {
+  id: string;
+  name: string;
+}
+
+export interface SocketData {
+  user: SocketUser | null;
+  /** SHA-256 of the session token, for disconnecting the session's sockets on logout. */
+  sessionHash?: string;
+  /**
+   * A secret sent only to this socket (in its join answer) that it shows when uploading files.
+   * Socket ids can't serve for that: everyone in the office sees them.
+   */
+  uploadKey?: string;
+}
+
+export type IO = Server<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
+export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
+type ServerEvent = keyof ServerToClientEvents;
+
+/** One connection, as features see it. */
+export interface SocketContext {
+  socket: ClientSocket;
+  /** Null for guests. */
+  user: SocketUser | null;
+  /** The office this socket is in, if it has joined one. */
+  room(): { officeId: string; players: ReadonlyMap<string, PlayerState> } | null;
+  me(): PlayerState | undefined;
+  office(): Office | undefined;
+  /** Owner key, or an owner membership. */
+  isOwner(): boolean;
+  /** May change the office (build mode, settings). */
+  mayEdit(): boolean;
+  /** A token bucket for this socket: `rate` actions per second, bursts up to `burst`. */
+  limiter(rate: number, burst: number): () => boolean;
+}
+
+/**
+ * Handlers may be async; a handler that throws or rejects is logged and the others still run. Errors
+ * in your own `socket.on(…)` handlers are yours to catch: an async one that rejects stops the server.
+ */
+export interface RealtimeApi {
+  /** Called for every new connection, after the core handlers are set up: add `socket.on(…)` handlers here. */
+  onSocket(handler: (s: SocketContext) => void): void;
+  /** After someone joined an office (everyone has been told). */
+  onJoin(handler: (s: SocketContext) => void): void;
+  /** After someone left an office (by joining another, or disconnecting). */
+  onLeave(handler: (s: SocketContext, left: { officeId: string; player: PlayerState }) => void): void;
+  emitToOffice<E extends ServerEvent>(officeId: string, event: E, ...args: Parameters<ServerToClientEvents[E]>): void;
+  emitToUser<E extends ServerEvent>(userId: string, event: E, ...args: Parameters<ServerToClientEvents[E]>): void;
+  /** Where a signed-in person currently is (one entry per open tab that has joined an office). */
+  playersOfUser(userId: string): { officeId: string; player: PlayerState }[];
+  /** Changes a player and tells everyone in the office (player:updated). */
+  updatePlayer(officeId: string, playerId: string, patch: PlayerPatch): void;
+  /** The connection with this socket id, if it is still connected. */
+  contextOf(socketId: string): SocketContext | undefined;
+  onlineCount(officeId: string): number;
+}
 
 /** Token bucket: `rate` actions per second with bursts up to `burst`. */
 function limiter(rate: number, burst: number) {
@@ -38,7 +98,9 @@ function limiter(rate: number, burst: number) {
   };
 }
 
-const roomName = (officeId: string) => `office:${officeId}`;
+export const roomName = (officeId: string) => `office:${officeId}`;
+export const userRoom = (userId: string) => `user:${userId}`;
+export const sessionRoom = (tokenHash: string) => `session:${tokenHash}`;
 
 /** A free spot near the office's spawn point that isn't on top of someone else. */
 export function spawnSpot(office: Office, others: Iterable<PlayerState>): { x: number; z: number } {
@@ -55,8 +117,32 @@ export function spawnSpot(office: Office, others: Iterable<PlayerState>): { x: n
   return findFreeSpot(spawn.x, spawn.z, colliders, office.settings);
 }
 
-export function attachRealtime(io: IO, store: OfficeStore) {
+/** Runs feature callbacks (async ones too) so that one failing doesn't break the others or the core. */
+function each<A extends unknown[]>(handlers: ((...args: A) => void)[], ...args: A) {
+  const failed = (err: unknown) => console.error('[realtime] a feature handler failed:', err);
+  for (const handler of handlers) {
+    try {
+      // An async handler's promise (typed as void, as TypeScript allows).
+      const result = handler(...args) as unknown;
+      if (result instanceof Promise) result.catch(failed);
+    } catch (err) {
+      failed(err);
+    }
+  }
+}
+
+export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Accounts } = {}) {
   const rooms = new Map<string, Room>();
+  const contexts = new Map<string, SocketContext>();
+  const socketHandlers: ((s: SocketContext) => void)[] = [];
+  const joinHandlers: ((s: SocketContext) => void)[] = [];
+  const leaveHandlers: ((s: SocketContext, left: { officeId: string; player: PlayerState }) => void)[] = [];
+
+  // Typed emits for a generic event name are beyond Socket.IO's types; the signatures above check them.
+  const emit = (to: string | string[], event: ServerEvent, args: unknown[]) => {
+    const target = io.to(to) as unknown as { emit(event: string, ...args: unknown[]): boolean };
+    target.emit(event, ...args);
+  };
 
   const emitLinks = (changes: LinkChanges) => {
     for (const { a, b, sid } of changes.added) {
@@ -69,9 +155,59 @@ export function attachRealtime(io: IO, store: OfficeStore) {
     }
   };
 
+  const api: RealtimeApi = {
+    onSocket: (handler) => void socketHandlers.push(handler),
+    onJoin: (handler) => void joinHandlers.push(handler),
+    onLeave: (handler) => void leaveHandlers.push(handler),
+    emitToOffice: (officeId, event, ...args) => emit(roomName(officeId), event, args),
+    emitToUser: (userId, event, ...args) => emit(userRoom(userId), event, args),
+    playersOfUser(userId) {
+      const out: { officeId: string; player: PlayerState }[] = [];
+      for (const socketId of io.sockets.adapter.rooms.get(userRoom(userId)) ?? []) {
+        const ctx = contexts.get(socketId);
+        const room = ctx?.room();
+        const player = ctx?.me();
+        if (room && player) out.push({ officeId: room.officeId, player });
+      }
+      return out;
+    },
+    updatePlayer(officeId, playerId, patch) {
+      const room = rooms.get(officeId);
+      const p = room?.players.get(playerId);
+      if (!room || !p) return;
+      Object.assign(p, patch);
+      io.to(roomName(officeId)).emit('player:updated', p.id, patch);
+      const o = store.peek(officeId)?.office;
+      if ('status' in patch && o) emitLinks(room.recompute(o.zones, [p.id]));
+    },
+    contextOf: (socketId) => contexts.get(socketId),
+    onlineCount: (officeId: string) => rooms.get(officeId)?.players.size ?? 0,
+  };
+
   io.on('connection', (socket: ClientSocket) => {
     let room: Room | null = null;
     let isOwner = false;
+    const user = socket.data.user ?? null;
+    socket.data.uploadKey = crypto.randomBytes(24).toString('base64url');
+    if (user) void socket.join(socket.data.sessionHash ? [userRoom(user.id), sessionRoom(socket.data.sessionHash)] : [userRoom(user.id)]);
+
+    const office = () => (room ? store.peek(room.officeId)?.office : undefined);
+    const ctx: SocketContext = {
+      socket,
+      user,
+      room: () => room,
+      me: () => room?.players.get(socket.id),
+      office,
+      isOwner: () => isOwner,
+      mayEdit: () => {
+        const o = office();
+        return !!o && (o.settings.buildPolicy === 'everyone' || isOwner);
+      },
+      limiter,
+    };
+    const { me, mayEdit } = ctx;
+    contexts.set(socket.id, ctx);
+
     const canChat = limiter(1, 5);
     const canEmote = limiter(2, 4);
     const canEdit = limiter(20, 60);
@@ -80,13 +216,6 @@ export function attachRealtime(io: IO, store: OfficeStore) {
     const canMusic = limiter(4, 12);
     const canSpotify = limiter(6, 20);
 
-    const me = (): PlayerState | undefined => room?.players.get(socket.id);
-    const office = () => (room ? store.peek(room.officeId)?.office : undefined);
-    const mayEdit = () => {
-      const o = office();
-      return !!o && (o.settings.buildPolicy === 'everyone' || isOwner);
-    };
-
     const endSpotify = (r: Room, itemId: string) => {
       if (r.spotify.delete(itemId)) io.to(roomName(r.officeId)).emit('spotify:session', itemId, null);
     };
@@ -94,6 +223,7 @@ export function attachRealtime(io: IO, store: OfficeStore) {
     const leave = () => {
       if (!room) return;
       const r = room;
+      const player = r.players.get(socket.id);
       room = null;
       socket.leave(roomName(r.officeId));
       for (const [itemId, s] of r.spotify) if (s.dj === socket.id) endSpotify(r, itemId);
@@ -103,30 +233,57 @@ export function attachRealtime(io: IO, store: OfficeStore) {
         rooms.delete(r.officeId);
         void store.evict(r.officeId, () => rooms.has(r.officeId));
       }
+      if (player) each(leaveHandlers, ctx, { officeId: r.officeId, player });
     };
 
     socket.on('join', async (req, ack) => {
       if (typeof ack !== 'function') return;
       if (!req || typeof req !== 'object') return ack({ ok: false, error: 'Bad request' });
       leave();
-      let stored;
-      try {
-        stored = await store.get(String(req.officeId));
-      } catch (err) {
-        console.error('[store] could not load office:', err);
-        return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
-      }
+      const officeId = String(req.officeId);
+      const load = async () => {
+        try {
+          return { stored: await store.get(officeId) };
+        } catch (err) {
+          console.error('[store] could not load office:', err);
+          return null;
+        }
+      };
+      const full = (id: string) => (rooms.get(id)?.players.size ?? 0) >= MAX_PLAYERS_PER_ROOM;
+      let loaded = await load();
+      if (!loaded) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+      let stored = loaded.stored;
       if (!stored) return ack({ ok: false, error: 'This office does not exist.' });
-      if (socket.disconnected) return;
       const id = stored.office.id;
+      if (full(id)) return ack({ ok: false, error: 'This office is full.' });
+      const keyOwner = typeof req.ownerKey === 'string' && req.ownerKey === stored.ownerKey;
+      // Signed-in people become members (owners with the owner key); being signed in is never required.
+      let role: 'owner' | 'member' | null = null;
+      if (user && opts.accounts) {
+        try {
+          role = await opts.accounts.visit(user.id, id, keyOwner);
+        } catch (err) {
+          console.error('[accounts] could not record a visit:', err);
+        }
+      }
+      // While we waited, the office's last visitor may have left and the office been dropped from
+      // memory: then load it again, or edits would go to a copy nobody saves.
+      while (store.peek(id) !== stored) {
+        if (socket.disconnected) return;
+        loaded = await load();
+        if (!loaded?.stored) return ack({ ok: false, error: 'Could not load this office right now. Please try again.' });
+        stored = loaded.stored;
+      }
+      if (socket.disconnected) return;
+      // Checked before recording the visit too; this catches people who arrived in the meantime.
+      if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
       if (!r) {
         r = new Room(id);
         rooms.set(id, r);
       }
-      if (r.players.size >= MAX_PLAYERS_PER_ROOM) return ack({ ok: false, error: 'This office is full.' });
 
-      isOwner = typeof req.ownerKey === 'string' && req.ownerKey === stored.ownerKey;
+      isOwner = keyOwner || role === 'owner';
       const spot = spawnSpot(stored.office, r.players.values());
       const player: PlayerState = {
         id: socket.id,
@@ -141,6 +298,7 @@ export function attachRealtime(io: IO, store: OfficeStore) {
         cam: req.cam === true,
         screen: false,
       };
+      if (user) player.userId = user.id;
       room = r;
       r.players.set(socket.id, player);
       socket.join(roomName(id));
@@ -152,9 +310,11 @@ export function attachRealtime(io: IO, store: OfficeStore) {
         chat: r.chat.filter((m) => m.scope === 'all'),
         isOwner,
         spotify: [...r.spotify.values()],
+        uploadKey: socket.data.uploadKey!,
       });
       socket.to(roomName(id)).emit('player:joined', player);
       emitLinks(r.recompute(stored.office.zones, [socket.id]));
+      each(joinHandlers, ctx);
     });
 
     socket.on('move', (x, z, ry, anim) => {
@@ -172,22 +332,19 @@ export function attachRealtime(io: IO, store: OfficeStore) {
 
     socket.on('profile', (patch) => {
       const p = me();
-      const o = office();
-      if (!p || !o || !room || !patch || typeof patch !== 'object' || !canProfile()) return;
+      if (!p || !office() || !room || !patch || typeof patch !== 'object' || !canProfile()) return;
       const clean: PlayerPatch = {};
       if ('name' in patch) clean.name = sanitizeName(patch.name) || p.name;
       if ('avatar' in patch) clean.avatar = sanitizeAvatar(patch.avatar);
       if ('status' in patch) clean.status = sanitizeStatus(patch.status);
       for (const key of ['mic', 'cam', 'screen'] as const) if (key in patch) clean[key] = patch[key] === true;
-      Object.assign(p, clean);
-      io.to(roomName(room.officeId)).emit('player:updated', p.id, clean);
-      if ('status' in clean) emitLinks(room.recompute(o.zones, [p.id]));
+      api.updatePlayer(room.officeId, p.id, clean);
     });
 
     socket.on('chat', (text, scope, to) => {
       const p = me();
       if (!p || !room || typeof text !== 'string' || !canChat()) return;
-      const body = text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 1000);
+      const body = clip(text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim(), 1000);
       if (!body) return;
       const msg: ChatMessage = { id: randomId(12), from: p.id, name: p.name, text: body, scope: 'all', ts: Date.now() };
       if (scope === 'nearby') {
@@ -310,11 +467,13 @@ export function attachRealtime(io: IO, store: OfficeStore) {
       if (typeof ack === 'function') ack(Date.now());
     });
 
-    socket.on('disconnect', leave);
+    socket.on('disconnect', () => {
+      leave();
+      contexts.delete(socket.id);
+    });
+
+    each(socketHandlers, ctx);
   });
 
-  return {
-    rooms,
-    onlineCount: (officeId: string) => rooms.get(officeId)?.players.size ?? 0,
-  };
+  return { ...api, rooms };
 }

@@ -19,6 +19,23 @@ services:
       CLOUDFLARE_TURN_KEY_API_TOKEN: ${CLOUDFLARE_TURN_KEY_API_TOKEN:-}
       CLOUDFLARE_TURN_TTL: ${CLOUDFLARE_TURN_TTL:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      # The address people open Workchop at (sign-in redirects are built from it).
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN:?Set DOMAIN in .env}}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      # Uploaded files go into Postgres unless an S3/R2 bucket is set up.
+      UPLOADS_STORAGE: ${UPLOADS_STORAGE:-}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-}
+      UPLOADS_QUOTA_MB: ${UPLOADS_QUOTA_MB:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_REGION: ${S3_REGION:-}
       # Caddy passes each visitor's address on in X-Forwarded-For (use cf-connecting-ip behind Cloudflare).
       CLIENT_IP_HEADER: ${CLIENT_IP_HEADER-x-forwarded-for}
     depends_on:
