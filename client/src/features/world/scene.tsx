@@ -307,11 +307,30 @@ function canvasTexture(key: string, w: number, h: number, draw: (ctx: CanvasRend
 }
 
 const plateMaterials = new Map<string, THREE.Material[]>();
+const plateKey = (name: string, mine: boolean) => `${mine}|${name}`;
+
+/** Frees the plates no desk shows any more (people rename themselves, and each name gets its own). */
+function dropUnusedPlates(): void {
+  const { office, account } = getState();
+  const used = new Set<string>();
+  for (const item of office?.items ?? []) {
+    const owner = deskOwner(item);
+    if (owner) used.add(plateKey(owner.ownerName, account?.id === owner.ownerUserId));
+  }
+  for (const [key, [, , , , face]] of plateMaterials) {
+    if (used.has(key)) continue;
+    (face as THREE.MeshStandardMaterial).map?.dispose();
+    face.dispose();
+    textures.delete(`plate|${key}`);
+    plateMaterials.delete(key);
+  }
+}
 
 function plateMaterial(name: string, mine: boolean): THREE.Material[] {
-  const key = `${mine}|${name}`;
+  const key = plateKey(name, mine);
   let m = plateMaterials.get(key);
   if (!m) {
+    dropUnusedPlates();
     const map = canvasTexture(`plate|${key}`, 320, 80, (ctx) => {
       ctx.fillStyle = mine ? '#dfe4ff' : '#f7f3ea';
       ctx.fillRect(0, 0, 320, 80);
@@ -451,10 +470,15 @@ function LampGlow({ item }: { item: OfficeItem }) {
   );
 }
 
-const MAX_LAMP_LIGHTS = 4;
+const MAX_LAMP_LIGHTS = 2;
 
-/** A few real lights, given to the lit lamps nearest to you (more would slow every frame down). */
+/**
+ * A couple of real lights, given to the lit lamps nearest to you: each one slows down every lit
+ * pixel, even when it's dark, so an office without lamps has none. There are as many as lamps, on or
+ * off, so switching a lamp doesn't rebuild every material.
+ */
 function LampLights() {
+  const count = useStore((s) => Math.min(MAX_LAMP_LIGHTS, s.office?.items.filter(isLamp).length ?? 0));
   const lights = useRef<(THREE.PointLight | null)[]>([]);
   const timer = useRef(1);
   useFrame((_, dt) => {
@@ -483,7 +507,7 @@ function LampLights() {
   });
   return (
     <>
-      {Array.from({ length: MAX_LAMP_LIGHTS }, (_, n) => (
+      {Array.from({ length: count }, (_, n) => (
         <pointLight key={n} ref={(el) => void (lights.current[n] = el)} color="#ffc777" intensity={0} distance={4} decay={2} />
       ))}
     </>
