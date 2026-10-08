@@ -1,22 +1,23 @@
 # Feature specs for parallel work
 
-Workchop's next features are being built in parallel. These specs are for the two built **outside**
-the main cloud session (on the owner's computer): weather (`weather.md`) and the GitHub integration
-(`github.md`). Each has fact-checked research notes next to it (`research-*.md`) — read them; they
-contain real pitfalls (API terms, rate limits, token expiry) that matter.
+Workchop's next features are being built in parallel. These specs are for the ones built **outside**
+the main cloud session: weather (`weather.md`) and the GitHub integration (`github.md`) on the owner's
+computer, and the current-app indicator (`presence.md`) and coins wallet (`coins.md`) in separate cloud
+sessions. Where there are fact-checked research notes (`research-*.md`), read them; they contain real
+pitfalls (API terms, rate limits, token expiry, OS permissions) that matter.
 
-The other features (chat, world interactions, headphones & reactions, current-app status, coins) are
-being built in the cloud session at the same time, so keep your changes inside your feature's own files
+Chat, world interactions (desk screens, lights, plants, desk notes) and headphones & reactions are
+being built in the main session at the same time, so keep your changes inside your feature's own files
 where the hooks below allow it, to keep merges easy.
 
 ## Ground rules
-- Start from branch `claude/vibrant-clarke-yfiw34` and work on your own branch: `feature/weather` and
-  `feature/github` (or one branch `feature/weather-github`). Push your branch when done; it gets merged
+- Start from branch `claude/vibrant-clarke-yfiw34` and work on your own branch: `feature/weather`,
+  `feature/github`, `feature/presence` or `feature/coins`. Push your branch when done; it gets merged
   into the main work.
 - Plug into the foundation instead of editing shared central files (APIs below). Server code goes in
   `server/features/<name>/`, registered in `server/features/index.ts`; socket events are declared in
   `shared/<name>.ts` by augmenting the event maps; client code goes in `client/src/features/<name>/`
-  (auto-loaded). Migration id ranges: **weather 400–499, github 500–599** (others are taken).
+  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features).
 - Icons: only Hugeicons. Add names (from `scripts/hugeicons/icons.css`) to
   `client/src/ui/icon-names.json`, export components in `client/src/ui/icons.tsx`, run `npm run icons`
   (needs `pip install fonttools brotli`). It's fine if another branch also adds icons; the merge
