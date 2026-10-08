@@ -22,7 +22,7 @@ function update(): void {
   const show = visible();
   if (show && !unregister) {
     const offPanel = registerPanel({ id: 'github', title: 'GitHub', icon: GithubIcon, Component: GithubPanel, order: 45, inMore: true, useBadge: useGithubBadge, badgeTone: 'alert' });
-    const offSettings = registerSettingsSection({ id: 'integrations', title: 'Integrations', icon: PlugIcon, order: 40, Component: GithubSettings });
+    const offSettings = registerSettingsSection({ id: 'integrations', title: 'Integrations', icon: PlugIcon, order: 45, Component: GithubSettings });
     unregister = () => {
       offPanel();
       offSettings();

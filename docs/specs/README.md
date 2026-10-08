@@ -82,7 +82,7 @@ where the hooks below allow it, to keep merges easy.
   and R, Del, Ctrl+D in build mode).
 - Settings sections: `registerSettingsSection({ id, title, icon, order, Component })` from
   client/src/ui/settings.tsx (Appearance 10, Audio & video 20, Privacy & status 30, Desktop helper 35,
-  Weather and Integrations 40).
+  Weather 40, Integrations 45).
 - Top bar: `registerTopBarItem({ id, order, Component })` from client/src/ui/topbar.ts (after the
   music; weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
   client/src/ui/PeoplePanel.tsx, a line under each other person's name (`Component` gets `{ player }`;
