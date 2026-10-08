@@ -87,10 +87,14 @@ const syncPanel = () => {
 syncPanel();
 useStore.subscribe(syncPanel);
 
-// On phones the card is a sheet where side panels open: opening a panel closes it.
+// On phones the card is a sheet where side panels open: opening a panel closes it, and the other way round.
 const narrow = window.matchMedia('(max-width: 720px)');
 useStore.subscribe((s, prev) => {
   if (s.panel !== prev.panel && s.panel !== 'none' && narrow.matches) openCard(null);
+});
+useWorld.subscribe((s, prev) => {
+  const { panel } = getState();
+  if (s.card && !prev.card && narrow.matches && panel !== 'none') setPanel(panel);
 });
 
 onSession('world', (session) => {
