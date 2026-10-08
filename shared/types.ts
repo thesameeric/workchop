@@ -1,3 +1,4 @@
+import type { AccountUser } from './account';
 import type { JukeboxData, MusicOp, SpotifySession, SpotifySessionUpdate } from './music';
 
 // Types shared by the browser client and the Node server.
@@ -40,10 +41,17 @@ export interface PlayerState {
   screen: boolean;
   /** Account id when signed in (a random id, shown so others can tell members apart). */
   userId?: string;
+  /** Headphones on: focusing, not to be disturbed. Set by the client with a profile patch. */
+  focus?: boolean;
+  /** The app the person is using right now (an app id), set only by the server. */
+  app?: string | null;
 }
 
 /** Changes to a player's public state. Fields features add to PlayerState are included automatically. */
 export type PlayerPatch = Partial<Omit<PlayerState, 'id' | 'x' | 'z' | 'ry' | 'anim' | 'userId'>>;
+
+/** What a client may change about itself with a 'profile' message (the server sets `app`). */
+export type ProfilePatch = Omit<PlayerPatch, 'app'>;
 
 /** A piece of furniture or structure placed in an office. x/z is the footprint centre. */
 export interface OfficeItem {
@@ -54,9 +62,14 @@ export interface OfficeItem {
   /** Quarter turns around the vertical axis, 0..3. */
   rot: number;
   color?: string;
-  /** Item-specific settings (jukebox: radio station and shared Spotify links). */
-  data?: JukeboxData;
+  /**
+   * Item-specific settings, checked by the item type's `sanitizeData` (shared/catalog.ts). Narrow it
+   * by type: a jukebox's is JukeboxData (see isJukebox in shared/music.ts).
+   */
+  data?: ItemData;
 }
+
+export type ItemData = JukeboxData | Record<string, unknown>;
 
 /** A private area: people inside hear only each other, regardless of distance. */
 export interface Zone {
@@ -162,12 +175,14 @@ export interface ServerToClientEvents {
   'office:sync': (office: Office, reason?: string) => void;
   'spotify:session': (itemId: string, session: SpotifySession | null) => void;
   notice: (text: string) => void;
+  /** Your account changed (on another device or tab): only sent to your own sockets. */
+  'account:updated': (user: AccountUser) => void;
 }
 
 export interface ClientToServerEvents {
   join: (req: JoinRequest, ack: (res: JoinResponse) => void) => void;
   move: (x: number, z: number, ry: number, anim: AnimState) => void;
-  profile: (patch: PlayerPatch) => void;
+  profile: (patch: ProfilePatch) => void;
   chat: (text: string, scope: ChatScope, to?: string) => void;
   emote: (emoji: string) => void;
   'office:op': (op: OfficeOp) => void;

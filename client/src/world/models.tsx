@@ -2,6 +2,7 @@ import { useFrame } from '@react-three/fiber';
 import { memo, useMemo } from 'react';
 import * as THREE from 'three';
 import type { JukeboxData } from '../../../shared/music';
+import type { ItemData } from '../../../shared/types';
 import { useStore } from '../state/store';
 import { getEntry } from '../../../shared/catalog';
 import { shade } from '../lib/color';
@@ -471,7 +472,7 @@ function Jukebox({ c, itemId, data }: { c: string; itemId?: string; data?: Jukeb
 }
 
 /** Renders any catalogue item by type. */
-export const ItemModel = memo(function ItemModel({ type, color, itemId, data }: { type: string; color?: string; itemId?: string; data?: JukeboxData }) {
+export const ItemModel = memo(function ItemModel({ type, color, itemId, data }: { type: string; color?: string; itemId?: string; data?: ItemData }) {
   const entry = getEntry(type);
   const c = color ?? entry?.defaultColor ?? '#cccccc';
   switch (type) {
@@ -506,7 +507,7 @@ export const ItemModel = memo(function ItemModel({ type, color, itemId, data }: 
     case 'rug-round': return <RoundRug c={c} />;
     case 'ping-pong': return <PingPong />;
     case 'arcade': return <Arcade c={c} />;
-    case 'jukebox': return <Jukebox c={c} itemId={itemId} data={data} />;
+    case 'jukebox': return <Jukebox c={c} itemId={itemId} data={data as JukeboxData | undefined} />;
     default: return <Box p={[0, 0.25, 0]} s={[0.5, 0.5, 0.5]} c="#ff00ff" />;
   }
 });

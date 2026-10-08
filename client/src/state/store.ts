@@ -1,19 +1,29 @@
 import { create } from 'zustand';
+import type { AccountUser, AuthProvider } from '../../../shared/account';
 import type { SpotifySession } from '../../../shared/music';
 import type { AvatarConfig, ChatMessage, ChatScope, Office, PlayerState, Status } from '../../../shared/types';
 import { loadProfile } from '../lib/storage';
+import type { IconComponent } from '../ui/icons';
 
 export type Phase = 'landing' | 'lobby' | 'office';
-export type Panel = 'none' | 'chat' | 'people' | 'build' | 'music';
+/** The open side panel: 'none', or the id of a panel in ui/panels.tsx ('chat', 'people', 'build', 'music'…). */
+export type Panel = string;
 export type BuildTool = 'select' | 'place' | 'zone';
 export type Modal = 'none' | 'avatar' | 'settings';
 
 export type RemotePlayer = Omit<PlayerState, 'x' | 'z' | 'ry' | 'anim'>;
 
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Toast {
   id: number;
   text: string;
   kind: 'info' | 'error';
+  icon?: IconComponent;
+  action?: ToastAction;
 }
 
 /** What the jukebox you can hear is playing. */
@@ -36,6 +46,13 @@ interface State {
   phase: Phase;
   officeId: string | null;
   connection: 'online' | 'reconnecting';
+
+  /** Who is signed in (null for guests). */
+  account: AccountUser | null;
+  /** Whether we know yet (GET /api/me answered or failed), so the lobby doesn't show a guest first. */
+  accountReady: boolean;
+  /** Sign-in methods the server offers. */
+  providers: Record<AuthProvider, boolean>;
 
   selfId: string | null;
   isOwner: boolean;
@@ -118,6 +135,9 @@ export const useStore = create<State>()(() => ({
   phase: 'landing',
   officeId: null,
   connection: 'online',
+  account: null,
+  accountReady: false,
+  providers: { google: false, apple: false, dev: false },
   selfId: null,
   isOwner: false,
   office: null,
@@ -148,11 +168,28 @@ export const useStore = create<State>()(() => ({
 export const getState = useStore.getState;
 export const setState = useStore.setState;
 
+export interface ToastOptions {
+  kind?: Toast['kind'];
+  /** An icon from ui/icons.tsx, shown before the text. */
+  icon?: IconComponent;
+  /** A button, like "Open" or "View"; clicking it also closes the toast. */
+  action?: ToastAction;
+  /** How long it stays, in ms (default 3 s, errors 5 s, with an action 6 s). */
+  duration?: number;
+}
+
 let toastId = 0;
-export function toast(text: string, kind: Toast['kind'] = 'info'): void {
+/** A short message in the corner: `toast('Saved')`, `toast('Failed', 'error')`, `toast('New file', { icon, action })`. */
+export function toast(text: string, options: Toast['kind'] | ToastOptions = {}): number {
+  const { kind = 'info', icon, action, duration } = typeof options === 'string' ? { kind: options } : options;
   const id = ++toastId;
-  setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind }] }));
-  setTimeout(() => setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), kind === 'error' ? 5000 : 3000);
+  setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind, icon, action }] }));
+  setTimeout(() => dismissToast(id), duration ?? (action ? 6000 : kind === 'error' ? 5000 : 3000));
+  return id;
+}
+
+export function dismissToast(id: number): void {
+  setState((s) => (s.toasts.some((t) => t.id === id) ? { toasts: s.toasts.filter((t) => t.id !== id) } : {}));
 }
 
 export function canBuild(): boolean {

@@ -337,7 +337,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if ('name' in patch) clean.name = sanitizeName(patch.name) || p.name;
       if ('avatar' in patch) clean.avatar = sanitizeAvatar(patch.avatar);
       if ('status' in patch) clean.status = sanitizeStatus(patch.status);
-      for (const key of ['mic', 'cam', 'screen'] as const) if (key in patch) clean[key] = patch[key] === true;
+      for (const key of ['mic', 'cam', 'screen', 'focus'] as const) if (key in patch) clean[key] = patch[key] === true;
+      // Anything else (like `app`, which only the server sets) is ignored.
       api.updatePlayer(room.officeId, p.id, clean);
     });
 
@@ -377,12 +378,12 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if (op?.t === 'settings' && op.settings && 'buildPolicy' in op.settings && !isOwner) {
         return reject('Only the owner can change who may edit.');
       }
-      // A jukebox's shared settings change only through 'music' ops, so moving, copying or
-      // re-typing an item can't overwrite (or forge) a station and links.
+      // Item data (a jukebox's station and links…) changes only through its feature's own ops, so
+      // moving, copying or re-typing an item can't overwrite (or forge) it.
       if (op?.t === 'update' && op.item && typeof op.item === 'object') {
         const moved = op.item;
         const existing = stored.office.items.find((i) => i.id === moved.id);
-        op = { t: 'update', item: { ...moved, data: isJukebox(existing) ? existing.data : undefined } };
+        op = { t: 'update', item: { ...moved, data: existing && existing.type === moved.type ? existing.data : undefined } };
       } else if (op?.t === 'add' && op.item && typeof op.item === 'object') {
         op = { ...op, item: { ...op.item, data: undefined } };
       }

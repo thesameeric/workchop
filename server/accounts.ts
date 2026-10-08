@@ -1,4 +1,4 @@
-import type { AccountUser, AuthProvider, UserProfile } from '../shared/account';
+import { MAX_SETTINGS, type AccountUser, type AuthProvider, type UserProfile } from '../shared/account';
 import { jsonb, type Db } from './db';
 import { randomId } from './officeStore';
 
@@ -29,6 +29,9 @@ export function toAccountUser(row: UserRow): AccountUser {
 }
 
 class LostRace extends Error {}
+
+/** An account may keep at most MAX_SETTINGS settings. */
+export class TooManySettings extends Error {}
 
 /** Users, their sign-in identities, and the offices they belong to. */
 export class Accounts {
@@ -87,13 +90,26 @@ export class Accounts {
     return res.rowCount ? toAccountUser(res.rows[0]) : null;
   }
 
-  /** Renames and/or merges `profile` into the saved one (top-level keys are replaced). */
+  /**
+   * Renames and/or merges `profile` into the saved one: its avatar and status are replaced, its
+   * settings merged key by key (so devices saving different settings don't undo each other).
+   * Throws TooManySettings when the merged settings would have more than MAX_SETTINGS keys.
+   */
   async update(id: string, patch: { name?: string; profile?: UserProfile }): Promise<AccountUser | null> {
-    const res = await this.db.query<UserRow>(
-      `UPDATE users SET name = COALESCE($2, name), profile = profile || $3::jsonb WHERE id = $1 RETURNING ${USER_COLUMNS}`,
-      [id, patch.name ?? null, jsonb(patch.profile ?? {})],
-    );
-    return res.rowCount ? toAccountUser(res.rows[0]) : null;
+    return this.db.transaction(async (tx) => {
+      const current = await tx.query<{ profile: UserProfile | null }>('SELECT profile FROM users WHERE id = $1 FOR UPDATE', [id]);
+      if (!current.rowCount) return null;
+      const profile = { ...patch.profile };
+      if (profile.settings) {
+        profile.settings = { ...current.rows[0].profile?.settings, ...profile.settings };
+        if (Object.keys(profile.settings).length > MAX_SETTINGS) throw new TooManySettings();
+      }
+      const res = await tx.query<UserRow>(
+        `UPDATE users SET name = COALESCE($2, name), profile = profile || $3::jsonb WHERE id = $1 RETURNING ${USER_COLUMNS}`,
+        [id, patch.name ?? null, jsonb(profile)],
+      );
+      return toAccountUser(res.rows[0]);
+    });
   }
 
   /** Records a visit and returns the person's role there; `owner` makes (or keeps) them an owner. */

@@ -24,6 +24,23 @@ describe('items', () => {
     expect(sanitizeItem({ id: 'a', type: 'tv', x: 5, z: 5, rot: 0, color: '#abcdef' }, bounds)?.color).toBeUndefined();
     expect(sanitizeItem({ id: 'a', type: 'desk', x: 5, z: 5, rot: 0, color: 'red; drop' }, bounds)?.color).toBeUndefined();
   });
+
+  it("checks item data with the item type's sanitizeData, and drops it for types without one", () => {
+    const jukebox = { id: 'j', type: 'jukebox', x: 5, z: 5, rot: 0 };
+    expect(sanitizeItem({ ...jukebox, data: { station: 'lofi', links: 'x', extra: 1 } }, bounds)?.data).toEqual({ station: 'lofi', links: [] });
+    expect(sanitizeItem(jukebox, bounds)?.data).toEqual({ station: null, links: [] });
+    expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: { note: 'hi' } }, bounds)).not.toHaveProperty('data');
+
+    // A feature gives its item type a sanitizer; undefined means "no data".
+    const desk = getEntry('desk')!;
+    desk.sanitizeData = (raw) => (raw && typeof (raw as { note?: unknown }).note === 'string' ? { note: (raw as { note: string }).note.slice(0, 5) } : undefined);
+    try {
+      expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: { note: 'hello world', x: 1 } }, bounds)?.data).toEqual({ note: 'hello' });
+      expect(sanitizeItem({ id: 'd', type: 'desk', x: 5, z: 5, rot: 0, data: 42 }, bounds)).not.toHaveProperty('data');
+    } finally {
+      delete desk.sanitizeData;
+    }
+  });
 });
 
 describe('applyOp', () => {

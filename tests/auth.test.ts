@@ -199,6 +199,14 @@ describe('sign-in', () => {
     // Other parts of the profile are kept.
     await jar.fetch(`${base}/api/me`, json({ profile: { status: 'away' } }, 'PATCH'));
     expect((await me(jar))?.profile).toMatchObject({ status: 'away', settings: { theme: 'dark' } });
+    // Settings are merged key by key, so devices saving different ones keep each other's.
+    await jar.fetch(`${base}/api/me`, json({ profile: { settings: { 'weather.unit': 'F' } } }, 'PATCH'));
+    await jar.fetch(`${base}/api/me`, json({ profile: { settings: { theme: 'light' } } }, 'PATCH'));
+    expect((await me(jar))?.profile.settings).toEqual({ theme: 'light', long: 'x'.repeat(200), 'weather.unit': 'F' });
+    const many = Object.fromEntries(Array.from({ length: 48 }, (_, i) => [`k${i}`, i]));
+    const tooMany = await jar.fetch(`${base}/api/me`, json({ profile: { settings: many } }, 'PATCH'));
+    expect(tooMany.status).toBe(400);
+    expect(Object.keys((await me(jar))!.profile.settings!)).toHaveLength(3);
     expect((await jar.fetch(`${base}/api/me`, json({ name: ' ' }, 'PATCH'))).status).toBe(400);
     expect((await fetch(`${base}/api/me`, json({ name: 'x' }, 'PATCH'))).status).toBe(401);
 
@@ -211,6 +219,21 @@ describe('sign-in', () => {
     expect(await (await jar.fetch(`${base}/api/auth/logout`, { method: 'POST' })).json()).toEqual({ ok: true });
     expect(jar.cookies.has('wc_session')).toBe(false);
     expect(await me(jar)).toBeNull();
+  });
+
+  it("tells the person's other tabs and devices when their account changes", async () => {
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Tabby', email: 'tabby@example.com' }));
+    const { id } = await createOffice(base);
+    const tab = await join(base, id, 'Tabby', { jar });
+    const guest = await join(base, id, 'Guest');
+    let guestHeard = false;
+    guest.socket.on('account:updated', () => (guestHeard = true));
+    const updated = new Promise<AccountUser>((resolve) => tab.socket.once('account:updated', resolve));
+    await jar.fetch(`${base}/api/me`, json({ profile: { status: 'busy' } }, 'PATCH'));
+    expect(await updated).toMatchObject({ name: 'Tabby', email: 'tabby@example.com', profile: { status: 'busy' } });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(guestHeard).toBe(false);
   });
 
   it('uses __Host- Secure cookies when PUBLIC_URL is https', async () => {

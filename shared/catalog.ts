@@ -1,3 +1,4 @@
+import { sanitizeJukeboxData } from './music';
 import type { OfficeItem } from './types';
 
 export type Category = 'Work' | 'Lounge' | 'Kitchen' | 'Structure' | 'Decor' | 'Fun';
@@ -27,6 +28,11 @@ export interface CatalogEntry {
   snapCenter?: boolean;
   /** Plays music for people nearby (see shared/music.ts). */
   music?: boolean;
+  /**
+   * Checks the item's `data` (untrusted: it comes from clients and saved offices) and returns the
+   * clean value, or undefined for none. Items without it never keep data.
+   */
+  sanitizeData?(raw: unknown): unknown;
 }
 
 const entries: CatalogEntry[] = [
@@ -71,7 +77,8 @@ const entries: CatalogEntry[] = [
 
   // Fun
   { type: 'ping-pong', label: 'Ping pong', icon: '🏓', category: 'Fun', w: 3, d: 2, h: 0.9, solid: true, box: { w: 2.8, d: 1.6 } },
-  { type: 'jukebox', label: 'Jukebox', icon: '🎵', category: 'Fun', w: 1, d: 1, h: 1.6, solid: true, box: { w: 0.9, d: 0.7 }, colorable: true, defaultColor: '#e63946', music: true },
+  // A wrapper, so the import cycle with music.ts doesn't matter (it is resolved only when called).
+  { type: 'jukebox', label: 'Jukebox', icon: '🎵', category: 'Fun', w: 1, d: 1, h: 1.6, solid: true, box: { w: 0.9, d: 0.7 }, colorable: true, defaultColor: '#e63946', music: true, sanitizeData: (raw) => sanitizeJukeboxData(raw) },
   { type: 'arcade', label: 'Arcade cabinet', icon: '🕹️', category: 'Fun', w: 1, d: 1, h: 1.8, solid: true, box: { w: 0.9, d: 0.8 }, colorable: true, defaultColor: '#9b5de5', tall: true },
 ];
 

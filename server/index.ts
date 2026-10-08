@@ -18,7 +18,7 @@ import { registerFeatures, type Feature, type ServerContext } from './features';
 import { features as defaultFeatures } from './features/index';
 import { windowLimiter } from './limits';
 import { OfficeStore } from './officeStore';
-import { attachRealtime, sessionRoom, type IO } from './realtime';
+import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
 import { SqlOfficeRepo } from './repos';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers, type CloudflareTurn, type RTCIceServerLike } from './turn';
 import { createUploads, S3_MISSING, uploadOptionsFromEnv, type UploadOptions } from './uploads';
@@ -138,6 +138,7 @@ export async function startServer(opts: ServerOptions = {}) {
     publicOrigin,
     options: opts.auth ?? authOptionsFromEnv(),
     onLogout: (tokenHash) => io.in(sessionRoom(tokenHash)).disconnectSockets(true),
+    onUserUpdated: (user) => io.to(userRoom(user.id)).emit('account:updated', user),
     quiet: opts.quiet,
   });
   io.use(auth.socketMiddleware);
@@ -206,7 +207,7 @@ export async function startServer(opts: ServerOptions = {}) {
       }
     }
     res.set('Cache-Control', 'no-store');
-    res.json({ iceServers: servers, iceTtl, turn: !!turn, spotifyClientId: spotifyClientId || null });
+    res.json({ iceServers: servers, iceTtl, turn: !!turn, spotifyClientId: spotifyClientId || null, uploadMaxBytes: uploadOptions.maxBytes });
   });
 
   // Very small per-IP limit on creating offices.
@@ -302,7 +303,8 @@ export async function startServer(opts: ServerOptions = {}) {
     const clientDir = opts.clientDir!;
     app.use(express.static(clientDir, { index: false, maxAge: '1h' }));
     app.get(/.*/, (_req, res) => {
-      res.sendFile(path.join(clientDir, 'index.html'));
+      // With `root`, a hidden folder in the install path (like ~/.local) isn't refused as a dotfile.
+      res.sendFile('index.html', { root: clientDir });
     });
   } else {
     // In development the page is served by Vite; point lost visitors there.

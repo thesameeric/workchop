@@ -1,17 +1,20 @@
 import { io, type Socket } from 'socket.io-client';
 import { buildColliders, findFreeSpot, isBlocked, proximityVolume } from '../../../shared/geometry';
 import { applyOp } from '../../../shared/office';
+import { wellFormed } from '../../../shared/text';
 import type {
   AnimState,
   ClientToServerEvents,
   JoinResponse,
   OfficeOp,
-  PlayerPatch,
   PlayerState,
+  ProfilePatch,
   ServerToClientEvents,
 } from '../../../shared/types';
+import type { UploadedFile } from '../../../shared/uploads';
 import { getState, initialBuild, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
+import { accountUpdated, refreshAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
 import { serverNow, syncClock } from './clock';
 import { LoungeRadio } from './radio';
@@ -20,9 +23,11 @@ import { SpeakingDetector } from './levels';
 import { media } from './media';
 import { PeerManager } from './peers';
 import { local, remoteTargets } from './positions';
-import { getOwnerKey, saveProfile } from './storage';
+import { getOwnerKey } from './storage';
+import { postFile, type UploadOptions } from './upload';
 
-type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+/** The office connection, typed with every event (features add theirs to the shared event maps). */
+export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 function toRemote(p: PlayerState): RemotePlayer {
   const { x: _x, z: _z, ry: _ry, anim: _anim, ...rest } = p;
@@ -31,7 +36,8 @@ function toRemote(p: PlayerState): RemotePlayer {
 
 /** Everything that happens while you're inside an office: socket, calls, audio. */
 export class OfficeSession {
-  private socket: AppSocket;
+  /** Created before connecting; add `socket.on(…)` handlers from an onSession hook. */
+  readonly socket: AppSocket;
   private peers: PeerManager | null = null;
   private speaking = new SpeakingDetector((id, on) =>
     setState((s) => ({ speaking: { ...s.speaking, [id]: on } })),
@@ -43,6 +49,11 @@ export class OfficeSession {
   private unsubs: (() => void)[] = [];
   private lastSent = { x: NaN, z: NaN, ry: NaN, anim: 'idle' as AnimState, at: 0 };
   private hasJoined = false;
+  /** The current connection's id and upload key, while joined. */
+  private joined: { selfId: string; uploadKey: string } | null = null;
+  private joinedHandlers = new Set<(rejoin: boolean) => void>();
+  private leaveHandlers = new Set<() => void>();
+  private uploadMaxBytes: number | undefined;
   private closed = false;
   readonly radio = new LoungeRadio((itemId, durations) => this.music({ t: 'track:durations', itemId, durations }));
   readonly spotify = new SpotifyListenAlong((itemId, update, start) => this.socket.emit('spotify:session', itemId, update, start));
@@ -50,14 +61,17 @@ export class OfficeSession {
 
   constructor(readonly officeId: string) {
     this.socket = io({ autoConnect: false });
+    // The app's own handlers come first, so features' handlers for the same event see its effect.
+    this.wireSocket();
     this.audioRoot = document.createElement('div');
     this.audioRoot.hidden = true;
     document.body.appendChild(this.audioRoot);
   }
 
   async join(): Promise<void> {
-    const { iceServers, iceTtl, turn, spotifyClientId } = await fetchConfig();
+    const { iceServers, iceTtl, turn, spotifyClientId, uploadMaxBytes } = await fetchConfig();
     this.spotifyClientId = spotifyClientId;
+    this.uploadMaxBytes = uploadMaxBytes;
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
@@ -66,7 +80,6 @@ export class OfficeSession {
     // On Cloudflare Containers the server stops some minutes after its last ordinary request, and
     // realtime traffic doesn't count: check in now and then so it keeps running while people are here.
     this.timers.push(setInterval(() => void fetch('/api/health', { cache: 'no-store' }).catch(() => {}), 4 * 60_000));
-    this.wireSocket();
     this.unsubs.push(media.subscribe(() => this.onMediaChange()));
     this.onMediaChange();
     this.timers.push(setInterval(() => this.updateVolumes(), 120));
@@ -105,6 +118,7 @@ export class OfficeSession {
         }
         const rejoin = this.hasJoined;
         this.hasJoined = true;
+        this.joined = { selfId: res.selfId, uploadKey: res.uploadKey };
         remoteTargets.clear();
         const players: Record<string, RemotePlayer> = {};
         for (const p of res.players) {
@@ -143,8 +157,45 @@ export class OfficeSession {
           void synced.then(() => !this.closed && this.startMusic());
           onFirst(res);
         }
+        for (const handler of this.joinedHandlers) guard(() => handler(rejoin));
       },
     );
+  }
+
+  /** Your player id in the office (the socket id), while joined; it changes when you reconnect. */
+  selfId(): string | null {
+    return this.joined?.selfId ?? null;
+  }
+
+  /**
+   * Runs `handler` after every successful join: the first one, and each rejoin after a reconnect
+   * (the server then has a fresh player for you, so resend anything it should know). Added while
+   * already in the office, it also runs right away (with `false`). Returns an unsubscribe function.
+   */
+  onJoined(handler: (rejoin: boolean) => void): () => void {
+    this.joinedHandlers.add(handler);
+    if (this.joined) guard(() => handler(false));
+    return () => void this.joinedHandlers.delete(handler);
+  }
+
+  /** Runs `handler` when you leave the office (before the socket closes). Returns an unsubscribe function. */
+  onLeave(handler: () => void): () => void {
+    this.leaveHandlers.add(handler);
+    return () => void this.leaveHandlers.delete(handler);
+  }
+
+  /**
+   * Uploads a file into this office (POST /api/offices/:id/uploads) and returns the server's answer:
+   * `{ id, url, name, contentType, size }`, where `url` downloads it. Throws an Error with a message
+   * to show ("File too large (max 10 MB)", "Join the office before uploading files."…); with
+   * `signal` aborted it rejects with an AbortError.
+   */
+  upload(file: Blob, opts: UploadOptions = {}): Promise<UploadedFile> {
+    const joined = this.joined;
+    if (!joined) return Promise.reject(new Error('Not connected to the office right now. Please try again in a moment.'));
+    const name = wellFormed(opts.name ?? (file instanceof File ? file.name : 'file'));
+    const headers = { 'X-Workchop-Socket': joined.selfId, 'X-Workchop-Upload-Key': joined.uploadKey, 'X-Filename': encodeURIComponent(name) };
+    return postFile(`/api/offices/${encodeURIComponent(this.officeId)}/uploads`, file, headers, { ...opts, maxBytes: this.uploadMaxBytes });
   }
 
   private startMusic(): void {
@@ -196,10 +247,16 @@ export class OfficeSession {
 
   private wireSocket(): void {
     const s = this.socket;
-    s.on('disconnect', () => {
+    s.on('disconnect', (reason) => {
       if (this.closed) return;
+      this.joined = null;
       setState({ connection: 'reconnecting' });
       this.dropAllPeers();
+      // The server ends a session's connections when it signs out (in another tab): stay, as a guest.
+      if (reason === 'io server disconnect') {
+        void refreshAccount();
+        s.connect();
+      }
     });
     s.on('player:joined', (p) => {
       remoteTargets.set(p.id, { x: p.x, z: p.z, ry: p.ry, anim: p.anim });
@@ -273,6 +330,7 @@ export class OfficeSession {
       if (reason) toast(reason, 'error');
     });
     s.on('notice', (text) => toast(text, 'error'));
+    s.on('account:updated', (user) => accountUpdated(user));
     s.on('spotify:session', (itemId, session) => {
       setState((st) => {
         const spotifySessions = { ...st.spotifySessions };
@@ -332,14 +390,15 @@ export class OfficeSession {
     this.socket.emit('emote', emoji);
   }
 
-  updateProfile(patch: PlayerPatch): void {
+  /** Changes you for everyone in the office; your name, character and status are also saved. */
+  updateProfile(patch: ProfilePatch): void {
     const st = getState();
     const me = { ...st.me };
     if (patch.name !== undefined) me.name = patch.name;
     if (patch.avatar) me.avatar = patch.avatar;
     if (patch.status) me.status = patch.status;
     setState({ me });
-    saveProfile({ name: me.name, avatar: me.avatar });
+    if (patch.name !== undefined || patch.avatar || patch.status) void saveCharacter({ name: patch.name, avatar: patch.avatar, status: patch.status });
     this.socket.emit('profile', patch);
   }
 
@@ -447,6 +506,9 @@ export class OfficeSession {
 
   leave(): void {
     this.closed = true;
+    const leaving = [...this.leaveHandlers];
+    this.leaveHandlers.clear();
+    for (const handler of leaving) guard(handler);
     for (const t of this.timers) clearInterval(t);
     clearTimeout(this.iceTimer);
     this.radio.stop();
@@ -463,27 +525,79 @@ export class OfficeSession {
   }
 }
 
+/** Runs a feature's callback; one that throws is logged and doesn't break the others. */
+function guard(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    console.error('[session] a feature handler failed:', err);
+  }
+}
+
 let current: OfficeSession | null = null;
 
 export function getSession(): OfficeSession | null {
   return current;
 }
 
-// Read-only hook for automated tests and debugging in the browser console.
+/**
+ * What a feature does with each office session. It may return a cleanup, which runs when you leave,
+ * or on the spot when the hook is replaced (a hot reload) or unregistered while you're in an office.
+ */
+export type SessionHook = (session: OfficeSession) => void | (() => void);
+const sessionHooks = new Map<string, SessionHook>();
+/** The cleanups of the hooks that ran for the current session, by hook id. */
+const cleanups = new Map<string, () => void>();
+
+function runHook(session: OfficeSession, id: string, hook: SessionHook): void {
+  guard(() => {
+    const cleanup = hook(session);
+    if (typeof cleanup === 'function') cleanups.set(id, cleanup);
+  });
+}
+
+function stopHook(id: string): void {
+  const cleanup = cleanups.get(id);
+  cleanups.delete(id);
+  if (cleanup) guard(cleanup);
+}
+
+/**
+ * Runs `hook` for every office session as it is created: its socket exists but isn't connected yet,
+ * so handlers added with `session.socket.on(…)` see everything from the join on. Use
+ * `session.onJoined` to act once in the office. Registering an `id` again replaces that hook (the
+ * old one's cleanup runs first, so undo there what it added, e.g. with `socket.off`). Returns a
+ * function that unregisters the hook.
+ */
+export function onSession(id: string, hook: SessionHook): () => void {
+  stopHook(id);
+  sessionHooks.set(id, hook);
+  if (current) runHook(current, id, hook);
+  return () => {
+    if (sessionHooks.get(id) !== hook) return;
+    sessionHooks.delete(id);
+    stopHook(id);
+  };
+}
+
+// For automated tests and debugging in the browser console.
 (window as unknown as { __workchop?: unknown }).__workchop = {
   music: () => current?.debugMusic() ?? null,
   /** Simulate a dropped connection (it reconnects by itself), for testing. */
   dropConnection: () => current?.debugDropConnection(),
+  session: () => current,
 };
 
 export async function enterOffice(officeId: string): Promise<void> {
   current?.leave();
-  current = new OfficeSession(officeId);
+  const session = (current = new OfficeSession(officeId));
+  session.onLeave(() => [...cleanups.keys()].forEach(stopHook));
+  for (const [id, hook] of sessionHooks) runHook(session, id, hook);
   try {
-    await current.join();
+    await session.join();
   } catch (err) {
-    current.leave();
-    current = null;
+    session.leave();
+    if (current === session) current = null;
     throw err;
   }
 }

@@ -181,7 +181,7 @@ for (const storage of ['db', 'fs', 's3'] as UploadStorage[]) {
       const { office, credentials, upload } = await inOffice();
       const tooBig = await upload(Buffer.alloc(MAX + 1, 1), { 'Content-Type': 'application/octet-stream' });
       expect(tooBig.status).toBe(413);
-      expect(((await tooBig.json()) as { error: string }).error).toMatch(/at most/);
+      expect(((await tooBig.json()) as { error: string }).error).toMatch(/^File too large \(max /);
       // Sent in chunks, without a Content-Length.
       const stream = new ReadableStream({
         start(controller) {

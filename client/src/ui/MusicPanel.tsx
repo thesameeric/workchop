@@ -10,6 +10,7 @@ import {
 } from '../../../shared/music';
 import type { OfficeItem } from '../../../shared/types';
 import { getSession } from '../lib/session';
+import { ago } from '../lib/time';
 import { canBuild, setMusicPrefs, setState, useStore } from '../state/store';
 import { CloseIcon, LinkIcon, MusicIcon, PeopleIcon, PlayIcon, VolumeIcon, VolumeLowIcon, VolumeOffIcon } from './icons';
 
@@ -22,14 +23,6 @@ const KIND_LABEL: Record<MusicLink['kind'], string> = {
   show: 'Podcast',
   jam: 'Jam invite',
 };
-
-function ago(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
-  return new Date(ts).toLocaleDateString();
-}
 
 export function VolumeControl() {
   const { volume, muted, blocked } = useStore((s) => s.music);

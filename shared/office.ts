@@ -1,7 +1,6 @@
 import { isHexColor, sanitizeName } from './avatar';
 import { getEntry, rotatedSize, snapCoord } from './catalog';
-import { sanitizeJukeboxData } from './music';
-import type { BuildPolicy, FloorStyle, Office, OfficeItem, OfficeOp, OfficeSettings, Zone } from './types';
+import type { BuildPolicy, FloorStyle, ItemData, Office, OfficeItem, OfficeOp, OfficeSettings, Zone } from './types';
 
 export const FLOOR_STYLES: FloorStyle[] = ['wood', 'carpet', 'tile', 'concrete'];
 export const MIN_SIZE = 8;
@@ -37,7 +36,8 @@ export function sanitizeItem(raw: unknown, bounds: Pick<OfficeSettings, 'width' 
   const z = clamp(snapCoord(r.z, d, entry.snapCenter), d / 2, bounds.depth - d / 2);
   const item: OfficeItem = { id: r.id, type: entry.type, x: round(x), z: round(z), rot };
   if (entry.colorable && isHexColor(r.color)) item.color = r.color.toLowerCase();
-  if (entry.music) item.data = sanitizeJukeboxData(r.data);
+  const data = entry.sanitizeData?.(r.data);
+  if (data !== undefined) item.data = data as ItemData;
   return item;
 }
 

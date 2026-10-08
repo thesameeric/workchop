@@ -1,7 +1,10 @@
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, ReactElement } from 'react';
 import { HUGEICONS, type HugeiconName } from './hugeicons';
 
 type P = HTMLAttributes<HTMLSpanElement> & { size?: number };
+
+/** Any of the icons below (e.g. for a panel, a settings section or a toast). */
+export type IconComponent = (props: P) => ReactElement;
 
 /** A Hugeicons glyph from the subset font (add new names to icon-names.json, then run `npm run icons`). */
 function icon(name: HugeiconName) {
@@ -47,3 +50,7 @@ export const HelpIcon = icon('help-circle');
 export const SunIcon = icon('sun-03');
 export const MoonIcon = icon('moon-02');
 export const ComputerIcon = icon('computer');
+export const SignInIcon = icon('login-03');
+export const SignOutIcon = icon('logout-03');
+export const ChevronDownIcon = icon('arrow-down-01');
+export const BuildingIcon = icon('building-06');

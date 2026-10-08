@@ -33,7 +33,7 @@ export interface Space {
 
 export const MAX_USER_NAME = 32;
 const SETTING_KEY = /^[A-Za-z][\w.-]{0,39}$/;
-const MAX_SETTINGS = 50;
+export const MAX_SETTINGS = 50;
 
 export function sanitizeUserName(v: unknown): string {
   return sanitizeName(v, MAX_USER_NAME);

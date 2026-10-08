@@ -48,6 +48,13 @@
   --stage: radial-gradient(circle at 50% 35%, #ffffff, #e8eaf7);
   --swatch-edge: rgba(0, 0, 0, 0.08);
   --backdrop: rgba(10, 12, 25, 0.5);
+  --neutral-soft: #eceef5;
+  /* Sign-in buttons, as Google's and Apple's guidelines ask (light page: Google white, Apple black). */
+  --google-bg: #ffffff;
+  --google-line: #747775;
+  --google-ink: #1f1f1f;
+  --apple-bg: #000000;
+  --apple-ink: #ffffff;
   --radius: 14px;
   --shadow: 0 10px 30px rgba(20, 22, 40, 0.12);
   --modal-shadow: 0 30px 60px rgba(10, 12, 25, 0.35);
@@ -83,6 +90,12 @@
   --stage: radial-gradient(circle at 50% 35%, #30364c, #181b27);
   --swatch-edge: rgba(255, 255, 255, 0.18);
   --backdrop: rgba(3, 4, 10, 0.65);
+  --neutral-soft: #2a2e3e;
+  --google-bg: #131314;
+  --google-line: #8e918f;
+  --google-ink: #e3e3e3;
+  --apple-bg: #ffffff;
+  --apple-ink: #000000;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
   --modal-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
 }
@@ -307,6 +320,20 @@ kbd {
   font-weight: 700;
 }
 
+.badge.neutral {
+  background: var(--neutral-soft);
+  color: var(--ink-soft);
+}
+
+.link-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--primary-text);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 /* ---------- Brand ---------- */
 
 .brand {
@@ -345,7 +372,13 @@ kbd {
 
 .landing-header {
   position: relative;
-  padding: 22px 32px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 72px;
+  padding: 16px 32px;
 }
 
 .landing-main {
@@ -449,6 +482,359 @@ kbd {
   border-color: var(--primary);
 }
 
+/* ---------- Accounts ---------- */
+
+.account {
+  position: relative;
+  flex: none;
+}
+
+.account > .btn {
+  white-space: nowrap;
+}
+
+.account-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.account-btn:hover {
+  border-color: var(--line-strong);
+}
+
+.account-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-avatar {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 800;
+  object-fit: cover;
+}
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 280px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--modal-shadow);
+  animation: menu-in 0.12s ease-out;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 12px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.account-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-who > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu button[role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  font-weight: 500;
+}
+
+.account-menu button[role='menuitem']:hover,
+.account-menu button[role='menuitem']:focus-visible {
+  background: var(--primary-soft);
+}
+
+.account-menu button[role='menuitem']:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.sign-in-menu {
+  width: 320px;
+  padding: 14px;
+}
+
+.sign-in-menu > p {
+  margin: 0 0 12px;
+}
+
+.sign-in-card {
+  margin-top: 32px;
+  max-width: 30rem;
+}
+
+.sign-in-card h2 {
+  margin-bottom: 6px;
+}
+
+.sign-in-card > p {
+  margin: 0 0 16px;
+}
+
+.provider-buttons {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 20px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.25px;
+  white-space: nowrap;
+  transition: box-shadow 0.15s, filter 0.15s;
+}
+
+.provider-btn.google {
+  font-family: Roboto, Arial, sans-serif;
+  background: var(--google-bg);
+  border: 1px solid var(--google-line);
+  color: var(--google-ink);
+}
+
+.provider-btn.apple {
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background: var(--apple-bg);
+  border: 1px solid var(--apple-bg);
+  color: var(--apple-ink);
+  font-size: 15px;
+}
+
+.provider-btn:hover {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  filter: brightness(0.97);
+}
+
+.provider-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.or::before,
+.or::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.dev-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
+
+.dev-login p {
+  margin: 8px 0 0;
+}
+
+.sign-in-menu .dev-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Your spaces */
+.spaces h1 {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.8rem, 3.4vw, 2.6rem);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  margin-bottom: 26px;
+}
+
+.spaces h2 {
+  font-size: 1rem;
+  color: var(--ink-soft);
+  margin-bottom: 12px;
+}
+
+.spaces-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.space-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  text-align: left;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.space-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.space-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: #fff;
+  font-weight: 800;
+}
+
+.space-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.space-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.space-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.presence i {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.presence.live {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.presence.live i {
+  background: var(--ok);
+}
+
+.presence.live i::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: live 1.8s ease-out infinite;
+}
+
+@keyframes live {
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+.spaces-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 34px 24px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.spaces-empty p {
+  margin: 0;
+  max-width: 22rem;
+}
+
+.spaces-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
 /* ---------- Lobby ---------- */
 
 .lobby {
@@ -475,6 +861,19 @@ kbd {
   flex-direction: column;
   align-items: flex-end;
   font-size: 0.92rem;
+  min-width: 0;
+}
+
+.lobby-header-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.lobby-wait {
+  text-align: center;
+  padding: 48px 24px;
 }
 
 .lobby-body {
@@ -1096,6 +1495,33 @@ kbd {
   background: #3d4260;
 }
 
+/* The account menu above the dock, in the office's glass style (placed by Dock.tsx). */
+.dock-menu {
+  position: fixed;
+  z-index: 60;
+}
+
+.dock-menu .account-menu {
+  position: static;
+  background: var(--glass-solid);
+  border-color: var(--glass-line);
+  color: var(--glass-ink);
+  box-shadow: var(--glass-shadow);
+}
+
+.dock-menu .muted {
+  color: var(--glass-muted);
+}
+
+.dock-menu .account-head {
+  border-color: var(--glass-line);
+}
+
+.dock-menu .account-menu button[role='menuitem']:hover,
+.dock-menu .account-menu button[role='menuitem']:focus-visible {
+  background: var(--glass-raised);
+}
+
 .me-btn {
   display: flex;
   align-items: center;
@@ -1605,22 +2031,64 @@ kbd {
 }
 
 .toasts {
-  position: absolute;
+  position: fixed;
   top: 104px;
   left: 12px;
-  z-index: 70;
+  z-index: 95;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
+  max-width: calc(100vw - 24px);
   pointer-events: none;
 }
 
+/* Outside an office: centred at the bottom. */
+.toasts.page {
+  top: auto;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+}
+
 .toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 9px 14px;
   border-radius: 12px;
+  color: var(--glass-ink);
   font-size: 0.86rem;
   font-weight: 500;
   animation: slide-in 0.2s ease-out;
+}
+
+.toast.actionable {
+  padding: 6px 6px 6px 14px;
+  pointer-events: auto;
+}
+
+.toast-icon {
+  color: #a3adff;
+}
+
+.toast.error .toast-icon {
+  color: var(--glass-danger);
+}
+
+.toast-action {
+  flex: none;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--glass-raised);
+  color: var(--glass-ink);
+  font-weight: 700;
+}
+
+.toast-action:hover {
+  background: var(--glass-hover);
 }
 
 .toast.error {
@@ -1881,6 +2349,42 @@ kbd {
   .landing-header,
   .lobby-header {
     padding: 16px;
+  }
+
+  .landing-header {
+    min-height: 64px;
+  }
+
+  .account-name {
+    display: none;
+  }
+
+  .lobby-header,
+  .lobby-header-end {
+    gap: 10px;
+  }
+
+  .lobby-office > * {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .account-btn {
+    padding: 3px;
+  }
+
+  .sign-in-card {
+    margin-top: 24px;
+  }
+
+  .dev-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sign-in-menu {
+    width: min(320px, calc(100vw - 32px));
   }
 
   .lobby-body {
