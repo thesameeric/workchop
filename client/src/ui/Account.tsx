@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { AccountUser } from '../../../shared/account';
-import { signInUrl, signInWithDev, signOut } from '../lib/account';
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { MAX_PASSWORD, normalizeEmail, passwordProblem, type AccountUser, type SignInMethod } from '../../../shared/account';
+import { afterSignIn, errorText, signInUrl, signInWithDev, signInWithPassword, signOut } from '../lib/account';
 import { colorFor, initials } from '../lib/color';
+import { navigate, withNext } from '../lib/router';
 import { canSignIn, useStore } from '../state/store';
-import { ChevronDownIcon, GithubIcon, SignInIcon, SignOutIcon, UserEditIcon } from './icons';
+import { CheckIcon, ChevronDownIcon, GithubIcon, HideIcon, ProfileIcon, ShowIcon, SignInIcon, SignOutIcon } from './icons';
 
 /**
  * Open/close state for a menu that closes on Escape or a click outside `ref` (the button and menu)
@@ -83,11 +84,16 @@ export function UserAvatar({ user, size = 32 }: { user: AccountUser; size?: numb
   );
 }
 
+/** Opens the Profile page, with a way back to this one. */
+function openProfilePage(): void {
+  if (location.pathname !== '/profile') navigate(withNext('/profile', location.pathname + location.search));
+}
+
 /**
- * Who you're signed in as, and "Sign out" (plus "Edit character" inside an office). It takes the
- * focus when it opens, so it can be used from the keyboard.
+ * Who you're signed in as, "Profile" (a page, or `onProfile` inside an office) and "Sign out". It
+ * takes the focus when it opens, so it can be used from the keyboard.
  */
-export function AccountMenu({ user, onClose, onEditCharacter }: { user: AccountUser; onClose: (refocus?: boolean) => void; onEditCharacter?: () => void }) {
+export function AccountMenu({ user, onClose, onProfile = openProfilePage }: { user: AccountUser; onClose: (refocus?: boolean) => void; onProfile?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus(), []);
   return (
@@ -103,18 +109,16 @@ export function AccountMenu({ user, onClose, onEditCharacter }: { user: AccountU
           )}
         </div>
       </div>
-      {onEditCharacter && (
-        <button
-          role="menuitem"
-          onClick={() => {
-            onClose();
-            onEditCharacter();
-          }}
-        >
-          <UserEditIcon size={18} />
-          Edit character
-        </button>
-      )}
+      <button
+        role="menuitem"
+        onClick={() => {
+          onClose();
+          onProfile();
+        }}
+      >
+        <ProfileIcon size={18} />
+        Profile
+      </button>
       <button
         role="menuitem"
         onClick={() => {
@@ -146,6 +150,75 @@ export function AccountButton() {
   );
 }
 
+/** A link to a page of the app: it opens without reloading (and still in a new tab when asked). */
+export function Link({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
+  const open = (e: MouseEvent) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigate(to);
+  };
+  return (
+    <a href={to} className={className} onClick={open}>
+      {children}
+    </a>
+  );
+}
+
+/** A password box with a button to show what's typed. */
+export function PasswordInput({
+  id,
+  value,
+  onChange,
+  autoComplete,
+  hintId,
+  autoFocus,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoComplete: 'current-password' | 'new-password';
+  hintId?: string;
+  autoFocus?: boolean;
+}) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="password-input">
+      <input
+        id={id}
+        type={shown ? 'text' : 'password'}
+        value={value}
+        maxLength={MAX_PASSWORD}
+        autoComplete={autoComplete}
+        autoFocus={autoFocus}
+        aria-describedby={hintId}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button type="button" className="icon-btn" onClick={() => setShown((v) => !v)} title={shown ? 'Hide password' : 'Show password'} aria-label={shown ? 'Hide password' : 'Show password'}>
+        {shown ? <HideIcon size={18} /> : <ShowIcon size={18} />}
+      </button>
+    </div>
+  );
+}
+
+/** A new password, saying as you type what's wrong with it (or that it's fine). */
+export function NewPasswordField({ value, onChange, email, label = 'Password' }: { value: string; onChange: (value: string) => void; email: string | null; label?: string }) {
+  const id = useId();
+  const problem = passwordProblem(value, email);
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <PasswordInput id={id} value={value} onChange={onChange} autoComplete="new-password" hintId={`${id}-hint`} />
+      <p id={`${id}-hint`} className={`password-hint${problem ? '' : ' ok'}`} aria-live="polite">
+        {problem ?? (
+          <>
+            <CheckIcon size={15} /> Good password.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function GoogleLogo() {
   // The standard multicolour "G" (Google Identity branding guidelines).
   return (
@@ -166,14 +239,121 @@ function AppleLogo() {
   );
 }
 
-/** The sign-in methods the server offers: Google, Apple and GitHub buttons, and the dev login when it's on. */
-export function SignInOptions() {
+export const PROVIDER_NAMES: Record<SignInMethod['provider'], string> = { google: 'Google', apple: 'Apple', github: 'GitHub' };
+
+/** A sign-in provider's logo. */
+export function ProviderLogo({ provider }: { provider: SignInMethod['provider'] }) {
+  if (provider === 'google') return <GoogleLogo />;
+  if (provider === 'apple') return <AppleLogo />;
+  return <GithubIcon size={20} />;
+}
+
+/** "Continue with Google / Apple / GitHub", the ones the server offers, coming back to `next`. */
+export function ProviderButtons({ next }: { next: string }) {
   const providers = useStore((s) => s.providers);
+  const shown = (['google', 'apple', 'github'] as const).filter((p) => providers[p]);
+  if (!shown.length) return null;
+  return (
+    <div className="provider-buttons">
+      {shown.map((p) => (
+        <a key={p} className={`provider-btn ${p}`} href={signInUrl(p, next)}>
+          <ProviderLogo provider={p} />
+          <span>Continue with {PROVIDER_NAMES[p]}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** Email and password, with "Forgot password?" and "Create account" when the server can send email. */
+function PasswordSignIn({ next }: { next: string }) {
+  const emailLinks = useStore((s) => s.providers.emailLinks);
+  const id = useId();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!normalizeEmail(email)) return setError('Enter your email address.');
+    if (!password) return setError('Enter your password.');
+    setBusy(true);
+    setError(null);
+    try {
+      await signInWithPassword(email.trim(), password);
+      afterSignIn(next);
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="password-sign-in" onSubmit={submit} noValidate>
+      <div className="field">
+        <label htmlFor={`${id}-email`}>Email</label>
+        <input id={`${id}-email`} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" maxLength={254} autoComplete="email" />
+      </div>
+      <div className="field">
+        <div className="field-head">
+          <label htmlFor={`${id}-password`}>Password</label>
+          {emailLinks && (
+            <Link to="/forgot" className="small">
+              Forgot password?
+            </Link>
+          )}
+        </div>
+        <PasswordInput id={`${id}-password`} value={password} onChange={setPassword} autoComplete="current-password" />
+      </div>
+      <button className="btn primary wide" disabled={busy}>
+        {busy ? 'Signing in…' : 'Sign in'}
+      </button>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {emailLinks && (
+        <p className="sign-in-alt muted small">
+          New here? <Link to={withNext('/signup', next)}>Create account</Link>
+        </p>
+      )}
+    </form>
+  );
+}
+
+/**
+ * The ways this server lets people sign in: email and password, Google, Apple and GitHub buttons, and
+ * the dev login when it's on. Afterwards you go on to `next` (this page), by the welcome the first time.
+ */
+export function SignInOptions({ next = location.pathname + location.search }: { next?: string } = {}) {
+  const providers = useStore((s) => s.providers);
+  const oauth = providers.google || providers.apple || providers.github;
+  return (
+    <div className="sign-in">
+      {providers.password && <PasswordSignIn next={next} />}
+      {providers.password && oauth && (
+        <div className="or" aria-hidden="true">
+          <span>or</span>
+        </div>
+      )}
+      <ProviderButtons next={next} />
+      {(providers.password || oauth) && providers.dev && (
+        <div className="or" aria-hidden="true">
+          <span>or</span>
+        </div>
+      )}
+      {providers.dev && <DevSignIn next={next} />}
+    </div>
+  );
+}
+
+function DevSignIn({ next }: { next: string }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const oauth = providers.google || providers.apple || providers.github;
 
   const devLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -181,6 +361,7 @@ export function SignInOptions() {
     setError(null);
     try {
       await signInWithDev(name.trim(), email.trim());
+      afterSignIn(next);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -188,54 +369,23 @@ export function SignInOptions() {
   };
 
   return (
-    <div className="sign-in">
-      {oauth && (
-        <div className="provider-buttons">
-          {providers.google && (
-            <a className="provider-btn google" href={signInUrl('google')}>
-              <GoogleLogo />
-              <span>Continue with Google</span>
-            </a>
-          )}
-          {providers.apple && (
-            <a className="provider-btn apple" href={signInUrl('apple')}>
-              <AppleLogo />
-              <span>Continue with Apple</span>
-            </a>
-          )}
-          {providers.github && (
-            <a className="provider-btn github" href={signInUrl('github')}>
-              <GithubIcon size={20} />
-              <span>Continue with GitHub</span>
-            </a>
-          )}
-        </div>
-      )}
-      {oauth && providers.dev && (
-        <div className="or" aria-hidden="true">
-          <span>or</span>
-        </div>
-      )}
-      {providers.dev && (
-        <form className="dev-login" onSubmit={devLogin}>
-          <div className="dev-fields">
-            <label className="field">
-              <span>Name</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" maxLength={32} autoComplete="name" />
-            </label>
-            <label className="field">
-              <span>Email</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ada@example.com" maxLength={254} autoComplete="email" />
-            </label>
-          </div>
-          <button className="btn wide" disabled={busy || (!name.trim() && !email.trim())}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          <p className="muted small">Developer sign-in: no password, for testing.</p>
-          {error && <p className="form-error">{error}</p>}
-        </form>
-      )}
-    </div>
+    <form className="dev-login" onSubmit={devLogin}>
+      <div className="dev-fields">
+        <label className="field">
+          <span>Name</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" maxLength={32} autoComplete="name" />
+        </label>
+        <label className="field">
+          <span>Email</span>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ada@example.com" maxLength={254} autoComplete="email" />
+        </label>
+      </div>
+      <button className="btn wide" disabled={busy || (!name.trim() && !email.trim())}>
+        {busy ? 'Signing in…' : 'Sign in'}
+      </button>
+      <p className="muted small">Developer sign-in: no password, for testing.</p>
+      {error && <p className="form-error">{error}</p>}
+    </form>
   );
 }
 

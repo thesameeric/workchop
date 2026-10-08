@@ -137,6 +137,17 @@ describe('desks', () => {
     expect(await a.socket.emitWithAck('desk:release', 'd2')).toEqual({ ok: true });
   });
 
+  it('show a new name on the name plate as soon as their owner renames themselves in Profile', async () => {
+    const rena = await signIn('Rena');
+    const { id, owner } = await setUp();
+    const r = await join(base, id, 'Rena', { jar: rena.jar });
+    expect(await r.socket.emitWithAck('desk:claim', 'd1')).toEqual({ ok: true });
+    const heard = listen(owner.socket);
+    await rena.jar.fetch(`${base}/api/me`, json({ name: 'Rena Renamed' }, 'PATCH'));
+    await until(() => deskOwner(itemOf(id, 'd1'))?.ownerName === 'Rena Renamed');
+    expect(heard.ops.filter((op) => op.t === 'update' && op.item.id === 'd1')).toHaveLength(1);
+  });
+
   it("keep their claim when moved, and copies don't inherit it", async () => {
     const ana = await signIn('Ana');
     const { id, owner } = await setUp();

@@ -52,6 +52,9 @@
   --swatch-edge: rgba(0, 0, 0, 0.08);
   --backdrop: rgba(10, 12, 25, 0.5);
   --neutral-soft: #eceef5;
+  /* Good news (a verified email, a fine password). */
+  --ok-text: #1b8a4b;
+  --ok-soft: #e3f8ec;
   /* Sign-in buttons, as Google's and Apple's guidelines ask (light page: Google white, Apple black);
      GitHub's in its own dark grey. */
   --google-bg: #ffffff;
@@ -98,6 +101,8 @@
   --swatch-edge: rgba(255, 255, 255, 0.18);
   --backdrop: rgba(3, 4, 10, 0.65);
   --neutral-soft: #2a2e3e;
+  --ok-text: #6ee7a4;
+  --ok-soft: #173326;
   --google-bg: #131314;
   --google-line: #8e918f;
   --google-ink: #e3e3e3;
@@ -205,6 +210,11 @@ kbd {
   transition: background 0.15s, border-color 0.15s, transform 0.05s;
 }
 
+a.btn {
+  text-decoration: none;
+  color: inherit;
+}
+
 .btn:hover:not(:disabled) {
   border-color: var(--line-strong);
   background: var(--card-hover);
@@ -272,10 +282,30 @@ kbd {
   margin-bottom: 14px;
 }
 
-.field > span {
+.field > span,
+.field > label,
+.field-head label {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--muted);
+}
+
+/* A field's label with a link on the right ("Forgot password?"). */
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field-head a {
+  color: var(--primary-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.field-head a:hover {
+  text-decoration: underline;
 }
 
 .field input,
@@ -707,6 +737,314 @@ kbd {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.password-input {
+  position: relative;
+}
+
+.field .password-input input {
+  padding-right: 42px;
+}
+
+.password-input .icon-btn {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  color: var(--muted);
+}
+
+.password-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.password-hint.ok {
+  color: var(--ok-text);
+}
+
+.sign-in-alt,
+.auth-alt {
+  margin: 14px 0 0;
+  text-align: center;
+}
+
+.sign-in-alt a,
+.auth-alt a {
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+/* Sign-in and sign-up pages, and the welcome */
+.auth-page,
+.profile-page {
+  position: relative;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+.auth-card {
+  position: relative;
+  width: min(420px, calc(100% - 32px));
+  margin: 24px auto 64px;
+  padding: 28px;
+}
+
+.auth-card.wide {
+  width: min(920px, calc(100% - 32px));
+}
+
+.auth-card h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.auth-intro {
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+.auth-password {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.auth-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.auth-actions .form-error {
+  margin: 0;
+}
+
+/* Who is confirming an email address. */
+.confirm-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+}
+
+/* An address shown in a form, not to be changed there. */
+.field input[readonly] {
+  background: var(--neutral-soft);
+  color: var(--ink-soft);
+}
+
+.check-email {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.check-email p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.auth-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+/* Profile: a page outside an office, a window inside one */
+.profile-main {
+  position: relative;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 8px 32px 64px;
+}
+
+.profile-main h1 {
+  font-size: clamp(1.8rem, 3.4vw, 2.4rem);
+  letter-spacing: -0.03em;
+  margin-bottom: 20px;
+}
+
+.profile-sections {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-main .profile-section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.profile-modal .profile-sections {
+  gap: 0;
+}
+
+.profile-modal .profile-section + .profile-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.05rem;
+  margin-bottom: 14px;
+}
+
+.profile-section h2 .hgi {
+  color: var(--primary-text);
+}
+
+.profile-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.profile-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.profile-value strong {
+  overflow-wrap: anywhere;
+}
+
+.profile-actions,
+.profile-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-buttons {
+  margin-top: 12px;
+}
+
+.profile-section > p {
+  margin: 0;
+}
+
+.profile-form {
+  margin-top: 14px;
+}
+
+.profile-form .form-error {
+  margin: 0 0 12px;
+}
+
+.profile-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--primary-soft);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.profile-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.profile-save .form-error {
+  margin: 0;
+}
+
+.saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge.verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+.methods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.method {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+}
+
+.method-logo {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.method-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.method-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 /* Your spaces */
 .spaces h1 {
   overflow-wrap: anywhere;
@@ -912,6 +1250,37 @@ kbd {
 
 .lobby-devices h2 {
   margin-bottom: 0;
+}
+
+/* Signed in: who you'll be, and the camera and mic. */
+.lobby-body.compact {
+  grid-template-columns: 280px 340px;
+  justify-content: center;
+}
+
+.lobby-me {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.lobby-me .avatar-preview {
+  position: static;
+  width: 100%;
+}
+
+.lobby-me-line {
+  display: flex;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0;
+}
+
+.lobby-me-line strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .character-layout {
@@ -2486,7 +2855,8 @@ body:has(.emote-menu) .hint {
 
 @media (max-width: 960px) {
   .landing-main,
-  .lobby-body {
+  .lobby-body,
+  .lobby-body.compact {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2585,6 +2955,24 @@ body:has(.emote-menu) .hint {
 
   .sign-in-menu {
     width: min(320px, calc(100vw - 32px));
+  }
+
+  .auth-card {
+    margin-top: 8px;
+    padding: 20px 16px;
+  }
+
+  .profile-main {
+    padding: 0 16px 40px;
+  }
+
+  .profile-main .profile-section {
+    padding: 16px;
+  }
+
+  .auth-actions .btn,
+  .profile-save .btn {
+    flex: 1;
   }
 
   .lobby-body {

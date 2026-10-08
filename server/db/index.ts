@@ -32,6 +32,9 @@ export interface Db extends Tx {
   readonly description: string;
 }
 
+/** A unique index refused a row (Postgres and PGlite both say so with SQLSTATE 23505). */
+export const isUniqueViolation = (err: unknown): boolean => (err as { code?: string } | null)?.code === '23505';
+
 /** Text Postgres refuses inside jsonb: NUL characters and lone surrogates (half an emoji). */
 const NOT_IN_JSONB = /\u0000/g;
 const jsonbText = (s: string) => wellFormed(s.replace(NOT_IN_JSONB, ''));

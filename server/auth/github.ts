@@ -64,20 +64,19 @@ export function githubProvider(cfg: GithubConfig, redirectUri: string) {
     if (!Number.isSafeInteger(id) || (id as number) <= 0 || typeof user!.login !== 'string' || !LOGIN.test(user!.login)) {
       throw new Error("GitHub's /user sent an unexpected profile");
     }
-    // The public profile email; without one, the primary address if GitHub has verified it.
-    let email = emailOf(user!.email);
-    let emailVerified = false;
-    if (!email) {
-      try {
-        const emails = await get('/user/emails', token);
-        const primary = Array.isArray(emails) ? (emails as Record<string, unknown>[]).find((e) => e?.primary === true && e.verified === true) : undefined;
-        email = emailOf(primary?.email);
-        emailVerified = !!email;
-      } catch (err) {
-        // Signing in doesn't need an email address.
-        console.warn('[auth] could not read GitHub email addresses:', (err as Error).message);
-      }
+    // The primary address if GitHub has verified it (it links to the account with that address);
+    // otherwise the public profile email, as unverified.
+    let email: string | null = null;
+    try {
+      const emails = await get('/user/emails', token);
+      const primary = Array.isArray(emails) ? (emails as Record<string, unknown>[]).find((e) => e?.primary === true && e.verified === true) : undefined;
+      email = emailOf(primary?.email);
+    } catch (err) {
+      // Signing in doesn't need an email address.
+      console.warn('[auth] could not read GitHub email addresses:', (err as Error).message);
     }
+    const emailVerified = !!email;
+    email ??= emailOf(user!.email);
     const avatar = user!.avatar_url;
     return {
       provider: 'github',
@@ -87,6 +86,7 @@ export function githubProvider(cfg: GithubConfig, redirectUri: string) {
       isPrivateEmail: false,
       name: sanitizeUserName(user!.name) || sanitizeUserName(user!.login),
       avatarUrl: typeof avatar === 'string' && avatar.startsWith('https://') && avatar.length < 1000 ? avatar : null,
+      label: user!.login as string,
     };
   };
 

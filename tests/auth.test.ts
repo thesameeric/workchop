@@ -6,13 +6,14 @@ import { decodeJwt, decodeProtectedHeader } from 'jose';
 import { Events, OAuth2Server } from 'oauth2-mock-server';
 import { io as connect } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AccountUser, Space } from '../shared/account';
+import type { AccountUser, SignInMethods, Space } from '../shared/account';
 import { DEFAULT_AVATAR } from '../shared/avatar';
 import { Accounts } from '../server/accounts';
 import { authOptionsFromEnv, createAuth, safeReturnPath } from '../server/auth';
 import { parsePrivateKey } from '../server/auth/oidc';
 import type { Db } from '../server/db';
 import { startServer } from '../server/index';
+import { outboxMailer } from '../server/mail';
 import { createTestDb } from './helpers/db';
 import { createOffice, disconnectAll, Jar, join, json, until } from './helpers/http';
 
@@ -48,6 +49,7 @@ beforeAll(async () => {
       apple: { clientId: 'com.example.workchop', teamId: 'TEAM123456', keyId: 'KEY1234567', privateKey: appleKey.trim().replace(/\n/g, '\\n'), issuer },
       devLogin: true,
     },
+    mailer: outboxMailer({ log: false }),
   });
   base = `http://127.0.0.1:${server.port}`;
 }, 60_000);
@@ -90,11 +92,11 @@ async function appleLogin(user?: string) {
 
 describe('sign-in', () => {
   it('lists the providers that are set up', async () => {
-    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: true, apple: true, github: false, dev: true });
+    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: true, apple: true, github: false, dev: true, password: true, emailLinks: true });
   });
 
   it('signs in with Google, with a fresh hashed session each time', async () => {
-    claims = { sub: 'google-1', email: 'Gina@Example.com', email_verified: true, name: 'Gina Google', picture: 'https://example.com/g.png' };
+    claims = { sub: 'google-1', email: 'Gina@Example.com', email_verified: true, hd: 'example.com', name: 'Gina Google', picture: 'https://example.com/g.png' };
     const jar = new Jar();
     const { authorize, callback } = await googleUntilCallback(jar, '/o/abc?x=1');
     expect(authorize.origin).toBe(new URL(oauth.issuer.url!).origin);
@@ -118,7 +120,7 @@ describe('sign-in', () => {
     expect(jar.cookies.has('wc_auth')).toBe(false);
 
     const user = await me(jar);
-    expect(user).toMatchObject({ name: 'Gina Google', email: 'gina@example.com', avatarUrl: 'https://example.com/g.png', profile: {} });
+    expect(user).toMatchObject({ name: 'Gina Google', email: 'gina@example.com', emailVerified: true, hasPassword: false, avatarUrl: 'https://example.com/g.png', profile: {} });
     const token = jar.cookies.get('wc_session')!;
     const stored = (await server.db.query<{ token_hash: string }>('SELECT token_hash FROM sessions WHERE user_id = $1', [user!.id])).rows;
     expect(stored.map((r) => r.token_hash)).toEqual([sha256(token)]);
@@ -172,14 +174,111 @@ describe('sign-in', () => {
     expect(second.user).toMatchObject({ id: first.user!.id, name: 'Ada Lovelace' });
   });
 
-  it('never links accounts by email address', async () => {
-    claims = { sub: 'google-2', email: 'same@example.com', email_verified: true, name: 'Same' };
+  it('links a new sign-in to the account with its verified address, never an unverified one or the dev login', async () => {
+    // A Google Workspace account (hd): Google vouches for the address.
+    claims = { sub: 'google-2', email: 'Same@Example.com', email_verified: true, hd: 'example.com', name: 'Same' };
     const jar = new Jar();
     const { callback } = await googleUntilCallback(jar);
     await jar.fetch(`${base}${callback}`);
+    const same = (await me(jar))!;
+    expect(same).toMatchObject({ email: 'same@example.com', emailVerified: true });
+
+    // The dev login checks no address.
     const dev = new Jar();
     await dev.fetch(`${base}/api/auth/dev`, json({ name: 'Same', email: 'same@example.com' }));
-    expect((await me(jar))!.id).not.toBe((await me(dev))!.id);
+    expect((await me(dev))!).toMatchObject({ email: 'same@example.com', emailVerified: false });
+    expect((await me(dev))!.id).not.toBe(same.id);
+
+    // Apple verified the same address: the same account, keeping its name.
+    claims = { sub: 'apple-same', email: 'same@example.com', email_verified: 'true' };
+    const apple = await appleLogin(JSON.stringify({ name: { firstName: 'Other', lastName: 'Name' } }));
+    expect(apple.user).toMatchObject({ id: same.id, name: 'Same' });
+
+    // An address Google didn't verify gets an account of its own.
+    claims = { sub: 'google-unverified', email: 'same@example.com', email_verified: false, name: 'Unverified' };
+    const unverified = new Jar();
+    await unverified.fetch(`${base}${(await googleUntilCallback(unverified)).callback}`);
+    expect((await me(unverified))!).toMatchObject({ name: 'Unverified', emailVerified: false });
+    expect((await me(unverified))!.id).not.toBe(same.id);
+
+    // Nor does a personal Google account made with an address Google doesn't run (it may be a former
+    // work address); Gmail addresses are Google's own.
+    claims = { sub: 'google-personal', email: 'same@example.com', email_verified: true, name: 'Personal' };
+    const personal = new Jar();
+    await personal.fetch(`${base}${(await googleUntilCallback(personal)).callback}`);
+    expect((await me(personal))!).toMatchObject({ name: 'Personal', emailVerified: false });
+    expect((await me(personal))!.id).not.toBe(same.id);
+    claims = { sub: 'google-gmail', email: 'Same.Person@Gmail.com', email_verified: true, name: 'Gmail' };
+    const gmail = new Jar();
+    await gmail.fetch(`${base}${(await googleUntilCallback(gmail)).callback}`);
+    expect((await me(gmail))!).toMatchObject({ email: 'same.person@gmail.com', emailVerified: true });
+
+    const methods = (await (await jar.fetch(`${base}/api/me/sign-in`)).json()) as SignInMethods;
+    expect(methods).toEqual({
+      methods: [
+        { provider: 'google', subject: 'google-2', label: 'same@example.com', email: 'same@example.com', emailVerified: true },
+        { provider: 'apple', subject: 'apple-same', label: 'same@example.com', email: 'same@example.com', emailVerified: true },
+      ],
+      hasPassword: false,
+    });
+  });
+
+  it('connects another sign-in method from Profile, and removes it while another remains', async () => {
+    const fromApp = { headers: { 'Sec-Fetch-Site': 'same-origin' } };
+    const jar = new Jar();
+    await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Linda', email: 'linda@example.com' }));
+    const linda = (await me(jar))!;
+    claims = { sub: 'google-linda', email: 'linda@example.com', email_verified: true, hd: 'example.com', name: 'Google Linda', picture: 'https://example.com/l.png' };
+    const start = await jar.fetch(`${base}/api/auth/google/start?link=1&return=/profile`, fromApp);
+    const back = new URL((await fetch(start.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!);
+    const session = jar.cookies.get('wc_session');
+    const done = await jar.fetch(`${base}${back.pathname}${back.search}`);
+    expect(done.headers.get('location')).toBe('/profile');
+    // Still the same session and account, which now has Google's (verified) address and picture.
+    expect(jar.cookies.get('wc_session')).toBe(session);
+    expect(await me(jar)).toMatchObject({ id: linda.id, name: 'Linda', email: 'linda@example.com', emailVerified: true, avatarUrl: 'https://example.com/l.png' });
+    expect(((await (await jar.fetch(`${base}/api/me/sign-in`)).json()) as SignInMethods).methods.map((m) => m.provider)).toEqual(['google']);
+
+    // That Google account now signs in to Linda's account.
+    const google = new Jar();
+    await google.fetch(`${base}${(await googleUntilCallback(google)).callback}`);
+    expect((await me(google))?.id).toBe(linda.id);
+
+    // Someone else can't take it over.
+    const other = new Jar();
+    await other.fetch(`${base}/api/auth/dev`, json({ name: 'Otto' }));
+    const otherStart = await other.fetch(`${base}/api/auth/google/start?link=1&return=/profile`, fromApp);
+    const otherBack = new URL((await fetch(otherStart.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!);
+    expect((await other.fetch(`${base}${otherBack.pathname}${otherBack.search}`)).headers.get('location')).toBe('/profile?auth_error=linked-elsewhere');
+
+    // Linking needs a session, and a start on Workchop's own page.
+    expect((await new Jar().fetch(`${base}/api/auth/google/start?link=1&return=/profile`, fromApp)).headers.get('location')).toBe('/profile?auth_error=failed');
+    expect((await jar.fetch(`${base}/api/auth/google/start?link=1&return=/profile`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).headers.get('location')).toBe(
+      '/profile?auth_error=failed',
+    );
+    // And the same session when Google answers: signed in as someone else meanwhile, nothing is connected.
+    const switched = new Jar();
+    await switched.fetch(`${base}/api/auth/dev`, json({ name: 'Sam' }));
+    claims = { sub: 'google-switched', email: 'sam@example.com', email_verified: true, hd: 'example.com', name: 'Sam' };
+    const switchedStart = await switched.fetch(`${base}/api/auth/google/start?link=1&return=/profile`, fromApp);
+    const switchedBack = new URL((await fetch(switchedStart.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!);
+    await switched.fetch(`${base}/api/auth/dev`, json({ name: 'Someone Else' }));
+    expect((await switched.fetch(`${base}${switchedBack.pathname}${switchedBack.search}`)).headers.get('location')).toBe('/profile?auth_error=failed');
+    expect(((await (await switched.fetch(`${base}/api/me/sign-in`)).json()) as SignInMethods).methods).toEqual([]);
+
+    // Linda can still sign in with the dev login, so Google can go; then nothing else may.
+    const removed = await jar.fetch(`${base}/api/me/sign-in/google/google-linda`, { method: 'DELETE' });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ methods: [], hasPassword: false });
+    expect((await jar.fetch(`${base}/api/me/sign-in/google/google-linda`, { method: 'DELETE' })).status).toBe(404);
+    expect((await jar.fetch(`${base}/api/me/sign-in/dev/linda@example.com`, { method: 'DELETE' })).status).toBe(404);
+    claims = { sub: 'google-only', email: 'only@example.com', email_verified: true, name: 'Only' };
+    const only = new Jar();
+    await only.fetch(`${base}${(await googleUntilCallback(only)).callback}`);
+    const last = await only.fetch(`${base}/api/me/sign-in/google/google-only`, { method: 'DELETE' });
+    expect(last.status).toBe(409);
+    expect(((await last.json()) as { error: string }).error).toBeTruthy();
+    expect((await fetch(`${base}/api/me/sign-in`)).status).toBe(401);
   });
 
   it('dev login, profile changes and logout', async () => {

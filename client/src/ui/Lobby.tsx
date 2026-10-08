@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
 import { saveCharacter } from '../lib/account';
 import { fetchOfficeInfo } from '../lib/api';
 import { media } from '../lib/media';
-import { navigate } from '../lib/router';
+import { navigate, withNext } from '../lib/router';
 import { enterOffice } from '../lib/session';
 import { rememberOffice } from '../lib/storage';
-import { setState, useStore } from '../state/store';
+import { getState, setState, useStore } from '../state/store';
 import { AccountButton, SignInButton } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from './icons';
+import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, UserEditIcon } from './icons';
 import { useMediaState, VideoView } from './media';
 
 type OfficeInfo = { name: string; online: number };
@@ -39,9 +39,13 @@ export function Lobby() {
     };
   }, [officeId, attempt]);
 
-  // Ask for camera/mic once, so people can check how they look before going in.
+  // Ask for camera/mic once, so people can check how they look before going in. Off to another page
+  // (not into the office), they go off again; checked once this render is done, as React also
+  // unmounts and remounts once in development.
   useEffect(() => {
-    if (!media.audioTrack && !media.camTrack) void media.start();
+    const elsewhere = () => getState().phase !== 'lobby' && getState().phase !== 'office';
+    if (!media.audioTrack && !media.camTrack) void media.start().then(() => elsewhere() && media.stopAll());
+    return () => void setTimeout(() => elsewhere() && media.stopAll());
   }, []);
 
   if (unreachable) {
@@ -101,32 +105,22 @@ export function Lobby() {
           {ready && (accountId ? <AccountButton /> : <SignInButton />)}
         </div>
       </header>
-      {/* Signed in, the form starts from the account's character: wait to know who you are, and
-          start afresh when you sign in or out here. */}
-      {ready ? <LobbyForm key={accountId ?? 'guest'} info={info} /> : <p className="lobby-wait muted">Loading…</p>}
+      {/* Wait to know who you are: signed in, you come in as your profile says; guests pick a name
+          and a character here. */}
+      {!ready ? <p className="lobby-wait muted">Loading…</p> : accountId ? <SignedInJoin info={info} /> : <LobbyForm info={info} />}
     </div>
   );
 }
 
-function LobbyForm({ info }: { info: OfficeInfo | undefined }) {
+/** Goes in; `prepare` runs first (a guest's name and character). */
+function useJoin(info: OfficeInfo | undefined, prepare?: () => void) {
   const officeId = useStore((s) => s.officeId)!;
-  const me = useStore((s) => s.me);
-  const [name, setName] = useState(me.name);
-  const [avatar, setAvatar] = useState(me.avatar);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const m = useMediaState();
-
-  const preview = useMemo(() => (m.videoTrack ? new MediaStream([m.videoTrack]) : null), [m.videoTrack]);
-  const cleanName = sanitizeName(name);
-
-  const join = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!cleanName) return;
+  const join = async () => {
     setJoining(true);
     setError(null);
-    setState((s) => ({ me: { ...s.me, name: cleanName, avatar } }));
-    void saveCharacter({ name: cleanName, avatar });
+    prepare?.();
     try {
       await enterOffice(officeId);
       rememberOffice(officeId, info?.name ?? officeId);
@@ -135,9 +129,54 @@ function LobbyForm({ info }: { info: OfficeInfo | undefined }) {
       setJoining(false);
     }
   };
+  return { join, joining, error };
+}
+
+/** Signed in: you come in as your profile says, so only the camera and mic to check. */
+function SignedInJoin({ info }: { info: OfficeInfo | undefined }) {
+  const me = useStore((s) => s.me);
+  const { join, joining, error } = useJoin(info);
+  const named = !!sanitizeName(me.name);
+  return (
+    <form
+      className="lobby-body compact"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (named) void join();
+      }}
+    >
+      <section className="card lobby-me">
+        <AvatarPreview avatar={me.avatar} height={240} />
+        <p className="lobby-me-line">
+          <span className="muted">Joining as</span> <strong title={me.name}>{me.name}</strong>
+        </p>
+        <button type="button" className="btn small" onClick={() => navigate(withNext('/profile', location.pathname))}>
+          <UserEditIcon size={16} /> Edit profile
+        </button>
+      </section>
+      <DeviceCheck joinLabel={named ? 'Join office' : 'Add your name in your profile'} canJoin={named && info !== undefined} joining={joining} error={error} />
+    </form>
+  );
+}
+
+function LobbyForm({ info }: { info: OfficeInfo | undefined }) {
+  const me = useStore((s) => s.me);
+  const [name, setName] = useState(me.name);
+  const [avatar, setAvatar] = useState(me.avatar);
+  const cleanName = sanitizeName(name);
+  const { join, joining, error } = useJoin(info, () => {
+    setState((s) => ({ me: { ...s.me, name: cleanName, avatar } }));
+    void saveCharacter({ name: cleanName, avatar });
+  });
 
   return (
-    <form className="lobby-body" onSubmit={join}>
+    <form
+      className="lobby-body"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (cleanName) void join();
+      }}
+    >
       <section className="card lobby-character">
         <h2>Your character</h2>
         <div className="character-layout">
@@ -145,28 +184,37 @@ function LobbyForm({ info }: { info: OfficeInfo | undefined }) {
           <AvatarEditor name={name} avatar={avatar} onName={setName} onAvatar={setAvatar} />
         </div>
       </section>
-      <aside className="card lobby-devices">
-        <h2>Camera & mic</h2>
-        <div className="device-preview">
-          {preview && m.cam ? <VideoView stream={preview} mirror /> : <div className="device-off">Camera is off</div>}
-          <div className="device-toggles">
-            <button type="button" className={`round-btn${m.mic ? '' : ' off'}`} onClick={() => media.setMic(!m.mic)} title={m.mic ? 'Mute' : 'Unmute'}>
-              {m.mic ? <MicIcon /> : <MicOffIcon />}
-            </button>
-            <button type="button" className={`round-btn${m.cam ? '' : ' off'}`} onClick={() => media.setCam(!m.cam)} title={m.cam ? 'Turn camera off' : 'Turn camera on'}>
-              {m.cam ? <CamIcon /> : <CamOffIcon />}
-            </button>
-          </div>
-        </div>
-        {m.error && <p className="form-error">{m.error}</p>}
-        <p className="muted small">
-          You’ll hear and see people when you walk close to them. You can change this any time.
-        </p>
-        <button className="btn primary wide big" disabled={!cleanName || joining || info === undefined}>
-          {joining ? 'Joining…' : cleanName ? 'Join office' : 'Enter a name to join'}
-        </button>
-        {error && <p className="form-error">{error}</p>}
-      </aside>
+      <DeviceCheck joinLabel={cleanName ? 'Join office' : 'Enter a name to join'} canJoin={!!cleanName && info !== undefined} joining={joining} error={error} />
     </form>
+  );
+}
+
+/** Camera and mic, to see how you look before going in, and the Join button. */
+function DeviceCheck({ joinLabel, canJoin, joining, error }: { joinLabel: string; canJoin: boolean; joining: boolean; error: string | null }) {
+  const m = useMediaState();
+  const preview = useMemo(() => (m.videoTrack ? new MediaStream([m.videoTrack]) : null), [m.videoTrack]);
+  return (
+    <aside className="card lobby-devices">
+      <h2>Camera & mic</h2>
+      <div className="device-preview">
+        {preview && m.cam ? <VideoView stream={preview} mirror /> : <div className="device-off">Camera is off</div>}
+        <div className="device-toggles">
+          <button type="button" className={`round-btn${m.mic ? '' : ' off'}`} onClick={() => media.setMic(!m.mic)} title={m.mic ? 'Mute' : 'Unmute'}>
+            {m.mic ? <MicIcon /> : <MicOffIcon />}
+          </button>
+          <button type="button" className={`round-btn${m.cam ? '' : ' off'}`} onClick={() => media.setCam(!m.cam)} title={m.cam ? 'Turn camera off' : 'Turn camera on'}>
+            {m.cam ? <CamIcon /> : <CamOffIcon />}
+          </button>
+        </div>
+      </div>
+      {m.error && <p className="form-error">{m.error}</p>}
+      <p className="muted small">
+        You’ll hear and see people when you walk close to them. You can change this any time.
+      </p>
+      <button className="btn primary wide big" disabled={!canJoin || joining}>
+        {joining ? 'Joining…' : joinLabel}
+      </button>
+      {error && <p className="form-error">{error}</p>}
+    </aside>
   );
 }

@@ -9,6 +9,7 @@ import { Server } from 'socket.io';
 import type { AccountUser, Space } from '../shared/account';
 import { sanitizeName } from '../shared/avatar';
 import type { TemplateId } from '../shared/templates';
+import type { PlayerPatch } from '../shared/types';
 import { Accounts } from './accounts';
 import { authOptionsFromEnv, createAuth, type AuthOptions } from './auth';
 import { openDb, type DatabaseSsl, type Db } from './db';
@@ -16,7 +17,8 @@ import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
 import { registerFeatures, type Feature, type ServerContext } from './features';
 import { dormantFeatures, serverFeatures } from './features/index';
-import { windowLimiter } from './limits';
+import { addressKey, windowLimiter } from './limits';
+import { mailerFromEnv, type Mailer } from './mail';
 import { OfficeStore } from './officeStore';
 import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
 import { SqlOfficeRepo } from './repos';
@@ -40,6 +42,8 @@ export interface ServerOptions {
   publicUrl?: string | null;
   /** Sign-in providers; defaults to the GOOGLE_*, APPLE_*, GITHUB_* and DEV_LOGIN variables. */
   auth?: AuthOptions;
+  /** Sends email (sign-up and password links); defaults to RESEND_API_KEY and EMAIL_FROM, or the dev outbox. */
+  mailer?: Mailer;
   /** Upload settings; unset ones come from UPLOADS_STORAGE, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_*. */
   uploads?: Partial<UploadOptions>;
   /** Server features to load; defaults to serverFeatures() in server/features/index.ts (which reads COINS). */
@@ -104,6 +108,7 @@ export async function startServer(opts: ServerOptions = {}) {
   const publicOrigin = originOf(publicUrl);
   const uploadOptions = { ...uploadOptionsFromEnv(dataDir), ...opts.uploads };
   if (uploadOptions.storage === 's3' && !uploadOptions.s3) throw new Error(S3_MISSING);
+  const mailer = opts.mailer ?? mailerFromEnv(process.env, undefined, opts.quiet);
   const db = opts.db ?? (await openDb({ databaseUrl: opts.databaseUrl, databaseSsl: opts.databaseSsl, dataDir }));
   try {
     const dormant = opts.features ? [] : dormantFeatures().flatMap((f) => f.migrations ?? []);
@@ -136,23 +141,40 @@ export async function startServer(opts: ServerOptions = {}) {
       callback(null, !origin || !publicOrigin || origin === publicOrigin);
     },
   });
-  const auth = createAuth({
-    db,
-    accounts,
-    publicOrigin,
-    options: opts.auth ?? authOptionsFromEnv(),
-    onLogout: (tokenHash) => io.in(sessionRoom(tokenHash)).disconnectSockets(true),
-    onUserUpdated: (user) => io.to(userRoom(user.id)).emit('account:updated', user),
-    quiet: opts.quiet,
-  });
-  io.use(auth.socketMiddleware);
-  const realtime = attachRealtime(io, store, { accounts });
-
   const ipHeader = (opts.clientIpHeader !== undefined ? opts.clientIpHeader : process.env.CLIENT_IP_HEADER)?.trim().toLowerCase() || null;
   const clientIp = (req: express.Request): string => {
     const forwarded = ipHeader ? req.get(ipHeader)?.split(',')[0]?.trim() : undefined;
     return forwarded || req.ip || 'unknown';
   };
+  const userUpdatedHandlers: ((user: AccountUser) => void | Promise<void>)[] = [];
+  const auth = createAuth({
+    db,
+    accounts,
+    publicOrigin,
+    options: opts.auth ?? authOptionsFromEnv(),
+    mailer,
+    clientIp,
+    onLogout: (tokenHash) => io.in(sessionRoom(tokenHash)).disconnectSockets(true),
+    onUserUpdated: (user) => {
+      io.to(userRoom(user.id)).emit('account:updated', user);
+      // Their name and character in the offices they're in right now.
+      for (const { officeId, player } of realtime.playersOfUser(user.id)) {
+        const patch: PlayerPatch = {};
+        if (player.name !== user.name) patch.name = user.name;
+        const avatar = user.profile.avatar;
+        if (avatar && JSON.stringify(avatar) !== JSON.stringify(player.avatar)) patch.avatar = avatar;
+        if (Object.keys(patch).length) realtime.updatePlayer(officeId, player.id, patch);
+      }
+      for (const handler of userUpdatedHandlers) {
+        Promise.resolve()
+          .then(() => handler(user))
+          .catch((err) => console.error('[workchop] a feature failed to handle an account change:', err));
+      }
+    },
+    quiet: opts.quiet,
+  });
+  io.use(auth.socketMiddleware);
+  const realtime = attachRealtime(io, store, { accounts });
   const socketIp: ServerContext['socketIp'] = ({ handshake }) => {
     const header = ipHeader ? handshake.headers[ipHeader] : undefined;
     const forwarded = (Array.isArray(header) ? header[0] : header)?.split(',')[0]?.trim();
@@ -264,10 +286,21 @@ export async function startServer(opts: ServerOptions = {}) {
 
   app.get('/api/uploads/:id{/:name}', uploads.download);
 
-  // Each sign-in attempt stores a little state, so limit them like office creation.
+  // Each sign-in attempt stores a little state or checks a password, so limit them like office creation.
   const maySignIn = windowLimiter(60, 15 * 60 * 1000);
-  app.use(['/api/auth/dev', '/api/auth/:provider/start'], (req, res, next) => {
-    if (maySignIn(clientIp(req))) return next();
+  const signInRoutes = [
+    '/api/auth/dev',
+    '/api/auth/:provider/start',
+    // With what follows them: /signup/finish, /password/forgot and /password/reset, /me/password/link.
+    '/api/auth/signup',
+    '/api/auth/password',
+    '/api/auth/email/confirm',
+    '/api/auth/link/peek',
+    '/api/me/password',
+    '/api/me/email',
+  ];
+  app.use(signInRoutes, (req, res, next) => {
+    if (maySignIn(addressKey(clientIp(req)))) return next();
     res.status(429).json({ error: 'Too many sign-in attempts, try again later.' });
   });
   app.use('/api', auth.router);
@@ -301,7 +334,12 @@ export async function startServer(opts: ServerOptions = {}) {
     io,
     db,
     store,
-    auth: { userFromRequest: auth.userFromRequest, requireUser: auth.requireUser, failGithubSignIn: auth.failGithubSignIn },
+    auth: {
+      userFromRequest: auth.userFromRequest,
+      requireUser: auth.requireUser,
+      failGithubSignIn: auth.failGithubSignIn,
+      onUserUpdated: (handler) => void userUpdatedHandlers.push(handler),
+    },
     realtime,
     uploads,
     publicOrigin,
@@ -390,6 +428,7 @@ export async function startServer(opts: ServerOptions = {}) {
       await store.close();
       await closeFeatures();
       await auth.close();
+      await mailer.close();
       if (!opts.db) await db.close();
     },
   };
@@ -409,6 +448,7 @@ if (isMain) {
     // The built app is served on its own port, not Vite's: there's no sensible default address.
     publicUrl: process.env.PUBLIC_URL || (production ? null : undefined),
     auth: authOptionsFromEnv(process.env, production),
+    mailer: mailerFromEnv(process.env, production),
     clientDir: production ? (process.env.CLIENT_DIR ?? path.resolve(here, '../client')) : null,
   }).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'EADDRINUSE') throw err;

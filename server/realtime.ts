@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
+import type { AccountUser } from '../shared/account';
 import { isEmote, sanitizeAvatar, sanitizeName, sanitizeProfile, sanitizeStatus } from '../shared/avatar';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
@@ -257,12 +258,30 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       const keyOwner = typeof req.ownerKey === 'string' && req.ownerKey === stored.ownerKey;
       // Signed-in people become members (owners with the owner key); being signed in is never required.
+      // They appear with their account's name and character, whatever the page sent.
       let role: 'owner' | 'member' | null = null;
+      let account: AccountUser | null = null;
       if (user && opts.accounts) {
         try {
           role = await opts.accounts.visit(user.id, id, keyOwner);
         } catch (err) {
           console.error('[accounts] could not record a visit:', err);
+        }
+        try {
+          account = await opts.accounts.get(user.id);
+        } catch (err) {
+          console.error('[accounts] could not load an account:', err);
+        }
+        // Never as someone else: without their account, they can't come in.
+        if (!account) return ack({ ok: false, error: 'Could not load your account right now. Please try again.' });
+        // An account without a character yet keeps the one they came in with.
+        if (!account.profile.avatar && req.avatar && typeof req.avatar === 'object') {
+          try {
+            account = (await opts.accounts.update(user.id, { profile: { avatar: sanitizeAvatar(req.avatar) } })) ?? account;
+            io.to(userRoom(user.id)).emit('account:updated', account);
+          } catch (err) {
+            console.error('[accounts] could not save a character:', err);
+          }
         }
       }
       // While we waited, the office's last visitor may have left and the office been dropped from
@@ -286,8 +305,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       const spot = spawnSpot(stored.office, r.players.values());
       const player: PlayerState = {
         id: socket.id,
-        name: sanitizeName(req.name) || 'Guest',
-        avatar: sanitizeAvatar(req.avatar),
+        name: account?.name || sanitizeName(req.name) || 'Guest',
+        avatar: account?.profile.avatar ?? sanitizeAvatar(req.avatar),
         status: sanitizeStatus(req.status),
         x: spot.x,
         z: spot.z,
@@ -331,7 +350,13 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     socket.on('profile', (patch) => {
       const p = me();
       if (!p || !office() || !room || !patch || typeof patch !== 'object' || !canProfile()) return;
-      api.updatePlayer(room.officeId, p.id, sanitizeProfile(patch, p.name));
+      const clean = sanitizeProfile(patch, p.name);
+      // A signed-in person's name and character change only with their account (Profile).
+      if (user) {
+        delete clean.name;
+        delete clean.avatar;
+      }
+      if (Object.keys(clean).length) api.updatePlayer(room.officeId, p.id, clean);
     });
 
     socket.on('emote', (emoji) => {

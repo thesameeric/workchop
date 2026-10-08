@@ -1,15 +1,17 @@
 import { create } from 'zustand';
-import type { AccountUser, AuthProvider } from '../../../shared/account';
+import type { AccountUser, SignInProviders } from '../../../shared/account';
 import type { SpotifySession } from '../../../shared/music';
 import type { AvatarConfig, Office, PlayerState, Status } from '../../../shared/types';
 import { loadProfile } from '../lib/storage';
 import type { IconComponent } from '../ui/icons';
 
-export type Phase = 'landing' | 'lobby' | 'office';
+export type Phase = 'landing' | 'lobby' | 'office' | 'auth' | 'profile' | 'welcome';
+/** The page shown in the 'auth' phase (its path: /signin, /signup…). */
+export type AuthPage = 'signin' | 'signup' | 'forgot' | 'reset' | 'confirm-email';
 /** The open side panel: 'none', or the id of a panel in ui/panels.tsx ('chat', 'people', 'build', 'music'…). */
 export type Panel = string;
 export type BuildTool = 'select' | 'place' | 'zone';
-export type Modal = 'none' | 'avatar' | 'settings';
+export type Modal = 'none' | 'avatar' | 'settings' | 'profile';
 
 export type RemotePlayer = Omit<PlayerState, 'x' | 'z' | 'ry' | 'anim'>;
 
@@ -40,6 +42,9 @@ export type SpotifyStatus = 'disabled' | 'disconnected' | 'connecting' | 'ready'
 interface State {
   phase: Phase;
   officeId: string | null;
+  authPage: AuthPage;
+  /** The token from an emailed link (`/reset#t=…`), taken out of the address. */
+  linkToken: string | null;
   connection: 'online' | 'reconnecting';
 
   /** Who is signed in (null for guests). */
@@ -47,7 +52,7 @@ interface State {
   /** Whether we know yet (GET /api/me answered or failed), so the lobby doesn't show a guest first. */
   accountReady: boolean;
   /** Sign-in methods the server offers. */
-  providers: Record<AuthProvider, boolean>;
+  providers: SignInProviders;
 
   selfId: string | null;
   isOwner: boolean;
@@ -135,10 +140,12 @@ export const initialBuild: State['build'] = { tool: 'select', placeType: null, r
 export const useStore = create<State>()(() => ({
   phase: 'landing',
   officeId: null,
+  authPage: 'signin',
+  linkToken: null,
   connection: 'online',
   account: null,
   accountReady: false,
-  providers: { google: false, apple: false, github: false, dev: false },
+  providers: { google: false, apple: false, github: false, dev: false, password: false, emailLinks: false },
   selfId: null,
   isOwner: false,
   office: null,

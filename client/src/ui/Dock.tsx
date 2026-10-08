@@ -112,7 +112,7 @@ function EmoteMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
   );
 }
 
-/** You: edits your character, or for signed-in people opens the account menu. */
+/** You: a guest's character, or for signed-in people the account menu (with their profile). */
 function MeButton() {
   const me = useStore((s) => s.me);
   const account = useStore((s) => s.account);
@@ -145,7 +145,7 @@ function MeButton() {
         account &&
         createPortal(
           <div className="dock-menu" ref={menuRef} style={at}>
-            <AccountMenu user={account} onClose={close} onEditCharacter={editCharacter} />
+            <AccountMenu user={account} onClose={close} onProfile={() => setState({ modal: 'profile' })} />
           </div>,
           document.body,
         )}

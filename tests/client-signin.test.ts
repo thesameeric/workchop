@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AuthProvider } from '../shared/account';
+import type { SignInProviders } from '../shared/account';
 
 // Which sign-in methods the client offers, and what depends on there being one: the sign-in buttons,
 // and the parts that need an account (GitHub, the desktop helper). With a stand-in for the app's store
@@ -10,12 +10,15 @@ import type { AuthProvider } from '../shared/account';
 const fake = vi.hoisted(() => {
   vi.stubGlobal('location', { pathname: '/o/abc', search: '?x=1' });
   const fake = {
-    state: { account: null as { id: string } | null, providers: { google: false, apple: false, github: false, dev: false } as Record<AuthProvider, boolean> },
+    state: {
+      account: null as { id: string } | null,
+      providers: { google: false, apple: false, github: false, dev: false, password: false, emailLinks: false } as SignInProviders,
+    },
     listeners: new Set<(state: unknown, prev: unknown) => void>(),
     /** This server's sign-in methods, telling the store's subscribers. */
-    setProviders(providers: Partial<Record<AuthProvider, boolean>>) {
+    setProviders(providers: Partial<SignInProviders>) {
       const prev = fake.state;
-      fake.state = { ...prev, providers: { google: false, apple: false, github: false, dev: false, ...providers } };
+      fake.state = { ...prev, providers: { google: false, apple: false, github: false, dev: false, password: false, emailLinks: false, ...providers } };
       for (const listener of fake.listeners) listener(fake.state, prev);
     },
     /** Signs in or out, telling the store's subscribers. */
@@ -64,7 +67,7 @@ const { fetchProviders } = await import('../client/src/lib/api');
 const { SignInButton, SignInOptions } = await import('../client/src/ui/Account');
 const { useGithub } = await import('../client/src/features/github/state');
 
-const none = { google: false, apple: false, github: false, dev: false };
+const none: SignInProviders = { google: false, apple: false, github: false, dev: false, password: false, emailLinks: false };
 const render = (component: () => unknown) => renderToStaticMarkup(createElement(component as () => null));
 
 describe('sign-in methods (client)', () => {
@@ -76,7 +79,7 @@ describe('sign-in methods (client)', () => {
 
   it("reads the server's methods, GitHub included, as booleans", async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ google: 'yes', github: true }));
-    expect(await fetchProviders()).toEqual({ google: false, apple: false, github: true, dev: false });
+    expect(await fetchProviders()).toEqual({ ...none, github: true });
     expect(fetch).toHaveBeenCalledWith('/api/auth/providers', expect.anything());
     fetch.mockRestore();
   });

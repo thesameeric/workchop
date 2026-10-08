@@ -230,6 +230,8 @@ describe('your weather in the app', () => {
     id: 'u1',
     name: 'Ada',
     email: null,
+    emailVerified: false,
+    hasPassword: false,
     avatarUrl: null,
     profile: { settings: weather === undefined ? {} : { weather } },
   });

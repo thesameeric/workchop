@@ -415,8 +415,8 @@ describe('realtime', () => {
     a.socket.emit('profile', { focus: 'yes' as never, app: 'vscode' } as never);
     expect(await updated).toEqual([aId, { focus: false }]);
     updated = next(b.socket, 'player:updated');
-    a.socket.emit('profile', { app: 'figma' } as never);
-    expect(await updated).toEqual([aId, {}]);
+    a.socket.emit('profile', { app: 'figma', mic: true } as never);
+    expect(await updated).toEqual([aId, { mic: true }]);
     expect(server.realtime.rooms.get(id)?.players.get(aId as string)).toMatchObject({ focus: false });
     expect(server.realtime.rooms.get(id)?.players.get(aId as string)?.app).toBeUndefined();
   });

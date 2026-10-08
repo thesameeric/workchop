@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import { parseCookie, stringifySetCookie } from 'cookie';
 import express from 'express';
 import * as client from 'openid-client';
-import { MAX_SETTINGS, sanitizeProfile, sanitizeUserName, type AccountUser, type AuthProvider } from '../../shared/account';
+import { MAX_SETTINGS, sanitizeProfile, sanitizeUserName, type AccountUser, type AuthProvider, type SignInProviders } from '../../shared/account';
 import { clip } from '../../shared/text';
 import { TooManySettings, type Accounts, type Identity } from '../accounts';
 import type { Db } from '../db';
+import { noMail, type Mailer } from '../mail';
 import type { ClientSocket } from '../realtime';
+import { emailRoutes } from './email';
 import { GITHUB_API_BASE, GITHUB_OAUTH_BASE, githubProvider, type GithubConfig, type GithubProvider } from './github';
 import { APPLE_ISSUER, appleProvider, checkPrivateKey, GOOGLE_ISSUER, googleProvider, parsePrivateKey, type AppleConfig, type GoogleConfig, type OidcProvider } from './oidc';
 import { hashToken, SESSION_DAYS, Sessions, type Session } from './sessions';
@@ -97,9 +99,13 @@ const TX_MINUTES = 10;
 export interface AuthDeps {
   db: Db;
   accounts: Accounts;
-  /** Origin the browser uses (PUBLIC_URL); null disables Google, Apple and GitHub, which need it for redirects. */
+  /** Origin the browser uses (PUBLIC_URL); null disables Google, Apple, GitHub and emailed links, which need it. */
   publicOrigin: string | null;
   options: AuthOptions;
+  /** Sends sign-up, password and email-change links; without one, signing up with email is off. */
+  mailer?: Mailer;
+  /** The visitor's address, for per-visitor limits. */
+  clientIp?: (req: express.Request) => string;
   /** Called after a session is deleted, to disconnect its sockets. */
   onLogout?: (tokenHash: string) => void;
   /** Called after someone changed their account (PATCH /api/me), to tell their other tabs and devices. */
@@ -109,10 +115,14 @@ export interface AuthDeps {
 
 export type Auth = ReturnType<typeof createAuth>;
 
-/** Sign-in with Google, Apple, GitHub or the dev login, cookie sessions, and the /api/auth and /api/me routes. */
+/**
+ * Sign-in with email and password, Google, Apple, GitHub or the dev login, cookie sessions, and the
+ * /api/auth and /api/me routes.
+ */
 export function createAuth(deps: AuthDeps) {
   const { db, accounts, publicOrigin, options } = deps;
   const sessions = new Sessions(db);
+  const mailer = deps.mailer ?? noMail();
   // Secure cookies need HTTPS, and Safari won't send them to http://localhost.
   const secure = publicOrigin?.startsWith('https:') ?? false;
   const sessionCookie = secure ? '__Host-wc_session' : 'wc_session';
@@ -140,7 +150,8 @@ export function createAuth(deps: AuthDeps) {
     }
   }
   if (!deps.quiet) {
-    const on = [...Object.keys(providers), ...(github ? ['github'] : []), ...(options.devLogin ? ['dev login'] : [])];
+    const mail = mailer.kind !== 'off' && publicOrigin ? ['email'] : [];
+    const on = [...mail, ...Object.keys(providers), ...(github ? ['github'] : []), ...(options.devLogin ? ['dev login'] : [])];
     console.log(on.length ? `[auth] sign-in with ${on.join(', ')}` : '[auth] no sign-in method is set up: everyone joins as a guest (no accounts, desks or GitHub)');
     if (github) console.log(`[auth] GitHub sign-in callback to register: ${publicOrigin}/api/auth/github/callback`);
   }
@@ -189,7 +200,7 @@ export function createAuth(deps: AuthDeps) {
   };
 
   /** Starts a session for `user` (a new token on every sign-in), ending the browser's previous one. */
-  const signIn = async (req: express.Request, res: express.Response, user: AccountUser) => {
+  const startSession = async (req: express.Request, res: express.Response, user: AccountUser) => {
     const previous = await sessionFromRequest(req);
     if (previous) {
       await sessions.delete(previous.tokenHash);
@@ -199,15 +210,67 @@ export function createAuth(deps: AuthDeps) {
     setSession(res, token);
   };
 
-  /** Saves a sign-in in progress (the server may restart meanwhile); returns the id for its cookie. */
-  const saveTx = async (provider: Exclude<AuthProvider, 'dev'>, state: string, nonce: string, verifier: string | null, returnTo: string): Promise<string> => {
+  /** Ends the person's sessions (all but `keep`) and disconnects their sockets; returns how many. */
+  const endSessions = async (userId: string, keep?: string): Promise<number> => {
+    const ended = await sessions.deleteForUser(userId, keep);
+    for (const hash of ended) deps.onLogout?.(hash);
+    return ended.length;
+  };
+
+  /**
+   * Saves a sign-in in progress (the server may restart meanwhile); returns the id for its cookie.
+   * With `linkUserId`, it connects the provider to that account instead of signing in.
+   */
+  const saveTx = async (
+    provider: Exclude<AuthProvider, 'dev'>,
+    state: string,
+    nonce: string,
+    verifier: string | null,
+    returnTo: string,
+    linkUserId: string | null,
+  ): Promise<string> => {
     const txId = crypto.randomBytes(32).toString('base64url');
     await db.query(
-      `INSERT INTO auth_tx (id_hash, provider, state, nonce, code_verifier, return_to, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now() + interval '${TX_MINUTES} minutes')`,
-      [hashToken(txId), provider, state, nonce, verifier, returnTo],
+      `INSERT INTO auth_tx (id_hash, provider, state, nonce, code_verifier, return_to, link_user_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + interval '${TX_MINUTES} minutes')`,
+      [hashToken(txId), provider, state, nonce, verifier, returnTo, linkUserId],
     );
     return txId;
+  };
+
+  /**
+   * For ?link=1 (Profile's "Connect"): the signed-in person to connect the provider to. Undefined
+   * for an ordinary sign-in; null (after going back with an error) when it can't be done.
+   */
+  const linkingUser = async (req: express.Request, res: express.Response, returnTo: string): Promise<string | null | undefined> => {
+    if (req.query.link !== '1') return undefined;
+    const user = await userFromRequest(req);
+    // Another site mustn't connect a sign-in to your account behind your back.
+    if (user && fromThisApp(req, publicOrigin)) return user.id;
+    res.redirect(withError(returnTo, 'failed'));
+    return null;
+  };
+
+  /** Signs in as `identity`, or connects it to the account that asked to; then goes back. */
+  const complete = async (req: express.Request, res: express.Response, tx: { return_to: string; link_user_id: string | null }, identity: Identity) => {
+    if (!tx.link_user_id) {
+      await startSession(req, res, await accounts.signIn(identity));
+      res.redirect(tx.return_to);
+      return;
+    }
+    // Still signed in as whoever started it. Apple's answer (a cross-site post) carries no session
+    // cookie: there, only its own sign-in cookie ties it to this browser.
+    if (identity.provider !== 'apple' && (await userFromRequest(req))?.id !== tx.link_user_id) {
+      res.redirect(withError(tx.return_to, 'failed'));
+      return;
+    }
+    const user = await accounts.link(tx.link_user_id, identity);
+    if (!user) {
+      res.redirect(withError(tx.return_to, 'linked-elsewhere'));
+      return;
+    }
+    deps.onUserUpdated?.(user);
+    res.redirect(tx.return_to);
   };
 
   /** The browser's sign-in in progress with `provider`, used up by any answer; null if there's none or it expired. */
@@ -217,9 +280,9 @@ export function createAuth(deps: AuthDeps) {
     const txId = cookiesOf(req.headers.cookie)[txName];
     setCookie(res, txName, null, { maxAge: 0, ...(apple ? { sameSite: 'none', secure: true } : {}) });
     const found = txId
-      ? await db.query<{ state: string; nonce: string; code_verifier: string | null; return_to: string; fresh: boolean }>(
+      ? await db.query<{ state: string; nonce: string; code_verifier: string | null; return_to: string; link_user_id: string | null; fresh: boolean }>(
           `DELETE FROM auth_tx WHERE id_hash = $1 AND provider = $2
-           RETURNING state, nonce, code_verifier, return_to, expires_at > now() AS fresh`,
+           RETURNING state, nonce, code_verifier, return_to, link_user_id, expires_at > now() AS fresh`,
           [hashToken(txId), provider],
         )
       : null;
@@ -229,8 +292,36 @@ export function createAuth(deps: AuthDeps) {
 
   const router = express.Router();
 
-  router.get('/auth/providers', (_req, res) => {
-    res.json({ google: !!providers.google, apple: !!providers.apple, github: !!github, dev: options.devLogin });
+  const usable = (): AuthProvider[] => [
+    ...(providers.google ? (['google'] as const) : []),
+    ...(providers.apple ? (['apple'] as const) : []),
+    ...(github ? (['github'] as const) : []),
+    ...(options.devLogin ? (['dev'] as const) : []),
+  ];
+  const emailSignIn = emailRoutes(router, {
+    db,
+    accounts,
+    mailer,
+    publicOrigin,
+    clientIp: deps.clientIp ?? ((req) => req.ip ?? 'unknown'),
+    session: sessionFromRequest,
+    requireUser,
+    startSession,
+    endSessions,
+    onUserUpdated: deps.onUserUpdated,
+    usable,
+  });
+
+  router.get('/auth/providers', async (_req, res) => {
+    const answer: SignInProviders = {
+      google: !!providers.google,
+      apple: !!providers.apple,
+      github: !!github,
+      dev: options.devLogin,
+      password: await emailSignIn.password(),
+      emailLinks: emailSignIn.emailLinks,
+    };
+    res.json(answer);
   });
 
   // GitHub is OAuth 2 without discovery or ID tokens, so it has routes of its own.
@@ -245,10 +336,12 @@ export function createAuth(deps: AuthDeps) {
       res.redirect(withError(returnTo, 'failed'));
       return;
     }
+    const linkUserId = await linkingUser(req, res, returnTo);
+    if (linkUserId === null) return;
     const state = client.randomState();
     const verifier = client.randomPKCECodeVerifier();
     // No nonce: there's no ID token to carry it.
-    const txId = await saveTx('github', state, '', verifier, returnTo);
+    const txId = await saveTx('github', state, '', verifier, returnTo, linkUserId ?? null);
     setCookie(res, txCookie, txId, { maxAge: TX_MINUTES * 60 });
     res.redirect(github.authorizeUrl(state, await client.calculatePKCECodeChallenge(verifier)));
   });
@@ -282,8 +375,7 @@ export function createAuth(deps: AuthDeps) {
       res.redirect(withError(tx.return_to, 'failed'));
       return;
     }
-    await signIn(req, res, await accounts.signIn(identity));
-    res.redirect(tx.return_to);
+    await complete(req, res, tx, identity);
   });
 
   /**
@@ -312,6 +404,8 @@ export function createAuth(deps: AuthDeps) {
       return;
     }
     const returnTo = safeReturnPath(req.query.return);
+    const linkUserId = await linkingUser(req, res, returnTo);
+    if (linkUserId === null) return;
     let config: client.Configuration;
     try {
       config = await provider.config();
@@ -323,7 +417,7 @@ export function createAuth(deps: AuthDeps) {
     const state = client.randomState();
     const nonce = client.randomNonce();
     const verifier = provider.pkce ? client.randomPKCECodeVerifier() : null;
-    const txId = await saveTx(provider.name, state, nonce, verifier, returnTo);
+    const txId = await saveTx(provider.name, state, nonce, verifier, returnTo, linkUserId ?? null);
     const params: Record<string, string> = {
       ...provider.params,
       // Always from PUBLIC_URL: behind a proxy the request itself may say http://container:3001.
@@ -373,9 +467,7 @@ export function createAuth(deps: AuthDeps) {
       res.redirect(withError(tx.return_to, 'failed'));
       return;
     }
-    const user = await accounts.signIn(provider.identity(claims, { appleUser }));
-    await signIn(req, res, user);
-    res.redirect(tx.return_to);
+    await complete(req, res, tx, provider.identity(claims, { appleUser }));
   };
 
   router.get('/auth/google/callback', async (req, res) => {
@@ -418,8 +510,9 @@ export function createAuth(deps: AuthDeps) {
       isPrivateEmail: false,
       name: name || sanitizeUserName(email.split('@')[0]) || 'Developer',
       avatarUrl: null,
+      label: null,
     });
-    await signIn(req, res, user);
+    await startSession(req, res, user);
     res.json({ user });
   });
 

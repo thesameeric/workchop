@@ -1,12 +1,15 @@
 import crypto from 'node:crypto';
 import type { AccountUser } from '../../shared/account';
-import { toAccountUser, type UserRow } from '../accounts';
+import { toAccountUser, userColumns, type UserRow } from '../accounts';
 import type { Db } from '../db';
 
 export const SESSION_DAYS = 30;
 /** Sliding expiry: a session in use is extended, but at most this often (saves a write per request). */
 const TOUCH_EVERY = '1 hour';
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Whether `v` looks like a token from newToken(). */
+export const isToken = (v: unknown): v is string => typeof v === 'string' && TOKEN.test(v);
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -37,10 +40,10 @@ export class Sessions {
   }
 
   async lookup(token: string | undefined): Promise<Session | null> {
-    if (!token || !TOKEN.test(token)) return null;
+    if (!isToken(token)) return null;
     const tokenHash = hashToken(token);
     const res = await this.db.query<UserRow & { touch: boolean }>(
-      `SELECT u.id, u.name, u.email, u.avatar_url, u.profile, s.last_seen_at < now() - interval '${TOUCH_EVERY}' AS touch
+      `SELECT ${userColumns('u')}, s.last_seen_at < now() - interval '${TOUCH_EVERY}' AS touch
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = $1 AND s.expires_at > now()`,
       [tokenHash],
@@ -61,10 +64,17 @@ export class Sessions {
     await this.db.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
   }
 
-  /** Drops expired sessions and abandoned sign-ins; returns the hashes of the sessions dropped. */
+  /** Ends all of the person's sessions, except `keep`; returns the hashes of the ones ended. */
+  async deleteForUser(userId: string, keep?: string): Promise<string[]> {
+    const ended = await this.db.query<{ token_hash: string }>('DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2 RETURNING token_hash', [userId, keep ?? '']);
+    return ended.rows.map((r) => r.token_hash);
+  }
+
+  /** Drops expired sessions, abandoned sign-ins and unused email links; returns the hashes of the sessions dropped. */
   async cleanup(): Promise<string[]> {
     const expired = await this.db.query<{ token_hash: string }>('DELETE FROM sessions WHERE expires_at <= now() RETURNING token_hash');
     await this.db.query('DELETE FROM auth_tx WHERE expires_at < now()');
+    await this.db.query('DELETE FROM email_tokens WHERE expires_at < now()');
     return expired.rows.map((r) => r.token_hash);
   }
 }

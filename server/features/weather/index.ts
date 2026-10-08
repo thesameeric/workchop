@@ -2,7 +2,7 @@ import type express from 'express';
 import { wellFormed } from '../../../shared/text';
 import { isLatitude, isLongitude, roundCoord, sanitizeSharedWeather, type SharedWeather, type WeatherHere, type WeatherReport } from '../../../shared/weather';
 import type { Feature } from '../../features';
-import { windowLimiter } from '../../limits';
+import { addressKey, windowLimiter } from '../../limits';
 import { coordinate, geoHeadersFrom, placeFromHeaders } from './geo';
 import { createOpenMeteo, WeatherUnavailable, type OpenMeteoOptions } from './openMeteo';
 
@@ -43,21 +43,6 @@ function missLimit(limits: typeof LOOKUPS, now: () => number) {
     }
     return wait;
   };
-}
-
-/**
- * The address the limits count by: an IPv4 address, or the /64 an IPv6 address is in (one household
- * or server usually has a whole /64, so counting single addresses would let one visitor count as many).
- */
-export function addressKey(ip: string): string {
-  const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
-  if (v4) return v4[1];
-  if (!ip.includes(':')) return ip;
-  const [head, tail] = ip.split('%')[0].toLowerCase().split('::');
-  const left = head ? head.split(':') : [];
-  const right = tail ? tail.split(':') : [];
-  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
-  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
 }
 
 /** OPEN_METEO_API_KEY, or null (with a warning that doesn't show it) when it can't be a key. */

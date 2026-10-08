@@ -40,6 +40,52 @@ describe(`migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
     expect(office.rows[0].data).toEqual({ hello: [1, 2] });
   });
 
+  it('verify the emails accounts signed in with, the oldest account keeping a shared one', { timeout: 60_000 }, async () => {
+    const db = await freshDb();
+    await migrate(db, coreMigrations.filter((m) => m.id < 4));
+    const user = (id: string, email: string | null, days: number) =>
+      db.query(`INSERT INTO users (id, name, email, created_at) VALUES ($1, $1, $2, now() - $3::int * interval '1 day')`, [id, email, days]);
+    const identity = (userId: string, provider: string, email: string | null, verified: boolean, days: number) =>
+      db.query(
+        `INSERT INTO auth_identities (provider, subject, user_id, email, email_verified, created_at)
+         VALUES ($1, $2, $3, $4, $5, now() - $6::int * interval '1 day')`,
+        [provider, `${provider}-${userId}`, userId, email, verified, days],
+      );
+    await user('older', 'Same@Example.com', 30);
+    await identity('older', 'google', 'same@example.com', true, 20);
+    await identity('older', 'github', 'same@example.com', true, 25);
+    await user('newer', 'same@example.com', 10);
+    await identity('newer', 'apple', 'Same@Example.com', true, 10);
+    await user('unverified', 'other@example.com', 5);
+    await identity('unverified', 'github', 'other@example.com', false, 5);
+    // Verified, but not the address the account has.
+    await user('elsewhere', 'mine@example.com', 5);
+    await identity('elsewhere', 'google', 'theirs@example.com', true, 5);
+    await user('none', null, 5);
+    await identity('none', 'dev', null, false, 5);
+
+    expect(await migrate(db)).toEqual(['4 email_sign_in']);
+    const { rows } = await db.query<{ id: string; email: string | null; verified_days: number | null }>(
+      `SELECT id, email, round(extract(epoch FROM now() - email_verified_at) / 86400)::int AS verified_days FROM users ORDER BY id`,
+    );
+    expect(rows).toEqual([
+      { id: 'elsewhere', email: 'mine@example.com', verified_days: null },
+      { id: 'newer', email: 'same@example.com', verified_days: null },
+      { id: 'none', email: null, verified_days: null },
+      // Verified since its first identity that verified it.
+      { id: 'older', email: 'same@example.com', verified_days: 25 },
+      { id: 'unverified', email: 'other@example.com', verified_days: null },
+    ]);
+    // Addresses stay lower-case, and only one account can have each one verified.
+    await expect(user('upper', 'Upper@Example.com', 0)).rejects.toThrow(/users_email_lower/);
+    await expect(db.query("UPDATE users SET email_verified_at = now() WHERE id = 'newer'")).rejects.toThrow(/users_verified_email_idx/);
+    await db.query("UPDATE users SET email_verified_at = now() WHERE id = 'unverified'");
+    await db.query("INSERT INTO email_tokens (token_hash, purpose, email, user_id, expires_at) VALUES ('h', 'reset', 'same@example.com', 'older', now())");
+    await expect(db.query("INSERT INTO email_tokens (token_hash, purpose, email, expires_at) VALUES ('h2', 'other', 'x@example.com', now())")).rejects.toThrow();
+    const columns = await db.query<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_name = 'auth_tx' AND table_schema = current_schema() AND column_name = 'link_user_id'");
+    expect(columns.rowCount).toBe(1);
+  });
+
   it('warn about edited migrations and apply new feature migrations in id order', async () => {
     const db = await createTestDb();
     const feature: Migration[] = [{ id: 901, name: 'test_things', sql: 'CREATE TABLE test_things (id int PRIMARY KEY)' }];

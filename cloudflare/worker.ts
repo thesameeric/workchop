@@ -34,6 +34,10 @@ interface Env {
   TURN_CREDENTIAL?: string;
   /** The address people open Workchop at, e.g. https://office.example.com (needed for sign-in). */
   PUBLIC_URL?: string;
+  /** Resend API key for emailing sign-up links and password resets. */
+  RESEND_API_KEY?: string;
+  /** The sender, on a domain verified in Resend: "Workchop <noreply@mail.example.com>" (required with RESEND_API_KEY). */
+  EMAIL_FROM?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   APPLE_CLIENT_ID?: string;
@@ -72,6 +76,8 @@ const PASSED_TO_SERVER = [
   'TURN_USERNAME',
   'TURN_CREDENTIAL',
   'PUBLIC_URL',
+  'RESEND_API_KEY',
+  'EMAIL_FROM',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'APPLE_CLIENT_ID',

@@ -161,6 +161,16 @@ export class OfficeSession {
     );
   }
 
+  /**
+   * Connects again, so the server sees who is signed in now (the session cookie goes with each new
+   * connection): after signing in here you rejoin as your account, as after any reconnect.
+   */
+  reconnect(): void {
+    if (this.closed) return;
+    this.socket.disconnect();
+    this.socket.connect();
+  }
+
   /** Your player id in the office (the socket id), while joined; it changes when you reconnect. */
   selfId(): string | null {
     return this.joined?.selfId ?? null;

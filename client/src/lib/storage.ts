@@ -36,6 +36,42 @@ export function saveProfile(p: Profile): void {
   write('profile', p);
 }
 
+/** Where someone was going when they asked for a sign-up link, for when they open it in this browser. */
+export function saveSignUpNext(path: string): void {
+  write('signup-next', path);
+}
+
+export function takeSignUpNext(): string | null {
+  const path = read<unknown>('signup-next');
+  try {
+    localStorage.removeItem(PREFIX + 'signup-next');
+  } catch {
+    // Nothing kept, then.
+  }
+  return typeof path === 'string' ? path : null;
+}
+
+/**
+ * An email confirmation link opened while signed out (or as someone else), kept in this tab while
+ * signing in; null clears it.
+ */
+export function setPendingConfirmation(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(PREFIX + 'confirm-email', token);
+    else sessionStorage.removeItem(PREFIX + 'confirm-email');
+  } catch {
+    // Then the link has to be opened again after signing in.
+  }
+}
+
+export function pendingConfirmation(): string | null {
+  try {
+    return sessionStorage.getItem(PREFIX + 'confirm-email');
+  } catch {
+    return null;
+  }
+}
+
 export function getOwnerKey(officeId: string): string | undefined {
   return read<Record<string, string>>('owners')?.[officeId];
 }

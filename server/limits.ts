@@ -29,3 +29,18 @@ export function windowLimiter(limit: number, windowMs: number, now: () => number
   };
   return Object.assign(allow, { wait });
 }
+
+/**
+ * The address the limits count by: an IPv4 address, or the /64 an IPv6 address is in (one household
+ * or server usually has a whole /64, so counting single addresses would let one visitor count as many).
+ */
+export function addressKey(ip: string): string {
+  const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (v4) return v4[1];
+  if (!ip.includes(':')) return ip;
+  const [head, tail] = ip.split('%')[0].toLowerCase().split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}

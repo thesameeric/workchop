@@ -102,8 +102,9 @@ describe('features', () => {
     const { id, ownerKey } = await createOffice(base);
     const a = await join(base, id, 'Pat', { jar, ownerKey });
     const b = await join(base, id, 'Bea');
-    // Pat also has a tab open elsewhere.
-    const elsewhere = await join(base, (await createOffice(base)).id, 'Pat 2', { jar });
+    // Pat also has a tab open elsewhere (named as the account is, whatever the page sends).
+    const other = (await createOffice(base)).id;
+    const elsewhere = await join(base, other, 'Pat 2', { jar });
 
     const pongs: string[] = [];
     const updates: unknown[] = [];
@@ -116,7 +117,7 @@ describe('features', () => {
     await until(() => pongs.length === 2 && updates.length === 1);
     expect(pongs.sort()).toEqual(['b hello', 'elsewhere just for you: hello']);
     expect(updates).toEqual([[a.socket.id, { pinged: true }]]);
-    expect(server.realtime.playersOfUser(pat.id).map((p) => p.player.name).sort()).toEqual(['Pat', 'Pat 2']);
+    expect(server.realtime.playersOfUser(pat.id).map((p) => [p.officeId, p.player.name]).sort()).toEqual([[id, 'Pat'], [other, 'Pat']].sort());
     expect(await (await fetch(`${base}/api/test/pings`)).json()).toEqual(['hello']);
 
     // Guests get a context too, and per-socket limiters work.
@@ -126,7 +127,8 @@ describe('features', () => {
 
     b.socket.disconnect();
     await until(() => seen.includes('leave Bea'));
-    expect(seen).toEqual(expect.arrayContaining(['join Pat', 'join Bea', 'join Pat 2', 'leave Bea']));
+    expect(seen).toEqual(expect.arrayContaining(['join Pat', 'join Bea', 'leave Bea']));
+    expect(seen.filter((e) => e === 'join Pat')).toHaveLength(2);
   });
 
   it('survive a feature handler that fails', async () => {

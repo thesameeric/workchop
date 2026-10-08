@@ -316,6 +316,15 @@ export const feature: Feature = {
       });
     });
 
+    // Name plates follow Profile renames in the offices people are in (the others when they come in).
+    ctx.auth.onUserUpdated((user) => {
+      for (const { officeId } of realtime.playersOfUser(user.id)) {
+        const stored = store.peek(officeId);
+        const result = stored && renameDeskOwner(stored.office, user);
+        if (result && !('error' in result)) commit(officeId, result, 'server');
+      }
+    });
+
     realtime.onJoin(async (s) => {
       const room = s.room();
       const me = s.me();

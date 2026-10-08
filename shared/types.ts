@@ -51,7 +51,10 @@ export interface PlayerState {
 /** Changes to a player's public state. Fields features add to PlayerState are included automatically. */
 export type PlayerPatch = Partial<Omit<PlayerState, 'id' | 'x' | 'z' | 'ry' | 'anim' | 'userId'>>;
 
-/** What a client may change about itself with a 'profile' message (the server sets `app`). */
+/**
+ * What a client may change about itself with a 'profile' message (the server sets `app`). A
+ * signed-in person's name and avatar are ignored: they come from the account (PATCH /api/me).
+ */
 export type ProfilePatch = Omit<PlayerPatch, 'app'>;
 
 /** A piece of furniture or structure placed in an office. x/z is the footprint centre. */
@@ -124,6 +127,7 @@ export interface RtcSignal {
 
 export interface JoinRequest {
   officeId: string;
+  /** A guest's name and character. Signed-in people get their account's (an account without a character yet keeps this one). */
   name: string;
   avatar: AvatarConfig;
   status?: Status;

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AccountUser } from '../shared/account';
+import type { AccountUser, SignInMethods } from '../shared/account';
 import { authOptionsFromEnv } from '../server/auth';
 import type { GithubConfig } from '../server/auth/github';
 import type { Db } from '../server/db';
@@ -14,6 +14,7 @@ import { githubFeature } from '../server/features/github';
 import { parseTokenKey } from '../server/features/github/crypto';
 import { Links } from '../server/features/github/links';
 import { startServer } from '../server/index';
+import { outboxMailer } from '../server/mail';
 import { createTestDb } from './helpers/db';
 import { startMockGithub, type MockGithub, type MockUser } from './helpers/github';
 import { Jar, json, until } from './helpers/http';
@@ -29,7 +30,18 @@ let base: string;
 const extra: Server[] = [];
 
 const start = (github: GithubConfig | null, publicUrl: string | null = 'http://localhost:5173', quiet = true, features: Feature[] = []) =>
-  startServer({ port: 0, host: '127.0.0.1', db, dataDir, quiet, iceServers: [], publicUrl, features, auth: { google: null, apple: null, github, devLogin: true } });
+  startServer({
+    port: 0,
+    host: '127.0.0.1',
+    db,
+    dataDir,
+    quiet,
+    iceServers: [],
+    publicUrl,
+    features,
+    auth: { google: null, apple: null, github, devLogin: true },
+    mailer: outboxMailer({ log: false }),
+  });
 /** The mock's OAuth App. */
 const config = (): GithubConfig => ({ clientId: mock.clientId, clientSecret: mock.clientSecret, oauthBase: mock.base, apiBase: mock.apiBase });
 const tokenKey = randomBytes(32).toString('base64');
@@ -124,7 +136,7 @@ const identityOf = async (userId: string) =>
 
 describe('GitHub sign-in', () => {
   it('is listed when the OAuth App is set up', async () => {
-    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: false, apple: false, github: true, dev: true });
+    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: false, apple: false, github: true, dev: true, password: true, emailLinks: true });
   });
 
   it('signs in, then revokes the token it used', async () => {
@@ -158,6 +170,10 @@ describe('GitHub sign-in', () => {
     const user = (await me(jar))!;
     expect(user).toMatchObject({ name: 'Mona Lisa', email: 'mona@example.com', avatarUrl: `https://avatars.githubusercontent.com/u/${id}?v=4` });
     expect(await identityOf(user.id)).toEqual([{ provider: 'github', subject: String(id), email: 'mona@example.com', email_verified: true, is_private_email: false }]);
+    // Profile names it by its login.
+    expect(((await (await jar.fetch(`${base}/api/me/sign-in`)).json()) as SignInMethods).methods).toEqual([
+      { provider: 'github', subject: String(id), label: mock.users.get(id)!.login, email: 'mona@example.com', emailVerified: true },
+    ]);
 
     // The code exchange carries the PKCE verifier and the same redirect_uri.
     const exchange = mock.calls('/login/oauth/access_token', 'POST').at(-1)!;
@@ -179,15 +195,21 @@ describe('GitHub sign-in', () => {
     expect(again.cookies.get('wc_session')).not.toBe(jar.cookies.get('wc_session'));
   });
 
-  it('uses the public email, or else only a verified primary one', async () => {
-    const publicEmail = githubUser({ name: 'Pat', email: 'Pat@Example.com', emails: [{ email: 'pat@work.example', primary: true, verified: true }] });
+  it('uses the verified primary email, or else the public one as unverified', async () => {
+    const publicEmail = githubUser({ name: 'Pat', email: 'Pat@Example.com', emails: [{ email: 'Pat@Work.example', primary: true, verified: true }] });
     const emailsBefore = mock.calls('/api/user/emails').length;
     const a = new Jar();
     await signIn(a, publicEmail);
     const pat = (await me(a))!;
-    expect(pat.email).toBe('pat@example.com');
-    expect((await identityOf(pat.id))[0]).toMatchObject({ email: 'pat@example.com', email_verified: false });
-    expect(mock.calls('/api/user/emails')).toHaveLength(emailsBefore);
+    expect(pat).toMatchObject({ email: 'pat@work.example', emailVerified: true });
+    expect((await identityOf(pat.id))[0]).toMatchObject({ email: 'pat@work.example', email_verified: true });
+    expect(mock.calls('/api/user/emails')).toHaveLength(emailsBefore + 1);
+
+    // Only a public email: kept, but not as a verified one.
+    const onlyPublic = githubUser({ name: 'Pub', email: 'Pub@Example.com', emails: [{ email: 'pub@example.com', primary: true, verified: false }] });
+    const p = new Jar();
+    await signIn(p, onlyPublic);
+    expect(await me(p)).toMatchObject({ name: 'Pub', email: 'pub@example.com', emailVerified: false });
 
     // An unverified primary address isn't used, even with a verified secondary one; nor is a name with control characters.
     const unverified = githubUser({
@@ -382,14 +404,29 @@ describe('GitHub sign-in', () => {
     expect(location(await signIn(new Jar(), id, '//evil.example'))).toBe('/?auth_error=cancelled');
   });
 
-  it('never links accounts by email address', async () => {
+  it('links to the account with the same verified primary address, never by the dev login or a public email', async () => {
     const id = githubUser({ emails: [{ email: 'same@example.com', primary: true, verified: true }] });
     const github = new Jar();
     await signIn(github, id);
+    const same = (await me(github))!;
+    expect(same).toMatchObject({ email: 'same@example.com', emailVerified: true });
     const dev = new Jar();
     await dev.fetch(`${base}/api/auth/dev`, json({ name: 'Same', email: 'same@example.com' }));
-    expect((await me(github))!.email).toBe('same@example.com');
-    expect((await me(github))!.id).not.toBe((await me(dev))!.id);
+    expect((await me(dev))!.id).not.toBe(same.id);
+
+    // Another GitHub account with that verified primary address signs in to the same account.
+    const second = githubUser({ emails: [{ email: 'Same@Example.com', primary: true, verified: true }] });
+    const again = new Jar();
+    await signIn(again, second);
+    expect((await me(again))!.id).toBe(same.id);
+    expect((await identityOf(same.id)).map((i) => i.subject).sort()).toEqual([String(id), String(second)].sort());
+
+    // A public profile email isn't verified: an account of its own.
+    const publicOnly = githubUser({ email: 'same@example.com' });
+    const third = new Jar();
+    await signIn(third, publicOnly);
+    expect((await me(third))!).toMatchObject({ email: 'same@example.com', emailVerified: false });
+    expect((await me(third))!.id).not.toBe(same.id);
   });
 
   it('says which callback to register, unless quiet', async () => {
@@ -397,7 +434,7 @@ describe('GitHub sign-in', () => {
     extra.push(await start(config()));
     expect(logs.mock.calls.flat().join('\n')).not.toContain('[auth]');
     extra.push(await start(config(), 'http://localhost:5173', false));
-    expect(logs.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining(['[auth] sign-in with github, dev login', `[auth] GitHub sign-in callback to register: ${CALLBACK}`]));
+    expect(logs.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining(['[auth] sign-in with email, github, dev login', `[auth] GitHub sign-in callback to register: ${CALLBACK}`]));
   });
 
   it('is on with GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, and needs PUBLIC_URL', async () => {

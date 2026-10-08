@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
+import { signOut } from '../lib/account';
 import { getSession } from '../lib/session';
 import { setState, useStore } from '../state/store';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { CloseIcon } from './icons';
+import { ProfileSections } from './Profile';
 import { useSettingsSections } from './settings';
 
 function Modal({ title, children, onClose, className }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
@@ -29,6 +31,7 @@ function Modal({ title, children, onClose, className }: { title: string; childre
 
 const close = () => setState({ modal: 'none' });
 
+/** A guest's name and character (signed-in people edit theirs in the profile). */
 function AvatarModal() {
   const me = useStore((s) => s.me);
   const [name, setName] = useState(me.name);
@@ -90,9 +93,21 @@ function SettingsModal() {
   );
 }
 
+function ProfileModal() {
+  const account = useStore((s) => s.account);
+  if (!account) return null;
+  return (
+    <Modal title="Profile" onClose={close} className="wide profile-modal">
+      {/* Signing out leaves the office for its lobby, which closes this. */}
+      <ProfileSections account={account} onSignOut={() => void signOut()} />
+    </Modal>
+  );
+}
+
 export function Modals() {
   const modal = useStore((s) => s.modal);
   if (modal === 'avatar') return <AvatarModal />;
   if (modal === 'settings') return <SettingsModal />;
+  if (modal === 'profile') return <ProfileModal />;
   return null;
 }

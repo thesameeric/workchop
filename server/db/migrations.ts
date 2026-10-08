@@ -107,6 +107,42 @@ export const coreMigrations: Migration[] = [
         data      bytea NOT NULL
       );`,
   },
+  {
+    id: 4,
+    name: 'email_sign_in',
+    sql: `
+      UPDATE users SET email = lower(email) WHERE email <> lower(email);
+      ALTER TABLE users ADD CONSTRAINT users_email_lower CHECK (email = lower(email));
+      -- A confirmed address (by a link we sent, or by the sign-in provider), and scrypt$N$r$p$salt$hash.
+      ALTER TABLE users ADD COLUMN email_verified_at timestamptz, ADD COLUMN password_hash text;
+      -- Addresses a provider verified for the account's own sign-in. Where several accounts have the
+      -- same one, the oldest keeps it verified; the others stay as they are, never merged.
+      WITH verified AS (
+        SELECT u.id, u.email, u.created_at, min(i.created_at) AS verified_at
+        FROM users u JOIN auth_identities i ON i.user_id = u.id AND i.email_verified AND lower(i.email) = u.email
+        GROUP BY u.id, u.email, u.created_at
+      ), oldest AS (
+        SELECT DISTINCT ON (email) id, verified_at FROM verified ORDER BY email, created_at, id
+      )
+      UPDATE users SET email_verified_at = oldest.verified_at FROM oldest WHERE users.id = oldest.id;
+      -- One account per verified address.
+      CREATE UNIQUE INDEX users_verified_email_idx ON users (email) WHERE email_verified_at IS NOT NULL;
+      -- Links we emailed (sign-up, password reset, email change), by a SHA-256 of their token.
+      CREATE TABLE email_tokens (
+        token_hash text PRIMARY KEY,
+        purpose    text NOT NULL CHECK (purpose IN ('signup', 'reset', 'email')),
+        email      text NOT NULL,
+        user_id    text REFERENCES users ON DELETE CASCADE,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        expires_at timestamptz NOT NULL
+      );
+      CREATE INDEX email_tokens_user_idx ON email_tokens (user_id);
+      CREATE INDEX email_tokens_expires_idx ON email_tokens (expires_at);
+      -- Connecting another sign-in method to this account (from Profile) rather than signing in.
+      ALTER TABLE auth_tx ADD COLUMN link_user_id text REFERENCES users ON DELETE CASCADE;
+      -- How the person knows a sign-in, when the provider names it (a GitHub login).
+      ALTER TABLE auth_identities ADD COLUMN label text;`,
+  },
 ];
 
 /** Core migrations followed by each feature's, checked for clashing ids. */

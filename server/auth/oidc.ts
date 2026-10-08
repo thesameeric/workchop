@@ -75,14 +75,19 @@ export function googleProvider(cfg: GoogleConfig): OidcProvider {
     identity(claims) {
       const email = emailOf(claims);
       const picture = typeof claims.picture === 'string' && claims.picture.startsWith('https://') && claims.picture.length < 1000 ? claims.picture : null;
+      // Google vouches for the address itself only for Gmail and Google Workspace (hd) accounts: a
+      // personal Google account can be made with any address, like a former work one, and keeps it
+      // "verified" after that address moves on. Others are kept, but not as verified.
+      const googleOwned = !!email && (/@(gmail|googlemail)\.com$/.test(email) || (typeof claims.hd === 'string' && claims.hd.length > 0));
       return {
         provider: 'google',
         subject: claims.sub,
         email,
-        emailVerified: flag(claims.email_verified),
+        emailVerified: flag(claims.email_verified) && googleOwned,
         isPrivateEmail: false,
         name: sanitizeUserName(claims.name) || sanitizeUserName(email?.split('@')[0]) || 'Google user',
         avatarUrl: picture,
+        label: null,
       };
     },
   };
@@ -178,6 +183,7 @@ export function appleProvider(cfg: AppleConfig): OidcProvider {
         isPrivateEmail,
         name: appleName(extra.appleUser) || (isPrivateEmail ? '' : sanitizeUserName(email?.split('@')[0])) || 'Apple user',
         avatarUrl: null,
+        label: null,
       };
     },
   };

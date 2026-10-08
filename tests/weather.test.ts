@@ -1,10 +1,10 @@
 import type express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerContext } from '../server/features';
-import { addressKey, weatherFeature, type WeatherOptions } from '../server/features/weather';
+import { weatherFeature, type WeatherOptions } from '../server/features/weather';
 import { geoHeadersFrom, placeFromHeaders } from '../server/features/weather/geo';
 import { createOpenMeteo, WeatherUnavailable, type OpenMeteoOptions } from '../server/features/weather/openMeteo';
-import { windowLimiter } from '../server/limits';
+import { addressKey, windowLimiter } from '../server/limits';
 import {
   conditionOf,
   isLatitude,

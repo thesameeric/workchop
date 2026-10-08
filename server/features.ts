@@ -27,6 +27,11 @@ export interface ServerContext {
      * GitHub sign-in in progress, goes back from it with a sign-in error and returns true.
      */
     failGithubSignIn(req: express.Request, res: express.Response, state: string): Promise<boolean>;
+    /**
+     * After someone changed their account (their name or character in Profile, say); their players
+     * in open offices are already updated. Errors are logged.
+     */
+    onUserUpdated(handler: (user: AccountUser) => void | Promise<void>): void;
   };
   realtime: RealtimeApi;
   uploads: Uploads;

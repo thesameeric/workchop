@@ -17,7 +17,7 @@ where the hooks below allow it, to keep merges easy.
 - Plug into the foundation instead of editing shared central files (APIs below). Server code goes in
   `server/features/<name>/`, registered in `server/features/index.ts`; socket events are declared in
   `shared/<name>.ts` by augmenting the event maps; client code goes in `client/src/features/<name>/`
-  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features).
+  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features: chat 100 and 101, world 200, support 700–799).
 - Icons: only Hugeicons. Add names (from `scripts/hugeicons/icons.css`) to
   `client/src/ui/icon-names.json`, export components in `client/src/ui/icons.tsx`, run `npm run icons`
   (needs `pip install fonttools brotli`). It's fine if another branch also adds icons; the merge
@@ -42,13 +42,14 @@ where the hooks below allow it, to keep merges easy.
   migrations?, register(ctx) }`. If register throws, the server does not start. A feature that is off
   by a setting either registers nothing (its routes answer 404; coins are left out of the list unless
   `COINS=on`) or answers a status route saying so (weather, GitHub), so the client can hide it.
-- Migrations: `{ id, name, sql }`, global ids (core 1–99; features use the ranges above). Run in id
+- Migrations: `{ id, name, sql }`, global ids (core 1–99: accounts take 4 and workspaces 5; features use the ranges above). Run in id
   order in a transaction under an advisory lock with checksums. SQL must run on Postgres 16 and PGlite
   (PG18). Pass jsonb as `jsonb(x)` (from server/db) with `$n::jsonb`. Never edit an applied migration;
   add a new one.
 - ServerContext (ctx): `app` (router at /api, after express.json, before the API 404; a guard rejects
   cross-site POST/PATCH/DELETE), `io`, `db`, `store`, `uploads`, `publicOrigin`,
-  `auth.userFromRequest(req)`, `auth.requireUser` (401 or res.locals.user), `realtime`,
+  `auth.userFromRequest(req)`, `auth.requireUser` (401 or res.locals.user), `auth.onUserUpdated(user => …)`
+  (after a Profile change; their players in open offices are already updated), `realtime`,
   `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy), `socketIp(socket)` (the same
   for a connection; guests get a new socket each time they reconnect), `quiet` (true in tests:
   skip "it works" log lines) and `onClose(fn)` (runs when the server closes, before the database: stop
