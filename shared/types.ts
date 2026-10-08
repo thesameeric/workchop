@@ -115,19 +115,6 @@ export type OfficeOp =
   | { t: 'zone:remove'; id: string }
   | { t: 'settings'; settings: Partial<OfficeSettings> };
 
-export type ChatScope = 'all' | 'nearby' | 'dm';
-
-export interface ChatMessage {
-  id: string;
-  from: string;
-  name: string;
-  text: string;
-  scope: ChatScope;
-  /** Recipient id for direct messages. */
-  to?: string;
-  ts: number;
-}
-
 export interface RtcSignal {
   sdp?: { type: 'offer' | 'answer'; sdp: string };
   candidate?: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string | null };
@@ -149,7 +136,6 @@ export type JoinResponse =
       selfId: string;
       office: Office;
       players: PlayerState[];
-      chat: ChatMessage[];
       isOwner: boolean;
       /** Spotify listen-along sessions running in this office. */
       spotify: SpotifySession[];
@@ -169,7 +155,6 @@ export interface ServerToClientEvents {
   'peer:connect': (peerId: string, sid: number, initiator: boolean) => void;
   'peer:disconnect': (peerId: string) => void;
   'rtc:signal': (from: string, sid: number, data: RtcSignal) => void;
-  chat: (m: ChatMessage) => void;
   emote: (id: string, emoji: string) => void;
   'office:op': (op: OfficeOp, by: string) => void;
   'office:sync': (office: Office, reason?: string) => void;
@@ -183,7 +168,6 @@ export interface ClientToServerEvents {
   join: (req: JoinRequest, ack: (res: JoinResponse) => void) => void;
   move: (x: number, z: number, ry: number, anim: AnimState) => void;
   profile: (patch: ProfilePatch) => void;
-  chat: (text: string, scope: ChatScope, to?: string) => void;
   emote: (emoji: string) => void;
   'office:op': (op: OfficeOp) => void;
   'rtc:signal': (to: string, sid: number, data: RtcSignal) => void;

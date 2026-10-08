@@ -44,6 +44,8 @@ interface Env {
   S3_ACCESS_KEY_ID?: string;
   S3_SECRET_ACCESS_KEY?: string;
   S3_REGION?: string;
+  /** Delete chat conversations quiet for this many days (default: keep them). */
+  CHAT_RETENTION_DAYS?: string;
 }
 
 const PASSED_TO_SERVER = [
@@ -72,6 +74,7 @@ const PASSED_TO_SERVER = [
   'S3_ACCESS_KEY_ID',
   'S3_SECRET_ACCESS_KEY',
   'S3_REGION',
+  'CHAT_RETENTION_DAYS',
 ] as const;
 
 /** The port the server listens on inside the container (the Dockerfile's PORT). */

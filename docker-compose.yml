@@ -19,6 +19,7 @@ services:
       CLOUDFLARE_TURN_KEY_API_TOKEN: ${CLOUDFLARE_TURN_KEY_API_TOKEN:-}
       CLOUDFLARE_TURN_TTL: ${CLOUDFLARE_TURN_TTL:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      CHAT_RETENTION_DAYS: ${CHAT_RETENTION_DAYS:-}
       # The address people open Workchop at (sign-in redirects are built from it).
       PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN:?Set DOMAIN in .env}}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

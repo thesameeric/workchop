@@ -160,13 +160,15 @@ describe('realtime', () => {
     a.socket.emit('rtc:signal', bId, sid, { candidate: { candidate: 'x' } });
     expect(await blocked).toBe(true);
 
-    // Nearby chat only reaches linked people; everyone-chat reaches all.
-    const quiet = nothing(b.socket, 'chat');
-    a.socket.emit('chat', 'psst', 'nearby');
+    // Nearby chat only reaches linked people; a channel reaches everyone.
+    const quiet = nothing(b.socket, 'chat:message');
+    a.socket.emit('chat:send', { conv: 'nearby', text: 'psst' }, () => {});
     expect(await quiet).toBe(true);
-    const loud = next(b.socket, 'chat');
-    a.socket.emit('chat', 'hello all', 'all');
-    expect((await loud)[0]).toMatchObject({ text: 'hello all', name: 'Ann', scope: 'all' });
+    const list = await a.socket.timeout(2000).emitWithAck('chat:channels');
+    const general = list.ok ? list.channels[0].id : '';
+    const loud = next(b.socket, 'chat:message');
+    a.socket.emit('chat:send', { conv: `c:${general}`, text: 'hello all' }, () => {});
+    expect((await loud)[0]).toMatchObject({ text: 'hello all', name: 'Ann', channelId: general });
   });
 
   it('private zones only link the people inside them', async () => {

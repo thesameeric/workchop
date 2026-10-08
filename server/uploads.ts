@@ -415,5 +415,24 @@ export function createUploads(deps: UploadDeps) {
     }
   };
 
-  return { upload, download, store, description: store.description };
+  /** Deletes uploads, row and bytes (e.g. the files of a deleted chat message). Never throws. */
+  const remove = async (ids: string[]): Promise<void> => {
+    const valid = ids.filter((id) => UUID.test(id));
+    if (!valid.length) return;
+    try {
+      // Bytes in the database go with the row; the others are deleted after it.
+      const res = await db.query<{ id: string; storage: UploadStorage; storage_key: string }>(
+        'DELETE FROM uploads WHERE id = ANY($1::uuid[]) RETURNING id, storage, storage_key',
+        [valid],
+      );
+      for (const row of res.rows) {
+        if (row.storage === 'db') continue;
+        await stores[row.storage]?.delete(row.storage_key).catch((err: Error) => console.warn(`[uploads] could not delete the bytes of upload ${row.id}:`, err.message));
+      }
+    } catch (err) {
+      console.error('[uploads] could not delete uploads:', err);
+    }
+  };
+
+  return { upload, download, remove, store, description: store.description };
 }

@@ -4,7 +4,7 @@ import type { Status } from '../../../shared/types';
 import { colorFor, initials } from '../lib/color';
 import { local, remoteTargets } from '../lib/positions';
 import { getSession } from '../lib/session';
-import { setState, useStore } from '../state/store';
+import { messagePlayer, useStore } from '../state/store';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon } from './icons';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
@@ -78,7 +78,7 @@ export function PeoplePanel() {
             <button
               className="icon-btn"
               title={`Message ${p.name}`}
-              onClick={() => setState({ panel: 'chat', unread: 0, chatTarget: { scope: 'dm', to: p.id } })}
+              onClick={() => messagePlayer(p.id)}
             >
               <ChatIcon size={16} />
             </button>
