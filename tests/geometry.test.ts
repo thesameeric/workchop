@@ -11,6 +11,8 @@ import {
   shouldLink,
   zoneAt,
 } from '../shared/geometry';
+import { getEntry, seatsOf } from '../shared/catalog';
+import { createFromTemplate } from '../shared/templates';
 import type { OfficeItem, Zone } from '../shared/types';
 
 const bounds = { width: 20, depth: 20 };
@@ -66,6 +68,53 @@ describe('pathfinding', () => {
       prev = p;
     }
     expect(prev).toEqual({ x: 5, z: 15 });
+  });
+
+  /** Every leg of the path is walkable and it ends on the goal. */
+  function expectWalkable(start: { x: number; z: number }, goal: { x: number; z: number }, colliders: ReturnType<typeof buildColliders>, b = bounds) {
+    const path = findPath(start, goal, colliders, b);
+    expect(path, `from (${start.x}, ${start.z})`).not.toBeNull();
+    let prev = start;
+    for (const p of path!) {
+      for (let t = 0; t <= 1; t += 0.05) {
+        expect(isBlocked(prev.x + (p.x - prev.x) * t, prev.z + (p.z - prev.z) * t, colliders, b)).toBe(false);
+      }
+      prev = p;
+    }
+    expect(prev).toEqual(goal);
+  }
+
+  it('sets off from a gap too tight for the grid (between the lounge sofa and coffee table)', () => {
+    const office = createFromTemplate('startup', 'o', 'Office');
+    const colliders = buildColliders(office);
+    const goal = office.settings.spawn;
+    // Where "Go to" and standing up from the sofa put people.
+    for (const start of [{ x: 5.807, z: 17.154 }, { x: 5, z: 17 }, { x: 5.5, z: 15 }]) {
+      expect(isBlocked(start.x, start.z, colliders, office.settings)).toBe(false);
+      expectWalkable(start, goal, colliders, office.settings);
+      expectWalkable(start, { x: 15, z: 11 }, colliders, office.settings);
+    }
+    // A goal next to you in the same tight gap.
+    expectWalkable({ x: 5.807, z: 17.154 }, { x: 5.9, z: 17.1 }, colliders, office.settings);
+  });
+
+  it('gets you to every seat of the startup office and back to the entrance', () => {
+    const office = createFromTemplate('startup', 'o', 'Office');
+    const colliders = buildColliders(office);
+    for (const item of office.items) {
+      for (const seat of seatsOf(item)) {
+        // Close enough to sit down on arrival (SIT_RANGE in movement.ts).
+        const there = findPath(office.settings.spawn, seat, colliders, office.settings);
+        expect(there, `to ${item.type} ${item.id}`).not.toBeNull();
+        const last = there![there!.length - 1];
+        expect(Math.hypot(last.x - seat.x, last.z - seat.z)).toBeLessThan(1.3);
+        // Where standing up puts you (movement.ts standUp).
+        const spot = getEntry(item.type)?.solid
+          ? findFreeSpot(seat.x + Math.sin(seat.ry) * 0.8, seat.z + Math.cos(seat.ry) * 0.8, colliders, office.settings)
+          : isBlocked(seat.x, seat.z, colliders, office.settings) ? findFreeSpot(seat.x, seat.z, colliders, office.settings) : seat;
+        expectWalkable({ x: spot.x, z: spot.z }, office.settings.spawn, colliders, office.settings);
+      }
+    }
   });
 
   it('returns null when the goal is sealed off', () => {

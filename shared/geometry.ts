@@ -177,19 +177,38 @@ export function findPath(
     }
   }
 
-  const sc = toCell(start.x, cols);
-  const sr = toCell(start.z, rows);
-  let gc = toCell(goal.x, cols);
-  let gr = toCell(goal.z, rows);
-  if (blocked[gr * cols + gc]) {
-    const free = findFreeSpot(goal.x, goal.z, colliders, bounds);
-    gc = toCell(free.x, cols);
-    gr = toCell(free.z, rows);
-    if (blocked[gr * cols + gc]) return null;
-  }
-  const startIdx = sr * cols + sc;
-  const goalIdx = gr * cols + gc;
-  if (startIdx === goalIdx) return [{ x: goal.x, z: goal.z }];
+  const cellOf = (p: { x: number; z: number }) => toCell(p.z, rows) * cols + toCell(p.x, cols);
+  const centerOf = (i: number) => ({ x: center(i % cols), z: center(Math.floor(i / cols)) });
+  // The open cell to set off from or arrive at: the point's own, or, in a gap too tight for the grid
+  // (between a sofa and the coffee table, behind a desk), the nearest one in a straight line from it.
+  const openCell = (p: { x: number; z: number }): number => {
+    const own = cellOf(p);
+    if (!blocked[own]) return own;
+    const c0 = own % cols;
+    const r0 = (own - c0) / cols;
+    let best = -1;
+    let bestD = Infinity;
+    for (let r = Math.max(0, r0 - 4); r <= Math.min(rows - 1, r0 + 4); r++) {
+      for (let c = Math.max(0, c0 - 4); c <= Math.min(cols - 1, c0 + 4); c++) {
+        const i = r * cols + c;
+        const q = centerOf(i);
+        const d = Math.hypot(q.x - p.x, q.z - p.z);
+        if (blocked[i] || d >= bestD || !clearLine(p, q, colliders, bounds)) continue;
+        best = i;
+        bestD = d;
+      }
+    }
+    return best;
+  };
+
+  // Where the walk ends: the goal, or the free spot nearest to it (for a sofa's seat).
+  const end = isBlocked(goal.x, goal.z, colliders, bounds) ? findFreeSpot(goal.x, goal.z, colliders, bounds) : { x: goal.x, z: goal.z };
+  const startIdx = openCell(start);
+  const goalIdx = openCell(end);
+  if (startIdx < 0 || goalIdx < 0) return null;
+  if (startIdx === goalIdx && startIdx === cellOf(start)) return [end];
+  const gc = goalIdx % cols;
+  const gr = (goalIdx - gc) / cols;
 
   const g = new Float32Array(cols * rows).fill(Infinity);
   const came = new Int32Array(cols * rows).fill(-1);
@@ -233,7 +252,7 @@ export function findPath(
   };
 
   g[startIdx] = 0;
-  f[startIdx] = h(sc, sr);
+  f[startIdx] = h(startIdx % cols, Math.floor(startIdx / cols));
   push(startIdx);
   const dirs = [
     [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
@@ -259,22 +278,25 @@ export function findPath(
       // No cutting corners past obstacles.
       if (dc !== 0 && dr !== 0 && (blocked[cr * cols + nc] || blocked[nr * cols + cc])) continue;
       const ng = g[cur] + cost;
-      if (ng < g[ni]) {
-        g[ni] = ng;
-        f[ni] = ng + h(nc, nr);
-        came[ni] = cur;
-        push(ni);
-      }
+      if (ng >= g[ni]) continue;
+      // Two open cells can still have something in between (the end of a glass wall by a doorway).
+      if (isBlocked(center(cc) + (dc * GRID) / 2, center(cr) + (dr * GRID) / 2, colliders, bounds)) continue;
+      g[ni] = ng;
+      f[ni] = ng + h(nc, nr);
+      came[ni] = cur;
+      push(ni);
     }
   }
   if (!found) return null;
 
   const cells: number[] = [];
   for (let i = goalIdx; i !== -1 && i !== startIdx; i = came[i]) cells.push(i);
+  if (startIdx !== cellOf(start)) cells.push(startIdx);
   cells.reverse();
-  const points = cells.map((i) => ({ x: center(i % cols), z: center(Math.floor(i / cols)) }));
-  // End exactly on the requested goal when it's reachable.
-  if (!isBlocked(goal.x, goal.z, colliders, bounds) && points.length) points[points.length - 1] = { x: goal.x, z: goal.z };
+  const points = cells.map(centerOf);
+  // End exactly on the goal (or the free spot next to it).
+  if (goalIdx === cellOf(end) && goalIdx !== startIdx) points[points.length - 1] = end;
+  else points.push(end);
   return smoothPath(start, points, colliders, bounds);
 }
 

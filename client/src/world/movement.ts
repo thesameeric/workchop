@@ -5,7 +5,7 @@ import type { Office } from '../../../shared/types';
 import { focusHint } from '../features/audio/focus';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
-import { getState, setState } from '../state/store';
+import { getState, setState, toast } from '../state/store';
 import { nearbyActionFinders, type NearbyAction } from './extensions';
 import { axis } from './input';
 import { nearestSeat, officeData } from './officeCache';
@@ -13,6 +13,7 @@ import { nearestSeat, officeData } from './officeCache';
 const WALK_SPEED = 3.6;
 const RUN_SPEED = 6.2;
 const SIT_RANGE = 1.3;
+const NO_WAY = "Can't get there from here";
 
 type SeatRef = Seat & { itemId: string };
 
@@ -79,7 +80,9 @@ export function walkTo(x: number, z: number, seat?: SeatRef): void {
   const path = findPath({ x: local.x, z: local.z }, { x, z }, colliders, office.settings);
   local.path = path && path.length ? path : null;
   local.pathSeat = seat ?? null;
-  if (!local.path && seat && Math.hypot(seat.x - local.x, seat.z - local.z) < SIT_RANGE) sitOn(seat);
+  if (local.path) return;
+  if (seat && Math.hypot(seat.x - local.x, seat.z - local.z) < SIT_RANGE) sitOn(seat);
+  else if (!getState().toasts.some((t) => t.text === NO_WAY)) toast(NO_WAY);
 }
 
 function lerpAngle(a: number, b: number, t: number): number {
