@@ -18,6 +18,10 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Walking animation, sitting on chairs, sofas and stools, and 10 reactions everyone sees (`1`–`9`, `0`): 👋 waves, ❤️ sends hearts floating up, 😂, 👍, 🎉 pops 3D confetti (and showers your own screen a little), ✋ raises a hand, 💃 dances for a few seconds (until you walk off), 👏 claps, 🔥 lights little flames and 🙌 throws both arms up.
 - Your look and name are saved in the browser and can be changed at any time, even inside an office.
 
+**Accounts (optional)**
+- Sign in with Google or Apple (see [Accounts and sign-in](#accounts-and-sign-in)) to keep your character, status, theme and weather settings on every device, and find the offices you visit under *Your spaces*. Anyone with an office link can still join as a guest.
+- Light and dark themes, or follow the device (*Settings > Appearance*).
+
 **The office**
 - Two starting templates: a furnished startup office with desk pods, a glass meeting room, a lounge, a kitchen and ping pong, or a blank floor.
 - **Build mode** (hammer button or `B`): 45 pieces of furniture, structure and plants in 7 categories. Place, drag, rotate (`R`), duplicate (`Ctrl/Cmd+D`), recolour and delete (`Del`) items, and draw private areas by dragging on the floor.
@@ -32,7 +36,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 
 **GitHub notifications**
 - People who sign in can connect their GitHub account (optional, needs a GitHub OAuth App, see [GitHub](#github)). The GitHub panel sorts their unread notifications into Mentions, Reviews, Actions and Activity, with a badge for unread mentions, review requests and failed runs. Click one to open it on GitHub. Marking items read or done in the panel does the same on GitHub.
-- A failed Actions run you started pops up as a message with a link to it.
+- A failed Actions run you started pops up as a message with a link to it, and a small red badge pulses on your own desk's monitor (only you see it) until you open the panel or mark the run read or done.
 
 **Lounge music**
 - A **jukebox** (in the startup lounge, or add one from Build → Fun) plays music for everyone in the private area it stands in, or within about 7 m if it's out in the open. Click it, the 🎵 dock button, or the "now playing" chip to open it. Everyone has their own volume and mute.
@@ -46,10 +50,6 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Threads** (reply to any message, optionally also in the channel), **@mentions** of people here or away and `@here` for everyone online, **reactions**, editing and deleting your messages, and light formatting: `**bold**`, `_italic_`, `` `code` ``, code blocks and links.
 - **Files:** attach, drag in or paste up to 5 per message. Images show as previews that open full size; other files as cards to download.
 - Unread channels are bold, with a count of your mentions. The dock's chat button counts your mentions and direct messages, and a mention or direct message also shows a notice that takes you to it.
-
-**Coins**
-- Signed-in members have a wallet of virtual coins (just for fun: no real money, nothing to buy or cash out). See [Coins](#coins).
-- Thank a coworker with a tip from the Wallet panel (its dock button shows your balance) or the people list, and everyone in the office sees a little celebration over them.
 
 **Local weather**
 - Everyone sees the weather and time of day where *they* are: the sky and sunlight follow their local time, with clouds, fog, rain, snow or thunderstorms around the office. A chip in the top bar shows the conditions, temperature and place; click it for details. Data from [Open-Meteo](https://open-meteo.com/) (see [Weather](#weather)).
@@ -75,7 +75,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 | `H` | Noise-cancelling headphones (focus mode) |
 | `B` | Build mode |
 | `Enter` | Open chat (in chat: send; `Shift+Enter` for a new line) |
-| `↑` / `Esc` | In chat: edit your last message / cancel a reply or an edit |
+| `↑` / `Esc` | In chat: edit your last message / cancel a reply or an edit, or leave the message box (`Esc` again closes the chat) |
 | `R`, `Del`, `Ctrl+D`, `Esc` | Rotate, delete, duplicate, cancel (build mode) |
 
 ## Getting started
@@ -208,7 +208,7 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Chat: channels, messages, threads, reactions, mentions, who has read what | The database (attached files with the uploads). Kept until deleted, or for `CHAT_RETENTION_DAYS`. Nearby messages and direct messages with guests are never stored |
 | Headphones (focus mode) | In memory only, while you're in the office |
 | Noise suppression choice, devices | Each person's browser (local storage) |
-| Coin wallets and every coin movement (a ledger) | The database |
+| Coin wallets and every coin movement (a ledger), only with `COINS=on` (off for now) | The database |
 | Weather settings: on/off, units, sharing, the chosen city or the rounded device location | Each person's browser (local storage). For signed-in people, also with their account, except the device location. The weather itself is cached in memory only, per ~11 km cell |
 | Who's online, positions, calls | In memory only (live state) |
 | Current app (picked by hand or from the desktop helper) | In memory only, never stored; a helper's report expires after 45 s without a heartbeat |
@@ -231,32 +231,38 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 
 ### Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `3001` | HTTP port of the server (in `npm run dev`, the API port Vite proxies to) |
-| `HOST` | `0.0.0.0` | Bind address |
-| `DATABASE_URL` | – | Postgres connection string. Without it, data is kept in PGlite in `DATA_DIR/db` |
-| `DATABASE_SSL` | – | `require` (verified TLS) or `no-verify` (TLS without certificate checks, for some managed providers) |
-| `DATA_DIR` | `./data` (`/app/data` in Docker) | Data folder: the PGlite database (`db/`), uploaded files with `UPLOADS_STORAGE=fs` (`uploads/`), and old office JSON files to import |
-| `PUBLIC_URL` | `http://localhost:5173` in development | The address people open Workchop at, e.g. `https://office.example.com`. Sign-in redirects are built from it, and Socket.IO refuses connections whose `Origin` differs. Compose sets it from `DOMAIN` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | – | Turns on "Sign in with Google" (see [Accounts and sign-in](#accounts-and-sign-in)) |
-| `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | – | Turns on "Sign in with Apple": the Services ID, team ID, key ID and the `.p8` key (PEM, with `\n` for line breaks, or base64) |
-| `DEV_LOGIN` | – | `true` allows signing in with just a name and email, for development. Ignored by the built server (`npm start`, Docker) and when `NODE_ENV=production`, unless `DEV_LOGIN_IN_PRODUCTION=true` |
-| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | – | Turns on [GitHub notifications](#github): the OAuth App's client ID and secret. GitHub also needs `TOKEN_ENCRYPTION_KEY`, `PUBLIC_URL` and a way to sign in |
-| `TOKEN_ENCRYPTION_KEY` | – | Encrypts the saved GitHub tokens: 32 random bytes in base64 (`openssl rand -base64 32`). Without a valid key, GitHub stays off and the log says why. Keep it: with a new key, everyone has to connect GitHub again |
-| `UPLOADS_STORAGE` | see above | Where uploaded files go: `s3`, `db` or `fs`. Each file remembers where it went, so switching keeps old files readable |
-| `UPLOAD_MAX_BYTES`, `UPLOADS_QUOTA_MB` | `10485760`, `1024` | Largest file, and the total each office may keep |
-| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | –, `auto` | An S3-compatible bucket for uploads (Cloudflare R2: `https://<account id>.r2.cloudflarestorage.com`); path-style URLs |
-| `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
-| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | – | Shortcut for adding one TURN server (comma-separate several URLs) |
-| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_KEY_API_TOKEN` | – | Use Cloudflare's TURN service, with short-lived credentials per visitor (replaces the static ICE servers above) |
-| `CLOUDFLARE_TURN_TTL` | `86400` | How long those credentials last, in seconds (600 to 172800) |
-| `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` directly behind the bundled Caddy (set in Compose), `cf-connecting-ip` when every request comes through Cloudflare (set automatically on Containers and with the Tunnel). Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
-| `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
-| `CHAT_RETENTION_DAYS` | – (keep) | Delete chat messages (with their threads) that have been quiet for this many days, with their files (see [Chat](#chat)) |
-| `WEATHER` | – | `off` turns the [weather](#weather) off: no calls to Open-Meteo, and everyone sees the usual daytime office |
-| `OPEN_METEO_API_KEY` | – | Key for a paid Open-Meteo plan, needed for commercial use (the free API is non-commercial only, see [Weather](#weather)). A value that can't be a key (spaces, more than 200 characters) is ignored with a warning |
-| `GEO_HEADERS` | – | Who sets the headers with each visitor's approximate location, used for the weather: `workchop` (Workchop's Cloudflare Worker; set automatically on Containers) or `cloudflare` (Cloudflare's *Add visitor location headers* Managed Transform, e.g. with the Tunnel). Like `CLIENT_IP_HEADER`, only set it when every request comes through that proxy, or visitors could fake their location |
+Everything is set with environment variables: in `.env` for Docker Compose (see `.env.example`), and on Cloudflare Containers as wrangler secrets (`npx wrangler secret put NAME`) or, for the ones that aren't secret, under `vars` in `cloudflare/wrangler.jsonc`. Keep the ones marked secret out of the repository and of logs.
+
+**Deploy checklist.** Required: a database (`DATABASE_URL`; Compose runs its own Postgres, and needs `DOMAIN` and `POSTGRES_PASSWORD` in `.env`) and `PUBLIC_URL`, the HTTPS address people use (Compose sets it from `DOMAIN`). Then, as needed: sign-in (Google and/or Apple), a bucket for uploaded files (R2 on Cloudflare), TURN for people behind strict firewalls, GitHub notifications, Spotify listen-along, an Open-Meteo key for commercial use, and how long to keep chat. Everything else has a sensible default.
+
+| Variable | Needed? | Secret? | Default | What it's for, and where to get it |
+| --- | --- | --- | --- | --- |
+| `PUBLIC_URL` | Yes, in production (sign-in and GitHub need it) | No | `http://localhost:5173` in development; Compose: `https://<DOMAIN>` | The address people open Workchop at, e.g. `https://office.example.com`. Sign-in redirects are built from it, and Socket.IO refuses connections whose `Origin` differs |
+| `DATABASE_URL` | Yes for anything hosted (Compose sets it) | Yes | – | Postgres connection string, from your database host (Neon, Supabase, RDS…). Without it, data is kept in PGlite in `DATA_DIR/db` |
+| `DATABASE_SSL` | No | No | – | `require` (verified TLS) or `no-verify` (TLS without certificate checks, for some managed providers) |
+| `DATA_DIR` | No | No | `./data` (`/app/data` in Docker) | Data folder: the PGlite database (`db/`), uploaded files with `UPLOADS_STORAGE=fs` (`uploads/`), and old office JSON files to import |
+| `PORT`, `HOST` | No | No | `3001`, `0.0.0.0` | Where the server listens (in `npm run dev`, the API port Vite proxies to) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | For "Sign in with Google" | The secret | – | A *Web application* OAuth client in the Google Cloud console (see [Accounts and sign-in](#accounts-and-sign-in)) |
+| `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | For "Sign in with Apple" | The private key | – | From the Apple Developer portal: the Services ID, team ID, key ID and the `.p8` key (PEM, with `\n` for line breaks, or base64) |
+| `DEV_LOGIN` | Development only | No | – | `true` allows signing in with just a name and email. Ignored by the built server (`npm start`, Docker) and when `NODE_ENV=production`, unless `DEV_LOGIN_IN_PRODUCTION=true` (never on a real server) |
+| `UPLOADS_STORAGE` | No | No | `s3` when `S3_BUCKET` is set, else `db` with Postgres, `fs` with PGlite | Where uploaded files (chat attachments, office tracks) go: `s3`, `db` or `fs`. Each file remembers where it went, so switching keeps old files readable |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | Recommended on Cloudflare (R2) | The access key and its secret | –, `auto` for the region | An S3-compatible bucket for uploads, with path-style URLs. Cloudflare R2: create a bucket and an API token with object read and write; the endpoint is `https://<account id>.r2.cloudflarestorage.com` |
+| `UPLOAD_MAX_BYTES`, `UPLOADS_QUOTA_MB` | No | No | `10485760`, `1024` | Largest file, and the total each office may keep |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | For [GitHub notifications](#github) | The secret | – | An OAuth App on GitHub (*Developer settings > OAuth Apps*). GitHub also needs `TOKEN_ENCRYPTION_KEY`, `PUBLIC_URL` and a way to sign in |
+| `TOKEN_ENCRYPTION_KEY` | For GitHub | Yes | – | Encrypts the saved GitHub tokens: 32 random bytes in base64, from `openssl rand -base64 32`. Without a valid key, GitHub stays off and the log says why. Keep it: with a new key, everyone has to connect GitHub again |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_KEY_API_TOKEN` | For people behind strict firewalls (or the TURN settings below) | The API token | – | Cloudflare's TURN service, from the dashboard (*Realtime > TURN*): short-lived credentials per visitor (replaces the static ICE servers below) |
+| `CLOUDFLARE_TURN_TTL` | No | No | `86400` | How long those credentials last, in seconds (600 to 172800) |
+| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | No | The credential | – | Your own TURN server, e.g. Compose's coturn (comma-separate several URLs) |
+| `ICE_SERVERS` | No | Yes, if it holds credentials | Google STUN | JSON array of `RTCIceServer`s, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` (instead of the `TURN_*` shortcut) |
+| `CLIENT_IP_HEADER` | Behind a proxy | No | – (Compose: `x-forwarded-for`; set on Containers and with the Tunnel) | Header with each visitor's IP: `x-forwarded-for` directly behind the bundled Caddy, `cf-connecting-ip` when every request comes through Cloudflare. Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
+| `SPOTIFY_CLIENT_ID` | For Spotify listen-along | No (a public PKCE client) | – | An app at <https://developer.spotify.com/dashboard> (see [Music and Spotify](#music-and-spotify)) |
+| `CHAT_RETENTION_DAYS` | No | No | – (keep) | Delete chat messages (with their threads) that have been quiet for this many days, with their files (see [Chat](#chat)) |
+| `WEATHER` | No | No | on | `off` turns the [weather](#weather) off: no calls to Open-Meteo, and everyone sees the usual daytime office |
+| `OPEN_METEO_API_KEY` | For commercial use of the weather | Yes | – | Key for a paid [Open-Meteo plan](https://open-meteo.com/en/pricing) (the free API is non-commercial only, see [Weather](#weather)). A value that can't be a key (spaces, more than 200 characters) is ignored with a warning |
+| `GEO_HEADERS` | No | No | – (`workchop` on Containers) | Who sets the headers with each visitor's approximate location, for the weather: `workchop` (Workchop's Cloudflare Worker) or `cloudflare` (Cloudflare's *Add visitor location headers* Managed Transform, e.g. with the Tunnel). Like `CLIENT_IP_HEADER`, only set it when every request comes through that proxy, or visitors could fake their location |
+| `COINS` | Development only | No | off | `on` brings back the old experimental coins (see [Coins](#coins-off-for-now)); don't set it on a real server |
+
+Compose's own settings in `.env`: `DOMAIN` (required, your host name), `POSTGRES_PASSWORD` (required, secret: a long random password for the bundled database), and for the Tunnel `CLOUDFLARE_TUNNEL_TOKEN` (secret) and `COMPOSE_FILE`. Cloudflare Containers also has `LOCATION_HINT` and `EPHEMERAL_STORAGE` in `wrangler.jsonc` (see [Cloudflare Containers](#cloudflare-containers)).
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
 
@@ -291,7 +297,7 @@ People who sign in can connect their own GitHub account and follow their GitHub 
 - **Actions:** workflow runs you started (green: succeeded, red: failed, grey: cancelled or skipped), and deployments waiting for your approval (amber).
 - **Activity:** everything else, such as comments on issues and pull requests you opened or follow.
 
-The dock badge counts unread mentions, review requests and failed runs. Clicking an item opens it on GitHub and marks it read; *Mark read*, *Done* and *Mark all read* change your inbox on GitHub too (*Mark all read* leaves unread what arrived after the panel last checked). Like GitHub's unread view, the panel lists unread notifications only: read ones leave it with the next update. A new failed run also pops up as a message with an *Open* button. People connect and disconnect in *Settings > Integrations*; guests see "Sign in to connect GitHub". On a server without the settings below, or where nobody can sign in, GitHub doesn't appear at all.
+The dock badge counts unread mentions, review requests and failed runs. Clicking an item opens it on GitHub and marks it read; *Mark read*, *Done* and *Mark all read* change your inbox on GitHub too (*Mark all read* leaves unread what arrived after the panel last checked). Like GitHub's unread view, the panel lists unread notifications only: read ones leave it with the next update. A new failed run also pops up as a message with an *Open* button, and a small red badge pulses on the monitor of your own desk (the one you claimed, or else the one you sit at) until you open the panel or the run is read or done. Only your browser draws it: nothing about your GitHub reaches the office. People connect and disconnect in *Settings > Integrations*; guests see "Sign in to connect GitHub". On a server without the settings below, or where nobody can sign in, GitHub doesn't appear at all.
 
 **Setting it up.** GitHub needs people to sign in, so set up [Google or Apple sign-in](#accounts-and-sign-in) (or `DEV_LOGIN` for development) and `PUBLIC_URL` first. Then:
 1. Create an **OAuth App** (not a GitHub App: GitHub's notifications API doesn't accept GitHub App tokens). Create it under your company's GitHub organization (*Organization settings > Developer settings > OAuth Apps > New OAuth App*), because apps an organization owns get access to its data automatically. A personal one (<https://github.com/settings/applications/new>) works too, but then each organization that restricts OAuth Apps has to approve it first (see below).
@@ -357,16 +363,9 @@ Browsers can't see which app you're using, so Workchop has two ways to show it:
 
 **Server side.** `PUT /api/me/app-presence` with `Authorization: Bearer wcp_…` and `{"app": "<id>" | "other" | null, "platform": "macos" | "windows" | "linux", "v": 1}` answers 204. The server takes about one report per 2 s per token. When none of your tabs is in an office, it answers with `Retry-After: 300` and the helper waits (so it can take up to 5 minutes after you open Workchop for your app to show). On Cloudflare Containers, the Worker answers helper reports itself (204) when the container isn't running (`Retry-After: 60`), and passes reports on only within 5 minutes of someone using Workchop (open tabs check in every 4 minutes). While the container is still running without visitors, it asks helpers to wait 16 minutes, longer than the 15-minute idle timeout, so a helper never starts the container and can't keep it running. Nothing to configure: the feature needs no settings of its own.
 
-### Coins
+### Coins (off for now)
 
-Every signed-in member has one wallet, the same in every office. Guests see "Sign in to get a wallet". Coins come from:
-
-- a **welcome bonus** of 100 coins the first time they join an office (or open their wallet),
-- a **daily check-in** of 20 coins on their first visit each UTC day,
-- **being present**: 5 coins for every 30 minutes in an office while not *Away* or idle (idle: no walking, chatting or reacting for 10 minutes with mic, camera and screen off), up to 40 a day. The server keeps the time; nothing is reported by the browser,
-- **tips** from coworkers: 1–500 coins with an optional note (140 characters), to someone signed in and in the same office, up to 10 tips a minute. Everyone there sees the shout-out and its note.
-
-The server decides everything. Each change runs in one database transaction that locks the wallets involved (always in the same order, so two tips can't deadlock), refuses to go below zero (also enforced by a `CHECK` on the balance), and writes a ledger row with the new balance. Unique keys make the daily bonus, presence coins and tips happen at most once, even when a tip is retried. An office's owner can turn coins off there (Wallet panel → *Coins in this office*): tipping is hidden and nobody earns coins in that office, while wallets stay as they are. Coins need no configuration.
+Coins are switched off. The owner wants actual coins rather than coins earned through activity, so the feature is disabled until it's redesigned: by default there's no wallet, no balance, no "Send coins", no celebrations, no coin tables, routes or timers. `COINS=on` turns the old experimental version (welcome and daily bonuses, coins for being present, tips; see `docs/specs/coins.md`) back on, **for development only**; don't set it on a real server. Its code and tests stay in the repository for the redesign.
 
 ### Weather
 
@@ -420,7 +419,7 @@ client/   React + react-three-fiber app (Vite)
     chat/      Chat panel: channels, direct messages, threads, mentions, reactions, files
     audio/     Headphones (focus mode) and shoulder taps, reaction particles and confetti
     presence/  Current app: status picker, app chips, desktop helper settings
-    coins/     Wallet panel, tips and their celebrations
+    coins/     Wallet panel, tips and their celebrations (off unless the server has COINS=on)
     weather/   Local weather: settings, top-bar chip, sky, light and weather effects
     github/    GitHub panel, its settings and live notifications
     world/     Desk monitors, lights, plant cards, desk claims and notes
@@ -439,7 +438,7 @@ server/   Express + Socket.IO
   features/chat/  Channels, messages, threads, mentions, reactions, read markers (tables chat_*)
   features/audio.ts  Shoulder taps for people wearing headphones
   features/presence/  Current app from the status picker or the desktop helper (table api_tokens)
-  features/coins/  Wallets, the coin ledger, daily and presence coins, tips (tables wallets, coin_*)
+  features/coins/  Wallets, the coin ledger, daily and presence coins, tips (only with COINS=on)
   features/weather/  Open-Meteo proxy with a cache per ~11 km cell, location from proxy headers
   features/github/  Connecting GitHub (an OAuth App), encrypted tokens, the notifications poller
   features/world.ts  Lamps and light switches, desk claims and desk notes (table desk_notes)
@@ -471,25 +470,27 @@ npm test          # unit tests for geometry/office rules + server integration te
 
 Tests use an in-memory PGlite. They run against real Postgres instead when `TEST_DATABASE_URL` points at a database they may write to (each test file gets its own schema), e.g. `TEST_DATABASE_URL=postgres://user:pass@localhost:5432/workchop_test npm test`. Run both before changing SQL: production may run Postgres 16 while PGlite is Postgres 18.
 
-**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register` gets an Express router mounted at `/api`, the database, the office store, `auth.userFromRequest`/`requireUser`, `clientIp(req)` (the visitor's IP address, from `CLIENT_IP_HEADER` behind a proxy, for per-visitor limits), and the realtime hooks (`onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `updatePlayer`…). Socket ids are visible to everyone in the office, so an HTTP route shouldn't trust an `X-Workchop-Socket` header alone: also limit by `clientIp(req)`, or check a secret only that socket has (like the upload key). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
+**Adding a server feature:** create `server/features/<name>.ts` exporting `feature: Feature` (`name`, optional `migrations`, `register(ctx)`) and add it to the list in `server/features/index.ts`. `register(ctx)` gets: `app`, an Express router mounted at `/api` (after `express.json`, before the API's 404; a guard already refuses cross-site `POST`/`PATCH`/`DELETE`); `io`; `db`, the database; `store`, the office store; `auth.userFromRequest(req)` and the `auth.requireUser` middleware (401 for guests, else the user in `res.locals.user`); `uploads` (e.g. `uploads.remove(ids)` deletes stored files); `publicOrigin` (`PUBLIC_URL`'s origin, or null); `clientIp(req)` (the visitor's IP address, from `CLIENT_IP_HEADER` behind a proxy, for per-visitor limits); `quiet` (true in tests: leave out messages that only say things are working); `onClose(fn)` (runs when the server closes, before the database does: stop timers there); and `realtime`: `onSocket`, `onJoin`, `onLeave`, `emitToOffice`, `emitToUser`, `playersOfUser`, `updatePlayer` (changes a player and tells the office), `contextOf(socketId)`, `onlineCount`, `linkedPeers`. Each connection's context (`s`) has `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `isOwner()`, `mayEdit()` and `limiter(rate, burst)`. Socket ids are visible to everyone in the office, so an HTTP route shouldn't trust an `X-Workchop-Socket` header alone: also limit by `clientIp(req)`, or check a secret only that socket has (like the upload key). Declare the feature's socket events in `shared/<name>.ts` by augmenting `ClientToServerEvents`/`ServerToClientEvents` (and `PlayerState`) from `shared/types.ts`. Migration ids are global: core uses 1–99, features take the next free id from 100. `onSocket`/`onJoin`/`onLeave` callbacks may be async (failures are logged), but catch errors in your own `socket.on` handlers. Files are uploaded with `POST /api/offices/<id>/uploads` (the file as the body, its name URL-encoded in `X-Filename`, and `X-Workchop-Socket`/`X-Workchop-Upload-Key` from the join answer's `selfId`/`uploadKey`); a busy server answers 429 or 503 with `Retry-After`.
 
 **Adding a client feature:** create `client/src/features/<name>/index.ts` (or `.tsx`); every such file is loaded at startup, so nothing else needs editing. From there:
 
-- `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?, badgeTone?, shortcut? })` from `ui/panels.tsx` adds a side panel and its dock button (chat is 10, music 20, people 30, wallet 35, My desk 40, GitHub 45; `setPanel(id)` toggles it). With `inMore`, the button goes in the dock's More menu on phone-sized screens, where the dock only has room for a few; an alert badge there shows on the More button too.
-- `registerSettingsSection({ id, title, icon, order, Component })` from `ui/settings.tsx` adds a section to Settings (Appearance is 10, Audio & video 20).
+- `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?, badgeTone?, shortcut? })` from `ui/panels.tsx` adds a side panel and its dock button (chat is 10, music 20, people 30, coins' wallet 35 when on, My desk 40, GitHub 45; `setPanel(id)` toggles it). `dock: false` gives it no button (build mode has its own), `hideOnMobile` none on phones, and with `inMore` the button goes in the dock's More menu on phone-sized screens, where the dock only has room for a few; an alert badge there shows on the More button too. `useBadge` is a hook giving the button's badge (a count or short text; red with `badgeTone: 'alert'`, the default, grey with `'neutral'`), and `shortcut` names a key in its tooltip (chat's `Enter`; the office's own keys are listed above, so pick one that isn't taken). Registering returns a function that removes the panel again, for features that show only on some servers (GitHub) or for some people (My desk).
+- `registerSettingsSection({ id, title, icon, order, Component })` from `ui/settings.tsx` adds a section to Settings (Appearance is 10, Audio & video 20, Privacy & status 30, Desktop helper 35, Weather and Integrations 40).
 - `registerTopBarItem({ id, order, Component })` from `ui/topbar.ts` adds something to the top bar, after the music that's playing (weather is 10). `Component` renders null when there's nothing to show.
 - `registerPersonDetail({ id, order, Component })` from `ui/PeoplePanel.tsx` adds a line under other people's names in the People panel (weather is 10). `Component` gets `{ player }` and renders null when there's nothing to show for them.
-- `registerPersonAction({ id, order, Component })` from `ui/personActions.ts` adds a button next to other people in the People panel, after "Go to" and "Message" (coins' "Send coins" is 10). `Component` gets `{ player }` and renders null when it doesn't apply to them.
+- `registerPersonAction({ id, order, Component })` from `ui/personActions.ts` adds a button next to other people in the People panel, after "Go to" and "Message" (coins' "Send coins" is 10, when coins are on). `Component` gets `{ player }` and renders null when it doesn't apply to them.
 - `registerSceneLayer({ id, order, Component })` from `world/layers.ts` adds a component to the 3D office, rendered inside the Canvas after the office (weather is 10; the world feature's monitors, darkened areas, lamp lights and item cards 20–50). Each layer has its own `Suspense` and error boundary, so it can be `lazy`, and one that fails doesn't take the office down. To change the sky, fog, light, wind (plants sway with it) or how the ground looks, write to `sceneLighting` (same file) from `useFrame` with priority `-1`, so before the office's own components read it each frame. Call `resetSceneLighting()` when your layer unmounts, or the office keeps your sky and light.
-- `onSession(id, (session) => cleanup)` from `lib/session.ts` runs for every office visit, after the socket is created and before it connects: add handlers with `session.socket.on(…)` (typed, including your augmented events; they run after the app's own), act after joining with `session.onJoined((rejoin) => …)` (rejoins follow reconnects), and read `session.officeId` and `session.selfId()`. The function you return runs when the person leaves, and also when the hook is registered again under the same `id` (a hot reload) or unregistered mid-visit, so undo there what the hook added (`socket.off`, the function `onJoined` returns). `session.upload(file, { name, onProgress, signal })` uploads a file into the office and resolves to `{ id, url, name, contentType, size }`, or throws an Error whose message can be shown ("File too large (max 10 MB)", the server's reason…).
-- `toast(text, { kind, icon, action: { label, run } })` from `state/store.ts` shows a message, optionally with an icon and a button.
-- For signed-in people, `getState().account` is their account and `saveAccountSettings({ key: value })` from `lib/account.ts` saves small preferences with it, merged key by key with the saved ones (at most 50 keys per account, so prefix yours, e.g. `weather.unit`; guests have none: show a "Sign in to …" hint instead).
-- The 3D world has hooks too, in `world/extensions.ts`: `registerItemModel(type, Component)` for new item types, `registerItemDecor({ id, types, Component })` for extra 3D parts on items (other scene content is a scene layer, above), `registerItemInteraction(types, { onClick, onHover })` for what clicking an item does, and `registerNearbyAction(id, find)` for what `E` does near something. Keep three.js out of your feature's `index.ts` (it loads with the landing page): put the 3D code in a module you register with `registerWorldModule(() => import('./scene'))`, which loads with the scene. `registerOverlay({ id, order, Component })` from `ui/overlays.tsx` shows something over the office, such as a card pinned next to an item.
+- `onSession(id, (session) => cleanup)` from `lib/session.ts` runs for every office visit, after the socket is created and before it connects: add handlers with `session.socket.on(…)` (typed, including your augmented events; they run after the app's own), act after joining with `session.onJoined((rejoin) => …)` (rejoins follow reconnects), and read `session.officeId` and `session.selfId()`; `session.onLeave(fn)` runs `fn` as the person leaves. The function you return runs when the person leaves, and also when the hook is registered again under the same `id` (a hot reload) or unregistered mid-visit, so undo there what the hook added (`socket.off`, the function `onJoined` returns). `session.upload(file, { name, onProgress, signal })` uploads a file into the office and resolves to `{ id, url, name, contentType, size }`, or throws an Error whose message can be shown ("File too large (max 10 MB)", the server's reason…).
+- `toast(text, 'error' | { kind, icon, action: { label, run }, duration })` from `state/store.ts` shows a message, optionally with an icon and a button, and returns its id for `dismissToast(id)`. Toasts look the same with headphones on (they make no sound).
+- For signed-in people, `getState().account` is their account, `saveCharacter(patch)` saves their look, and `saveAccountSettings({ key: value })` from `lib/account.ts` saves small preferences with it, merged key by key with the saved ones (at most 50 keys per account, so prefix yours, e.g. `weather.unit`; guests have none: show a "Sign in to …" hint instead).
+- The 3D world has hooks too, in `world/extensions.ts`: `registerItemModel(type, Component)` for new item types, `registerItemDecor({ id, order, types, Component })` for extra 3D parts on items (the world feature's screens, GitHub badge, name plates and notes on desks are 10–30) (other scene content is a scene layer, above), `registerItemInteraction(types, { onClick, onHover })` for what clicking an item does, and `registerNearbyAction(id, find)` for what `E` does near something. Keep three.js out of your feature's `index.ts` (it loads with the landing page): put the 3D code in a module you register with `registerWorldModule(() => import('./scene'))`, which loads with the scene. `registerOverlay({ id, order, Component })` from `ui/overlays.tsx` shows something over the office, such as a card pinned next to an item.
 - Item types can keep their own data: give the catalog entry (`shared/catalog.ts`) a `sanitizeData(raw)`, and change the data through your feature's own socket events. Build edits never change it: a moved item keeps its data, a new or copied one starts from `sanitizeData(undefined)`.
 
 Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicons/`. The app ships only the glyphs it uses: to add one, put its name (from `icons.css`) in `client/src/ui/icon-names.json`, export a component for it in `client/src/ui/icons.tsx` and run `npm run icons`. That regenerates `client/src/ui/hugeicons.ts` and the cut-down font `client/src/assets/hgi-subset.woff2`, and needs fontTools (`pip install fonttools brotli`).
 
 `GITHUB_OAUTH_BASE` and `GITHUB_API_BASE` (by default `https://github.com` and `https://api.github.com`) point the [GitHub](#github) integration at another server. They're only for the tests and the mock GitHub (`npx tsx tests/helpers/github.ts`); don't set them anywhere else.
+
+Coins are off (see [Coins](#coins-off-for-now)): `COINS=on npm run dev` brings back the old version to work on it. Its tests (`tests/coins.test.ts`, `tests/client-coins.test.ts`) turn it on themselves and also check that it's off by default.
 
 ## Limits
 

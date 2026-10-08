@@ -53,7 +53,9 @@
   // GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY, for
   // GitHub notifications GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and TOKEN_ENCRYPTION_KEY, for
   // uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, and for weather
-  // in commercial use OPEN_METEO_API_KEY (the free API is non-commercial only; WEATHER=off turns it off).
+  // in commercial use OPEN_METEO_API_KEY (the free API is non-commercial only).
+  // Other settings aren't secret; add them to "vars" above (or set them the same way): WEATHER ("off"
+  // turns the weather off), CLOUDFLARE_TURN_TTL, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_REGION.
 
   "observability": { "enabled": true }
 }
