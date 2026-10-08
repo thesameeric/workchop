@@ -197,7 +197,7 @@ button.rail-section {
   flex: none;
 }
 
-.presence {
+.rail-presence {
   position: absolute;
   right: -2px;
   bottom: -2px;
@@ -208,7 +208,7 @@ button.rail-section {
   background: var(--line-strong);
 }
 
-.presence.on {
+.rail-presence.on {
   background: var(--ok);
 }
 

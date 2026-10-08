@@ -163,7 +163,7 @@ function Rail({ onPick, onCreate, onMessage }: { onPick: () => void; onCreate: (
           icon={
             <span className="rail-person">
               <Avatar name={d.name} size={18} />
-              <i className={`presence${d.online ? ' on' : ''}`} />
+              <i className={`rail-presence${d.online ? ' on' : ''}`} />
             </span>
           }
           label={
@@ -268,7 +268,7 @@ function ConvHeader({ conv, onRail, onEdit }: { conv: ConvKey; onRail: () => voi
       <>
         <span className="rail-person">
           <Avatar name={name} size={22} />
-          <i className={`presence${dm?.online ? ' on' : ''}`} />
+          <i className={`rail-presence${dm?.online ? ' on' : ''}`} />
         </span>
         <span className="conv-name">{name}</span>
       </>
@@ -539,7 +539,7 @@ function NewMessage({ onClose }: { onClose: () => void }) {
             <button key={p.conv} type="button" onClick={() => pick(p.conv)}>
               <span className="rail-person">
                 <Avatar name={p.name} size={24} />
-                <i className={`presence${p.online ? ' on' : ''}`} />
+                <i className={`rail-presence${p.online ? ' on' : ''}`} />
               </span>
               <span className="people-pick-name">{p.name}</span>
               <span className="people-pick-hint">{p.online ? (p.guest ? 'Guest, here' : 'Here') : 'Away'}</span>
