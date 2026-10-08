@@ -164,7 +164,9 @@ export class MediaManager {
         if (this.loading !== loading) return p.close();
         this.loading = null;
         this.pipeline = p;
-        if (!p.running) this.resumeOnGesture(p);
+        // Switched back to Standard while it loaded: pause it, as setNoise() would have.
+        if (this.noise.mode !== 'enhanced') void p.ctx.suspend().catch(() => {});
+        else if (!p.running) this.resumeOnGesture(p);
         this.route();
         this.emit();
       },

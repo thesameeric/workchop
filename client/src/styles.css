@@ -1168,30 +1168,54 @@ kbd {
   opacity: 0.85;
 }
 
-/* Headphones (focus mode) */
+/* Headphones (focus mode): a banner above the dock, with the hint above it */
 .focus-indicator {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  transform: translateX(-50%);
+  z-index: 23;
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: fit-content;
+  gap: 10px;
   max-width: calc(100vw - 24px);
-  margin-top: 8px;
-  padding: 4px 4px 4px 12px;
+  padding: 5px 5px 5px 12px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--focus) 88%, #000 12%);
   color: #fff;
-  font-size: 0.82rem;
   box-shadow: 0 6px 18px rgba(10, 12, 25, 0.25);
-  pointer-events: auto;
 }
 
-.focus-indicator strong {
+.focus-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
-.focus-indicator > span:not(.hgi) {
+.focus-text strong {
+  font-size: 0.82rem;
+}
+
+.focus-text small {
+  font-size: 0.72rem;
   opacity: 0.85;
-  white-space: nowrap;
+}
+
+.office:has(.focus-indicator) .hint {
+  bottom: 134px;
+}
+
+/* Out of the way while the reactions menu is open (it covers them), and where an open side panel would. */
+body:has(.emote-menu) .focus-indicator,
+body:has(.emote-menu) .hint {
+  display: none;
+}
+
+@media (max-width: 1040px) {
+  .office:has(.side-panel) .focus-indicator {
+    display: none;
+  }
 }
 
 .focus-indicator button {
@@ -2110,7 +2134,7 @@ kbd {
 
 .toasts {
   position: fixed;
-  top: calc(var(--topbar-bottom, 92px) + 10px);
+  top: 104px;
   left: 12px;
   z-index: 95;
   display: flex;
@@ -2554,20 +2578,16 @@ kbd {
 }
 
 @media (max-width: 720px) {
-  /* Under the top bar it would hide behind the video tiles: on phones it sits above the dock. */
   .focus-indicator {
-    position: fixed;
-    left: 50%;
-    bottom: 122px;
-    z-index: 23;
-    margin: 0;
-    transform: translateX(-50%);
+    bottom: 72px;
   }
-}
 
-@media (max-width: 420px) {
-  .focus-indicator > span:not(.hgi) {
+  .office:has(.side-panel) .hint {
     display: none;
+  }
+
+  .office:has(.focus-indicator) .hint {
+    bottom: 120px;
   }
 }
 

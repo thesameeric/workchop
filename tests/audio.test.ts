@@ -5,7 +5,7 @@ import { io as connect } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TAP_INTERVAL_MS } from '../shared/audio';
 import { EMOTES, isEmote, reactionForKey, REACTIONS, sanitizeProfile } from '../shared/avatar';
-import { PairLimiter } from '../server/features/audio';
+import { TAPS_PER_PERSON, WindowLimiter } from '../server/features/audio';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
 import { createOffice, disconnectAll, Jar, join, json, type Client } from './helpers/http';
@@ -48,27 +48,45 @@ describe('profile changes', () => {
   });
 });
 
-describe('PairLimiter', () => {
+describe('WindowLimiter', () => {
   it('allows one tap per pair per interval, in each direction separately', () => {
     let now = 1_000_000;
-    const taps = new PairLimiter(30_000, () => now);
-    expect(taps.take('a', 'b')).toBe(0);
-    expect(taps.take('b', 'a')).toBe(0);
-    expect(taps.take('a', 'c')).toBe(0);
+    const taps = new WindowLimiter(30_000, 1, () => now);
+    expect(taps.take('a\nb')).toBe(0);
+    expect(taps.take('b\na')).toBe(0);
+    expect(taps.take('a\nc')).toBe(0);
     now += 10_000;
-    expect(taps.take('a', 'b')).toBe(20_000);
+    expect(taps.wait('a\nb')).toBe(20_000);
+    expect(taps.take('a\nb')).toBe(20_000);
     now += 19_999;
-    expect(taps.take('a', 'b')).toBe(1);
+    expect(taps.take('a\nb')).toBe(1);
     now += 1;
-    expect(taps.take('a', 'b')).toBe(0);
+    expect(taps.wait('a\nb')).toBe(0);
+    expect(taps.take('a\nb')).toBe(0);
   });
 
-  it('forgets old pairs once it holds many', () => {
+  it('allows a few per interval, counting only the ones it allowed', () => {
     let now = 0;
-    const taps = new PairLimiter(1000, () => now);
-    for (let i = 0; i < 1000; i++) taps.take(`p${i}`, 'x');
+    const taps = new WindowLimiter(30_000, 3, () => now);
+    expect(taps.take('bob')).toBe(0);
+    now = 5_000;
+    expect(taps.take('bob')).toBe(0);
+    expect(taps.take('bob')).toBe(0);
+    expect(taps.take('bob')).toBe(25_000);
+    now = 29_000;
+    expect(taps.take('bob')).toBe(1_000);
+    // The first one is 30 s old: one more fits, then it waits for the second.
+    now = 30_000;
+    expect(taps.take('bob')).toBe(0);
+    expect(taps.wait('bob')).toBe(5_000);
+  });
+
+  it('forgets old keys once it holds many', () => {
+    let now = 0;
+    const taps = new WindowLimiter(1000, 1, () => now);
+    for (let i = 0; i < 1000; i++) taps.take(`p${i}`);
     now = 5000;
-    taps.take('new', 'x');
+    taps.take('new');
     expect(taps.size).toBe(1);
   });
 });
@@ -190,5 +208,28 @@ describe('shoulder taps', () => {
     await new Promise((r) => loose.on('connect', () => r(null)));
     expect((await tap(loose, dee.socket.id!)).ok).toBe(false);
     loose.disconnect();
+  });
+
+  it('reach one person only a few times in 30 s, even from new guests', async () => {
+    const { id } = await createOffice(base);
+    const tia = await join(base, id, 'Tia');
+    const guests: Awaited<ReturnType<typeof join>>[] = [];
+    for (let i = 0; i <= TAPS_PER_PERSON; i++) guests.push(await join(base, id, `G${i}`));
+    const updated = next(guests[0].socket, 'player:updated');
+    tia.socket.emit('profile', { focus: true });
+    await updated;
+    let knocks = 0;
+    tia.socket.on('focus:tapped', () => knocks++);
+    const tiaId = tia.socket.id!;
+
+    expect(await tap(guests[0].socket, tiaId)).toEqual({ ok: true });
+    // A refused tap doesn't use up Tia's taps.
+    expect((await tap(guests[0].socket, tiaId)).ok).toBe(false);
+    for (const g of guests.slice(1, TAPS_PER_PERSON)) expect(await tap(g.socket, tiaId)).toEqual({ ok: true });
+    const last = await tap(guests[TAPS_PER_PERSON].socket, tiaId);
+    expect(last.ok).toBe(false);
+    expect(!last.ok && last.error).toMatch(/^Tia was tapped a few times just now\. Try again in (29|30) s\.$/);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(knocks).toBe(TAPS_PER_PERSON);
   });
 });

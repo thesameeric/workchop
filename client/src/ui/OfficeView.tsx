@@ -1,13 +1,13 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { reactionForKey } from '../../../shared/avatar';
-import { toggleFocus } from '../lib/focus';
+import { toggleFocus } from '../features/audio/focus';
+import { FocusIndicator } from '../features/audio/Headphones';
 import { media } from '../lib/media';
 import { getSession } from '../lib/session';
 import { setPanel, setState, useStore } from '../state/store';
 import { isTyping } from '../world/input';
 import { toggleSit } from '../world/movement';
 import { Dock, copyInvite } from './Dock';
-import { FocusIndicator } from './Focus';
 import { CloseIcon, HelpIcon, LinkIcon } from './icons';
 import { Modals } from './Modals';
 import { NowPlayingPill } from './MusicPanel';
@@ -21,23 +21,8 @@ function TopBar() {
   const name = useStore((s) => s.office?.settings.name ?? '');
   const count = useStore((s) => Object.keys(s.players).length + 1);
   const isOwner = useStore((s) => s.isOwner);
-  const ref = useRef<HTMLDivElement>(null);
-  // Toasts sit under the top bar, however tall it gets (private area, headphones, music…).
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const root = document.documentElement;
-    const update = () => root.style.setProperty('--topbar-bottom', `${Math.round(el.getBoundingClientRect().bottom)}px`);
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    update();
-    return () => {
-      observer.disconnect();
-      root.style.removeProperty('--topbar-bottom');
-    };
-  }, []);
   return (
-    <div className="topbar" ref={ref}>
+    <div className="topbar">
       <div className="office-chip">
         <span className="brand-mark">◆</span>
         <strong>{name}</strong>
@@ -49,7 +34,6 @@ function TopBar() {
         </button>
       </div>
       <ZoneIndicator />
-      <FocusIndicator />
       <NowPlayingPill />
     </div>
   );
@@ -191,6 +175,7 @@ export function OfficeView() {
       <SelfView />
       <SidePanel />
       <Hint />
+      <FocusIndicator />
       <Help />
       <Dock />
       <Spotlight />

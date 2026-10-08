@@ -2,12 +2,12 @@ import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { memo, useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { useShallow } from 'zustand/react/shallow';
-import { tapShoulder } from '../lib/focus';
+import { tapShoulder } from '../features/audio/focus';
+import { GESTURES, ReactionEffects } from '../features/audio/Reactions';
 import { local, remoteTargets, rendered } from '../lib/positions';
 import { getState, useStore } from '../state/store';
 import { Avatar, BlobShadow, useMotion, type AvatarMotion } from './Avatar';
 import { stepLocal } from './movement';
-import { GESTURES, ReactionEffects } from './Reactions';
 
 const ringMaterial = new THREE.MeshBasicMaterial({ color: '#3ddc84', transparent: true, opacity: 0.9, depthWrite: false });
 const selfRingMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.55, depthWrite: false });
@@ -116,6 +116,15 @@ const RemotePlayer = memo(function RemotePlayer({ id }: { id: string }) {
 
   const avatar = useMemo(() => info?.avatar, [info?.avatar]);
   const focus = !!info?.focus;
+  // The hand pointer we showed over them; put back when they take the headphones off or leave.
+  const hovered = useRef(false);
+  useEffect(() => {
+    if (!focus) return;
+    return () => {
+      if (hovered.current) document.body.style.cursor = '';
+      hovered.current = false;
+    };
+  }, [focus]);
   if (!info || !avatar) return null;
   // Someone wearing headphones can be tapped on the shoulder by clicking them.
   const tap = (e: ThreeEvent<MouseEvent>) => {
@@ -124,7 +133,9 @@ const RemotePlayer = memo(function RemotePlayer({ id }: { id: string }) {
     void tapShoulder(id);
   };
   const hover = (on: boolean) => () => {
-    if (getState().mode === 'play') document.body.style.cursor = on ? 'pointer' : '';
+    if (on ? getState().mode !== 'play' : !hovered.current) return;
+    hovered.current = on;
+    document.body.style.cursor = on ? 'pointer' : '';
   };
   return (
     <group

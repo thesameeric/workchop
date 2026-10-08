@@ -1,10 +1,10 @@
 import { memo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Status, Zone } from '../../../shared/types';
+import { FocusBadge } from '../features/audio/Headphones';
 import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
-import { FocusBadge } from './Focus';
 import { LockIcon, MicOffIcon } from './icons';
 
 const TAG_Y = 2.12;

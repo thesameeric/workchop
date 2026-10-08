@@ -1,9 +1,9 @@
-import type { TapResult } from '../../../shared/audio';
-import { getState, setState, toast } from '../state/store';
-import { TapIcon } from '../ui/icons';
-import { media } from './media';
-import { local, remoteTargets } from './positions';
-import { getSession } from './session';
+import type { TapResult } from '../../../../shared/audio';
+import { media } from '../../lib/media';
+import { local, remoteTargets } from '../../lib/positions';
+import { getSession } from '../../lib/session';
+import { getState, setState, toast } from '../../state/store';
+import { TapIcon } from '../../ui/icons';
 
 // Noise-cancelling headphones (focus mode): you stop hearing people and music, and everyone sees
 // you're focusing. Your mic stays as it is. They come off when you leave the office.

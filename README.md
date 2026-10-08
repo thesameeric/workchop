@@ -10,7 +10,7 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - Screen sharing, mute and camera toggles, device selection (mic, camera, speakers), and a talking indicator on video tiles and characters.
 - Click a video tile to enlarge it, e.g. to follow a screen share.
 - A "Do not disturb" status keeps you out of conversations except inside private areas.
-- **Noise-cancelling headphones** (🎧 dock button or `H`): put them on to focus. You stop hearing everyone and the lounge music, even inside a private area, while people can still hear you (unless you're muted). Everyone sees the headphones on your character, name tag, video tile and in the people list. People who walk up see "wearing headphones" and can **tap you on the shoulder** (click your character, or the tap button in the people list): you get a toast and a soft knock, at most once every 30 s from each person. Taking them off brings everything back at once; they come off when you leave the office.
+- **Noise-cancelling headphones** (🎧 dock button or `H`): put them on to focus. You stop hearing everyone and the lounge music, even inside a private area, while people can still hear you (unless you're muted). Everyone sees the headphones on your character, name tag, video tile and in the people list. People who walk up see "wearing headphones" and can **tap you on the shoulder** (click your character, or the tap button in the people list): you get a toast and a soft knock, at most once every 30 s from each person (and three times in 30 s in all). Taking them off brings everything back at once; they come off when you leave the office.
 - **Noise suppression** (Settings → Audio & video): *Standard* is the browser's built-in filter. *Enhanced* also runs [RNNoise](https://github.com/xiph/rnnoise) in your browser to remove typing, fans and background chatter (loaded only when chosen; it falls back to Standard by itself if the browser or device can't run it).
 
 **Your character**
@@ -247,9 +247,10 @@ client/   React + react-three-fiber app (Vite)
                the side panel (panels.tsx) and settings (settings.tsx) registries
   src/lib/     Socket session and its hooks (session.ts), sign-in and account (account.ts),
                WebRTC mesh (peers.ts), local media (media.ts) and its RNNoise pipeline (noise.ts),
-               headphones (focus.ts), speaking detection, file uploads (upload.ts),
+               speaking detection, file uploads (upload.ts),
                lounge radio (radio.ts, genmusic.ts), Spotify listen-along (spotify.ts)
   src/features/  Client features, loaded automatically (see Development)
+    audio/     Headphones (focus mode) and shoulder taps, reaction particles and confetti
 server/   Express + Socket.IO
   realtime.ts  Presence, movement, chat, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   turn.ts      Short-lived Cloudflare TURN credentials

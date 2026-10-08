@@ -1,6 +1,6 @@
-import { setFocus, toggleFocus } from '../lib/focus';
-import { useStore } from '../state/store';
-import { HeadphonesIcon, HeadphonesOffIcon } from './icons';
+import { useStore } from '../../state/store';
+import { HeadphonesIcon, HeadphonesOffIcon } from '../../ui/icons';
+import { setFocus, toggleFocus } from './focus';
 
 /** Dock toggle for noise-cancelling headphones. */
 export function HeadphonesButton() {
@@ -17,15 +17,17 @@ export function HeadphonesButton() {
   );
 }
 
-/** Under the top bar while your headphones are on. */
+/** Above the dock while your headphones are on. */
 export function FocusIndicator() {
   const focus = useStore((s) => s.focus);
   if (!focus) return null;
   return (
     <div className="focus-indicator" role="status">
-      <HeadphonesIcon size={15} />
-      <strong>Headphones on</strong>
-      <span>You can’t hear others</span>
+      <HeadphonesIcon size={16} />
+      <span className="focus-text">
+        <strong>Headphones on</strong>
+        <small>You can’t hear others</small>
+      </span>
       <button onClick={() => setFocus(false)} title="Take headphones off (H)">
         <HeadphonesOffIcon size={14} />
         Take off

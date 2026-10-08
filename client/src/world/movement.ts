@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getEntry, type Seat } from '../../../shared/catalog';
 import { findFreeSpot, findPath, isBlocked, moveWithCollision } from '../../../shared/geometry';
-import { focusHint } from '../lib/focus';
+import { focusHint } from '../features/audio/focus';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { getState, setState } from '../state/store';

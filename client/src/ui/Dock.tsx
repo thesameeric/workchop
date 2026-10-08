@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { REACTIONS } from '../../../shared/avatar';
+import { HeadphonesButton } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { media } from '../lib/media';
 import { officeUrl } from '../lib/router';
@@ -8,7 +9,6 @@ import { getSession, leaveOffice } from '../lib/session';
 import { canBuild, setPanel, setState, toast, useStore } from '../state/store';
 import { CamIcon, CamOffIcon, HammerIcon, LeaveIcon, LinkIcon, MicIcon, MicOffIcon, ScreenIcon, SettingsIcon, SmileIcon } from './icons';
 import { AccountMenu, usePopover } from './Account';
-import { HeadphonesButton } from './Focus';
 import { useMediaState } from './media';
 import { panelKey, usePanels, type PanelDef } from './panels';
 
@@ -41,13 +41,19 @@ function EmoteMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
     const close = (e: PointerEvent) => {
       if (!ref.current?.contains(e.target as Node) && !anchor.contains(e.target as Node)) onClose();
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Escape closes only the menu (first, so it doesn't also close the side panel or spotlight).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+      anchor.focus();
+    };
     window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     ref.current?.querySelector('button')?.focus({ preventScroll: true });
     return () => {
       window.removeEventListener('pointerdown', close);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [anchor, onClose]);
   return createPortal(

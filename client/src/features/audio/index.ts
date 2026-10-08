@@ -1,11 +1,12 @@
-import { playKnock, resetFocus, setFocus } from '../../lib/focus';
 import { onSession } from '../../lib/session';
 import { getState, toast } from '../../state/store';
 import { TapIcon } from '../../ui/icons';
 import { screenConfetti } from './confetti';
+import { playKnock, resetFocus, setFocus } from './focus';
 
 // Headphones (focus mode) per office visit: shoulder taps, keeping them on across reconnects, and
-// taking them off when you leave. The toggle itself is in the dock (ui/Focus.tsx).
+// taking them off when you leave. The dock button, banner and badges are in Headphones.tsx, the
+// reaction particles in Reactions.tsx.
 onSession('audio', (session) => {
   const onTapped = (_from: string, name: string) => {
     playKnock();

@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { setState, useStore } from '../state/store';
-import { FocusBadge } from './Focus';
 import { CloseIcon, ExpandIcon, MicOffIcon, ScreenIcon } from './icons';
 import { useMediaState, VideoView } from './media';
 

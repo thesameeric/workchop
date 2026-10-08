@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { STATUSES } from '../../../shared/avatar';
 import type { Status } from '../../../shared/types';
+import { setFocus, tapShoulder } from '../features/audio/focus';
+import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
-import { setFocus, tapShoulder } from '../lib/focus';
 import { local, remoteTargets } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { setState, useStore } from '../state/store';
-import { FocusBadge } from './Focus';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon, TapIcon } from './icons';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };

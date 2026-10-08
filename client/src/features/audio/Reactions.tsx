@@ -1,7 +1,7 @@
 import { useFrame } from '@react-three/fiber';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import type { Gesture } from './Avatar';
+import type { Gesture } from '../../world/Avatar';
 
 /** Reactions that animate the character, and for how long (ms). */
 export const GESTURES: Record<string, { gesture: Gesture; ms: number }> = {
@@ -128,12 +128,14 @@ const FLAME_HOT = new THREE.Color('#ffd43b');
 const FLAME_COOL = new THREE.Color('#f03e3e');
 const matrix = new THREE.Matrix4();
 const quat = new THREE.Quaternion();
-const parentQuat = new THREE.Quaternion();
 const scale = new THREE.Vector3();
 const pos = new THREE.Vector3();
 const color = new THREE.Color();
 
-/** One burst of particles, in the character's space; calls `onDone` when it's over. */
+/**
+ * One burst of particles, from where the character is when it starts: it stays there in the world if
+ * they walk or turn away. Calls `onDone` when it's over.
+ */
 const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: () => void }) {
   const spec = SPECS[kind];
   const ref = useRef<THREE.InstancedMesh>(null);
@@ -142,6 +144,8 @@ const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: 
   const material = useMemo(() => new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }), []);
   const born = useRef<number | null>(null);
   const finished = useRef(false);
+  /** Which way the character faced when it started. */
+  const facing = useMemo(() => new THREE.Quaternion(), []);
 
   useEffect(() => () => material.dispose(), [material]);
 
@@ -165,7 +169,12 @@ const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: 
     if (!mesh || finished.current) return;
     // Lifetimes follow the clock, so a burst ends on time even when frames are slow or skipped.
     const wall = performance.now() / 1000;
-    if (born.current === null) born.current = wall;
+    if (born.current === null) {
+      born.current = wall;
+      // Fix its place in the world: the character's later moves don't carry it along.
+      mesh.getWorldQuaternion(facing);
+      mesh.matrixWorldAutoUpdate = false;
+    }
     const now = wall - born.current;
     if (now > spec.life) {
       finished.current = true;
@@ -173,11 +182,8 @@ const Burst = memo(function Burst({ kind, onDone }: { kind: EffectKind; onDone: 
       onDone();
       return;
     }
-    if (spec.billboard) {
-      // Face the camera from inside the (rotated) character.
-      mesh.parent?.getWorldQuaternion(parentQuat);
-      quat.copy(parentQuat).invert().multiply(camera.quaternion);
-    }
+    // Face the camera, undoing the character's turn.
+    if (spec.billboard) quat.copy(facing).invert().multiply(camera.quaternion);
     // Confetti is simulated in small steps (gravity, drag, landing on the floor).
     const dt = Math.min(delta, 0.25);
     const steps = Math.ceil(dt / STEP);
