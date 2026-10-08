@@ -37,6 +37,7 @@ afterEach(() => {
   mock.pollInterval = 60;
   mock.refreshDelay = 0;
   mock.accessTtl = 8 * 3600;
+  mock.redirects.clear();
   vi.restoreAllMocks();
 });
 
@@ -245,7 +246,7 @@ describe('the poller', () => {
     expect(u.timers.at(-1)!.cancelled).toBe(true);
   });
 
-  it('reads at most two pages', async () => {
+  it('reads at most two pages, saying when GitHub has more', async () => {
     const u = await connected();
     const t0 = Date.now() - 1000_000;
     for (let i = 0; i < 130; i++) mock.addThread(u.ghId, { title: `T${i}`, updated: t0 + i * 1000 });
@@ -254,8 +255,19 @@ describe('the poller', () => {
     const [[, inbox]] = u.take() as [[string, GithubInbox]];
     expect(inbox.items).toHaveLength(100);
     expect(inbox.items[0].title).toBe('T129');
+    expect(inbox.more).toBe(true);
     const calls = notificationCalls().slice(before);
     expect(calls.map((c) => new URL(c.path, mock.base).searchParams.get('page'))).toEqual([null, '2']);
+
+    // Down to 100 unread: items don't say so, so the whole inbox comes again.
+    for (const thread of mock.threadsOf(u.ghId).slice(100)) thread.unread = false;
+    mock.touch(u.ghId);
+    await u.tick();
+    const [[event, again], ...rest] = u.take() as [[string, GithubInbox]];
+    expect(rest).toEqual([]);
+    expect(event).toBe('github:inbox');
+    expect(again.items).toHaveLength(100);
+    expect('more' in again).toBe(false);
     u.poller.stop(u.userId);
   });
 
@@ -497,6 +509,22 @@ describe('the poller', () => {
     u.poller.stop(u.userId);
   });
 
+  it('takes a 403 about a secondary rate limit as a rate limit, waiting longer each time', async () => {
+    const u = await connected();
+    mock.addThread(u.ghId, { title: 'A' });
+    // It may come without retry-after, and with requests left in the hourly limit.
+    const message = 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.';
+    mock.failure = { status: 403, headers: { 'x-ratelimit-remaining': '4000' }, message, times: 3 };
+    expect(await u.start()).toBe(60_000);
+    expect(u.take()).toEqual([['github:inbox', { items: [], counts: { reviewRequests: null, assigned: null }, problem: 'rate-limited' }]]);
+    expect(await u.tick()).toBe(120_000);
+    expect(await u.tick()).toBe(240_000);
+    expect(await u.tick()).toBe(60_000);
+    expect((u.take()[0][1] as GithubInbox).items.map((i) => i.title)).toEqual(['A']);
+    expect(u.reconnects).toEqual([]);
+    u.poller.stop(u.userId);
+  });
+
   it('looks up page addresses only with the repo scope, asking again with the ETag', async () => {
     const plain = await connected();
     const full = await connected({ scope: 'notifications,repo' });
@@ -728,6 +756,46 @@ describe('tokens', () => {
     expect((await pending).token).toBe((await u.links.get(u.userId))!.accessToken);
   });
 
+  it("doesn't hold the database while GitHub answers many refreshes at once", async () => {
+    mock.refreshDelay = 2000;
+    const users = [];
+    for (let i = 0; i < 8; i++) users.push(await connected({ expiresIn: 60_000 }));
+    const refreshes = mock.refreshes;
+    const pending = users.map((u) => u.api.token(u.userId));
+    // All under way at once, more than there are Postgres connections in the pool (5).
+    await until(() => mock.refreshes === refreshes + 8, 1500);
+    const started = Date.now();
+    await db.query('SELECT 1');
+    expect(Date.now() - started).toBeLessThan(500);
+    const results = await Promise.all(pending);
+    for (const [i, u] of users.entries()) expect(results[i].token).toBe((await u.links.get(u.userId))!.accessToken);
+    expect(mock.refreshes).toBe(refreshes + 8);
+  });
+
+  // Only Postgres can be shared: PGlite's directory is locked to one process.
+  it.skipIf(!TEST_DATABASE_URL)('waits for a refresh another server has under way, and takes over a lease that ran out', async () => {
+    const u = await connected({ expiresIn: 60_000 });
+    const elsewhere = createOAuth({ fetch, clientId: mock.clientId, clientSecret: mock.clientSecret, oauthBase: mock.base, apiBase: mock.apiBase, redirectUri: 'x', now });
+    // Another server has started refreshing.
+    const lease = (await u.links.leaseRefresh(u.userId)) as string;
+    const refreshes = mock.refreshes;
+    const pending = u.api.token(u.userId);
+    await pause(600);
+    expect(mock.refreshes).toBe(refreshes);
+    const tokens = await elsewhere.refresh((await u.links.get(u.userId))!.refreshToken!);
+    await u.links.withLock(u.userId, (tx) => u.links.saveTokens(tx, u.userId, tokens));
+    await u.links.releaseRefresh(u.userId, lease);
+    expect((await pending).token).toBe(tokens.accessToken);
+    expect(mock.refreshes).toBe(refreshes + 1);
+
+    // A server stopped while refreshing: once its lease runs out, the refresh happens here.
+    await db.query(`UPDATE github_links SET access_expires_at = now() + interval '1 minute', refresh_lease_until = now() + interval '700 milliseconds' WHERE user_id = $1`, [u.userId]);
+    expect((await u.api.token(u.userId)).token).not.toBe(tokens.accessToken);
+    expect(mock.refreshes).toBe(refreshes + 2);
+    expect((await db.query('SELECT refresh_lease_until FROM github_links WHERE user_id = $1', [u.userId])).rows).toEqual([{ refresh_lease_until: null }]);
+    expect(u.reconnects).toEqual([]);
+  });
+
   it('marks the link for reconnecting when GitHub refuses the refresh token', async () => {
     const u = await connected({ expiresIn: 60_000 });
     mock.forget(u.ghId);
@@ -765,8 +833,7 @@ describe('tokens', () => {
     expect((await u.api.token(u.userId)).token).not.toBe(before.accessToken);
   });
 
-  // On Postgres nobody else can change the link while the lock is held for the refresh.
-  it.skipIf(!!TEST_DATABASE_URL)('uses tokens refreshed or connected meanwhile instead of asking to reconnect', async () => {
+  it('uses tokens refreshed or connected meanwhile instead of asking to reconnect', async () => {
     const elsewhere = createOAuth({ fetch, clientId: mock.clientId, clientSecret: mock.clientSecret, oauthBase: mock.base, apiBase: mock.apiBase, redirectUri: 'x', now });
     let meanwhile: (() => Promise<void>) | null = null;
     const u = await connected({
@@ -878,6 +945,48 @@ describe('tokens', () => {
     expect((await db.query<{ state_hash: string }>('SELECT state_hash FROM github_oauth_tx WHERE user_id = $1', [u.userId])).rows).toEqual([{ state_hash: 'fresh-hash' }]);
     expect(await l.takeTx('fresh-hash')).toEqual({ userId: u.userId, codeVerifier: 'verifier', returnTo: '/', fresh: true });
     expect(await l.takeTx('fresh-hash')).toBeNull();
+  });
+
+  it('follows redirects only within the API', async () => {
+    const elsewhere = await startMockGithub();
+    try {
+      const u = await connected();
+      const thread = mock.addThread(u.ghId, { title: 'Moved' });
+      // A renamed repository: followed, and a 307 asks for the same request again.
+      mock.redirects.set('/api/repos/octo/old/pulls/5', { status: 301, location: `${mock.apiBase}/repos/octo/new/pulls/5` });
+      mock.pages.set(`${mock.apiBase}/repos/octo/new/pulls/5`, `${mock.base}/octo/new/pull/5`);
+      expect(await (await u.api.call(u.userId, '/repos/octo/old/pulls/5')).json()).toEqual({ html_url: `${mock.base}/octo/new/pull/5` });
+      mock.redirects.set('/api/notifications/threads/1', { status: 307, location: `/api/notifications/threads/${thread.id}` });
+      expect((await u.api.call(u.userId, '/notifications/threads/1', { method: 'PATCH' })).status).toBe(205);
+      expect(mock.threadsOf(u.ghId).find((t) => t.id === thread.id)!.unread).toBe(false);
+      // Anywhere else, or round in circles: the redirect is the answer.
+      mock.redirects.set('/api/repos/octo/away/pulls/6', { status: 307, location: `${elsewhere.apiBase}/repos/octo/away/pulls/6` });
+      expect((await u.api.call(u.userId, '/repos/octo/away/pulls/6', { method: 'PATCH', body: { x: 1 } })).status).toBe(307);
+      mock.redirects.set('/api/repos/octo/loop/pulls/7', { status: 301, location: '/api/repos/octo/loop/pulls/7' });
+      expect((await u.api.call(u.userId, '/repos/octo/loop/pulls/7')).status).toBe(301);
+      expect(mock.calls('/api/repos/octo/loop/pulls/7')).toHaveLength(4);
+      expect(elsewhere.requests).toEqual([]);
+    } finally {
+      await elsewhere.close();
+    }
+  });
+
+  it('never follows a redirect with the client secret or a token', async () => {
+    const elsewhere = await startMockGithub();
+    try {
+      const oauth = createOAuth({ fetch, clientId: mock.clientId, clientSecret: mock.clientSecret, oauthBase: mock.base, apiBase: mock.apiBase, redirectUri: 'x', now });
+      for (const path of ['/login/oauth/access_token', `/api/applications/${mock.clientId}/token`, '/api/user']) {
+        mock.redirects.set(path, { status: 307, location: `${elsewhere.base}${path}` });
+      }
+      await expect(oauth.exchange('code', 'verifier')).rejects.toThrow();
+      await expect(oauth.refresh('ghr_refresh')).rejects.toThrow();
+      await expect(oauth.revoke('gho_token')).rejects.toThrow();
+      await expect(oauth.user('gho_token')).rejects.toThrow();
+      expect(mock.calls('/login/oauth/access_token', 'POST')).not.toHaveLength(0);
+      expect(elsewhere.requests).toEqual([]);
+    } finally {
+      await elsewhere.close();
+    }
   });
 
   it('only ever sends tokens to the API', async () => {

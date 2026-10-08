@@ -22,7 +22,14 @@ const REFRESH_BEFORE = 5 * 60_000;
 const RETRY_REFRESH_MS = 60_000;
 /** GitHub's answers to a refresh that mean the refresh token is no good. */
 const DEAD_REFRESH = new Set(['bad_refresh_token', 'unauthorized', 'invalid_grant']);
+/** How often a refresh waiting for another server's looks again. */
+const LEASE_RETRY_MS = 250;
 const MAX_WAIT = 3600_000;
+/** Redirects followed (when they stay on the API), at most MAX_REDIRECTS in a row. */
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 3;
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** When a 403/429 lets us try again (ms since 1970), or null when it isn't about rate limits. */
 export function rateLimitedUntil(res: Response, now: number): number | null {
@@ -35,6 +42,12 @@ export function rateLimitedUntil(res: Response, now: number): number | null {
     until = Number.isFinite(reset) && reset > 0 ? reset * 1000 : now + 60_000;
   } else if (res.status === 429) until = now + 60_000;
   return until === null ? null : Math.min(Math.max(until, now + 1000), now + MAX_WAIT);
+}
+
+/** Whether an error answer's message is about rate limits (read from a copy: the answer stays unread). */
+async function aboutRateLimits(res: Response): Promise<boolean> {
+  const body = (await res.clone().json().catch(() => null)) as { message?: unknown } | null;
+  return typeof body?.message === 'string' && /rate limit/i.test(body.message);
 }
 
 export interface ApiDeps {
@@ -78,15 +91,27 @@ export function createApi(deps: ApiDeps) {
 
   /**
    * Whoever gets there first refreshes; the rest use what it saved. Other servers may share a Postgres
-   * database, so there the user's lock is held throughout. PGlite has one process (its directory is
-   * locked) and one connection, so there the single-flight below is enough and the lock is only taken
-   * to save: never while GitHub answers.
+   * database, so there the user's refresh is leased first (they wait for it to finish). PGlite has one
+   * process (its directory is locked), so there the single-flight below is enough. Either way the
+   * lock is only taken to save, and nothing holds a database connection while GitHub answers.
    */
-  const refreshLocked = (userId: string, failed: string | undefined): Promise<Refreshed> =>
-    links.shared ? links.withLock(userId, (tx) => refreshWith(userId, failed, tx)) : refreshWith(userId, failed);
+  async function refreshLeased(userId: string, failed: string | undefined): Promise<Refreshed> {
+    if (!links.shared) return refreshWith(userId, failed);
+    let lease = await links.leaseRefresh(userId);
+    while (lease === null) {
+      await pause(LEASE_RETRY_MS);
+      lease = await links.leaseRefresh(userId);
+    }
+    if (lease === 'gone') return 'gone';
+    try {
+      return await refreshWith(userId, failed);
+    } finally {
+      await links.releaseRefresh(userId, lease).catch((err) => console.warn('[github] could not release a refresh lease:', (err as Error).message));
+    }
+  }
 
-  async function refreshWith(userId: string, failed: string | undefined, locked?: Tx): Promise<Refreshed> {
-    const link = await links.get(userId, locked, !!locked);
+  async function refreshWith(userId: string, failed: string | undefined): Promise<Refreshed> {
+    const link = await links.get(userId);
     if (!link) return 'gone';
     if (link.needsReconnect) return 'dead';
     const t = now();
@@ -130,14 +155,14 @@ export function createApi(deps: ApiDeps) {
       refreshFailedAt.delete(userId);
       return { token: tokens.accessToken, scopes: tokens.scopes };
     };
-    return locked ? save(locked) : links.withLock(userId, save);
+    return links.withLock(userId, save);
   }
 
   /** One refresh per user at a time in this process; a network error leaves everything as it was. */
   const refresh = (userId: string, failed?: string) => {
     let pending = refreshing.get(userId);
     if (!pending) {
-      pending = refreshLocked(userId, failed)
+      pending = refreshLeased(userId, failed)
         .then((r) => {
           if (r === 'gone') throw new NotLinked();
           if (r === 'dead') {
@@ -173,19 +198,46 @@ export function createApi(deps: ApiDeps) {
     return url.href;
   };
 
+  /** A redirect's Location (relative to `from`) when it stays on the API; null otherwise. */
+  const onApi = (location: string | null, from: string): string | null => {
+    if (!location) return null;
+    try {
+      return resolve(new URL(location, from).href);
+    } catch {
+      return null;
+    }
+  };
+
   /**
    * Sends a request as the user. Throws NotLinked, NeedsReconnect or RateLimited; other answers
    * (errors included) are returned.
    */
   async function call(userId: string, pathOrUrl: string, init: { method?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
     const url = resolve(pathOrUrl);
-    const send = (token: string) =>
-      deps.fetch(url, {
-        method: init.method ?? 'GET',
-        headers: apiHeaders(`Bearer ${token}`, init.body === undefined ? init.headers : { 'Content-Type': 'application/json', ...init.headers }),
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+    /** Sends the request, following GitHub's redirects (say, for a renamed repository) only within the API. */
+    const send = async (token: string) => {
+      let target = url;
+      let method = init.method ?? 'GET';
+      let body = init.body === undefined ? undefined : JSON.stringify(init.body);
+      for (let hops = 0; ; hops++) {
+        const res = await deps.fetch(target, {
+          method,
+          headers: apiHeaders(`Bearer ${token}`, body === undefined ? init.headers : { 'Content-Type': 'application/json', ...init.headers }),
+          body,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        const next = REDIRECTS.has(res.status) && hops < MAX_REDIRECTS ? onApi(res.headers.get('location'), target) : null;
+        if (!next) return res;
+        await drain(res);
+        target = next;
+        // Only 307 and 308 ask for the same request again.
+        if (res.status !== 307 && res.status !== 308) {
+          method = 'GET';
+          body = undefined;
+        }
+      }
+    };
     let { token: current, scopes } = await token(userId);
     let res = await send(current);
     if (res.status === 401) {
@@ -202,7 +254,9 @@ export function createApi(deps: ApiDeps) {
       await links.setScopes(userId, normalizeScopes(header));
       if (hasRepoScope(normalizeScopes(header)) !== hasRepoScope(scopes)) deps.onScopes(userId);
     }
-    const until = rateLimitedUntil(res, now());
+    let until = rateLimitedUntil(res, now());
+    // A secondary rate limit may come as a 403 that says so only in its message: wait a minute or more.
+    if (until === null && res.status === 403 && (await aboutRateLimits(res))) until = now() + 60_000;
     if (until !== null) {
       await drain(res);
       throw new RateLimited(until);

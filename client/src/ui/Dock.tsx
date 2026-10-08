@@ -98,15 +98,33 @@ function MeButton() {
 
 function PanelButton({ panel, open }: { panel: PanelDef; open: boolean }) {
   const badge = panel.useBadge?.() ?? null;
+  const shown = badge !== null && badge !== 0 && badge !== '';
+  const alert = shown && panel.badgeTone !== 'neutral';
+  const ref = useRef<HTMLButtonElement>(null);
+  // On narrow screens the dock scrolls sideways: a button that gets an alert out of sight scrolls into view.
+  useEffect(() => {
+    const dock = ref.current?.closest<HTMLElement>('.dock');
+    if (!alert || !ref.current || !dock) return;
+    const button = ref.current.getBoundingClientRect();
+    const visible = dock.getBoundingClientRect();
+    // With room for the badge, which sticks out past the corner.
+    const past = button.right + 8 - visible.right;
+    const before = button.left - 8 - visible.left;
+    if (past > 0) dock.scrollBy({ left: past, behavior: 'smooth' });
+    else if (before < 0) dock.scrollBy({ left: before, behavior: 'smooth' });
+  }, [alert]);
   const { icon: Icon } = panel;
   return (
     <button
+      ref={ref}
       className={`dock-btn${panel.hideOnMobile ? ' hide-mobile' : ''}${open ? ' on' : ''}`}
       onClick={() => setPanel(panel.id)}
       title={panel.shortcut ? `${panel.title} (${panel.shortcut})` : panel.title}
+      // Otherwise screen readers would name it by its badge alone ("3").
+      aria-label={shown ? `${panel.title}, ${badge}` : panel.title}
     >
       <Icon />
-      {badge !== null && badge !== 0 && badge !== '' && <span className={`badge-count${panel.badgeTone === 'neutral' ? ' neutral' : ''}`}>{badge}</span>}
+      {shown && <span className={`badge-count${panel.badgeTone === 'neutral' ? ' neutral' : ''}`}>{badge}</span>}
     </button>
   );
 }

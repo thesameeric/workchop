@@ -40,11 +40,19 @@ export interface GithubCounts {
 export interface GithubInbox {
   items: GithubItem[];
   counts: GithubCounts;
+  /** GitHub has more unread notifications than `items` (its newest 100). */
+  more?: boolean;
   /** Why no list has come from GitHub yet (`items` is then empty): it isn't answering, it refused access, or its rate limit was reached. Later failures keep the last list. */
   problem?: 'unavailable' | 'forbidden' | 'rate-limited';
 }
 
-/** GET /api/integrations/github/status (signed in): whether and how you're connected. */
+/**
+ * GET /api/integrations/github/status (for anyone): whether this server has GitHub and, when you're
+ * signed in, your connection.
+ */
+export type GithubStatusAnswer = { available: false } | { available: true; guest: true } | ({ available: true } & GithubStatus);
+
+/** Whether and how you're connected (signed in). */
 export interface GithubStatus {
   connected: boolean;
   /** Your GitHub login and avatar, when connected. */

@@ -36,6 +36,7 @@ const RESULTS: Record<string, () => void> = {
   connected: () => toast('GitHub connected', { icon: GithubIcon }),
   cancelled: () => toast('GitHub connection cancelled', { icon: GithubIcon }),
   signin: () => toast('Sign in to connect GitHub', { icon: GithubIcon }),
+  busy: () => toast('Too many tries to connect GitHub. Try again in a few minutes.', 'error'),
 };
 
 /** Says how connecting went (?github=… from the server). */
@@ -211,7 +212,13 @@ function githubSession(session: OfficeSession): () => void {
   const onInbox = (inbox: GithubInbox) => {
     failures.inbox(inbox.items);
     // With a problem, GitHub hasn't sent a list yet (the items are empty).
-    set({ items: Object.fromEntries(inbox.items.map((i) => [i.id, i])), counts: inbox.counts, loaded: !inbox.problem, problem: inbox.problem ?? null });
+    set({
+      items: Object.fromEntries(inbox.items.map((i) => [i.id, i])),
+      counts: inbox.counts,
+      more: inbox.more === true,
+      loaded: !inbox.problem,
+      problem: inbox.problem ?? null,
+    });
   };
   const onItem = (item: GithubItem) => {
     const isNew = failures.isNew(item);

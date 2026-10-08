@@ -276,6 +276,17 @@ export async function startServer(opts: ServerOptions = {}) {
 
   const featureRoutes = express.Router();
   app.use('/api', featureRoutes);
+  const closers: (() => void | Promise<void>)[] = [];
+  /** Runs what features asked to run on closing, newest first; one failing doesn't stop the rest. */
+  const closeFeatures = async () => {
+    for (const close of closers.splice(0).reverse()) {
+      try {
+        await close();
+      } catch (err) {
+        console.error('[workchop] a feature failed to close:', err);
+      }
+    }
+  };
   const ctx: ServerContext = {
     app: featureRoutes,
     io,
@@ -285,10 +296,13 @@ export async function startServer(opts: ServerOptions = {}) {
     realtime,
     uploads,
     publicOrigin,
+    quiet: !!opts.quiet,
+    onClose: (fn) => void closers.push(fn),
   };
   try {
     await registerFeatures(features, ctx);
   } catch (err) {
+    await closeFeatures();
     await auth.close();
     if (!opts.db) await db.close();
     throw err;
@@ -332,6 +346,7 @@ export async function startServer(opts: ServerOptions = {}) {
       resolve();
     });
   }).catch(async (err) => {
+    await closeFeatures();
     await auth.close();
     if (!opts.db) await db.close();
     throw err;
@@ -358,6 +373,7 @@ export async function startServer(opts: ServerOptions = {}) {
       httpServer.closeAllConnections();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await store.close();
+      await closeFeatures();
       await auth.close();
       if (!opts.db) await db.close();
     },

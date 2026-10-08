@@ -26,6 +26,10 @@ export interface ServerContext {
   uploads: Uploads;
   /** The address people open Workchop at (PUBLIC_URL's origin), when known. */
   publicOrigin: string | null;
+  /** Leave out messages that only say things are working (tests). */
+  quiet: boolean;
+  /** Runs `fn` when the server closes, before the database does (to stop timers, say). */
+  onClose(fn: () => void | Promise<void>): void;
 }
 
 /**

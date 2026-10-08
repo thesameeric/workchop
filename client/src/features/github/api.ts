@@ -1,6 +1,6 @@
 import type { GithubStatus } from '../../../../shared/github';
 
-// The server's GitHub routes (all for signed-in people; missing when the server has no GitHub).
+// The server's GitHub routes: the status for anyone, the rest for signed-in people on servers with GitHub.
 
 const BASE = '/api/integrations/github';
 
@@ -26,10 +26,14 @@ function toStatus(raw: Partial<GithubStatus> | null): GithubStatus {
 /** Your GitHub connection; 'off' when this server has no GitHub, 'guest' when you aren't signed in. */
 export async function fetchStatus(): Promise<GithubStatus | 'off' | 'guest'> {
   const res = await fetch(`${BASE}/status`, { signal: AbortSignal.timeout(15_000), cache: 'no-store' });
+  // A server without the GitHub feature at all doesn't know the route.
   if (res.status === 404) return 'off';
   if (res.status === 401) return 'guest';
   if (!res.ok) throw await failed(res);
-  return toStatus(await res.json());
+  const answer = (await res.json()) as (Partial<GithubStatus> & { available?: unknown; guest?: unknown }) | null;
+  if (answer?.available === false) return 'off';
+  if (answer?.guest === true) return 'guest';
+  return toStatus(answer);
 }
 
 /** Disconnects GitHub (the server revokes the token); answers the new status. */

@@ -11,6 +11,8 @@ export interface GithubState {
   /** Your inbox by thread id (from the server's poller, while you're in an office). */
   items: Record<string, GithubItem>;
   counts: GithubCounts;
+  /** GitHub has more unread notifications than `items` (its newest 100). */
+  more: boolean;
   /** A list from GitHub arrived (so items that come after it may be new). */
   loaded: boolean;
   /** Why GitHub can't be read right now, if it can't. */
@@ -26,7 +28,7 @@ export interface GithubState {
 const NO_COUNTS: GithubCounts = { reviewRequests: null, assigned: null };
 
 /** No inbox: signed out, disconnected, or waiting for it. */
-export const EMPTY_INBOX = { items: {}, counts: NO_COUNTS, loaded: false, problem: null } satisfies Partial<GithubState>;
+export const EMPTY_INBOX = { items: {}, counts: NO_COUNTS, more: false, loaded: false, problem: null } satisfies Partial<GithubState>;
 
 export const useGithub = create<GithubState>()(() => ({
   availability: 'unknown',

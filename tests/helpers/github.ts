@@ -43,6 +43,8 @@ export interface ThreadSpec {
 export interface Failure {
   status: number;
   headers?: Record<string, string>;
+  /** The answer's message (default: "Mock failure"). */
+  message?: string;
   times?: number;
 }
 
@@ -92,6 +94,8 @@ export class MockGithub {
   readonly counts = new Map<number, { reviewRequests: number; assigned: number }>();
   /** API resources (subject.url → html_url), answered with ETags. */
   readonly pages = new Map<string, string>();
+  /** Paths (without the query, e.g. '/api/repos/o/r/pulls/1') answered with a redirect instead. */
+  readonly redirects = new Map<string, { status: number; location: string }>();
   private readonly codes = new Map<string, { userId: number; scope: string; challenge: string; redirectUri: string; expiresAt: number }>();
   private readonly tokens = new Map<string, Token>();
   private readonly refreshTokens = new Map<string, Token & { access: string }>();
@@ -232,6 +236,11 @@ export class MockGithub {
     const url = new URL(req.url ?? '/', this.base);
     const method = req.method ?? 'GET';
     this.requests.push({ method, path: url.pathname + url.search, headers: req.headers, body });
+    const redirect = this.redirects.get(url.pathname);
+    if (redirect) {
+      res.writeHead(redirect.status, { Location: redirect.location }).end();
+      return;
+    }
 
     if (url.pathname === '/login/oauth/authorize' && method === 'GET') return this.authorize(url, res);
     if (url.pathname === '/login/oauth/access_token' && method === 'POST') return this.token(req, body, res);
@@ -269,10 +278,10 @@ export class MockGithub {
     if (path === '/notifications' && method === 'GET') {
       const headers: Record<string, string> = { ...scopes, ...(this.pollInterval !== null && { 'X-Poll-Interval': String(this.pollInterval) }) };
       if (this.failure) {
-        const { status, headers: extra, times = 1 } = this.failure;
+        const { status, headers: extra, message = 'Mock failure', times = 1 } = this.failure;
         if (times <= 1) this.failure = null;
         else this.failure.times = times - 1;
-        return json(res, status, { message: 'Mock failure' }, { ...headers, ...extra });
+        return json(res, status, { message }, { ...headers, ...extra });
       }
       const lastModified = this.lastModified(auth.userId);
       if (req.headers['if-modified-since'] === lastModified) {

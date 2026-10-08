@@ -78,6 +78,18 @@ function Outstanding({ tab, counts, includesPrivate }: { tab: GithubBucket; coun
   return null;
 }
 
+/** Under the list: it has only unread notifications (GitHub's newest 100), and the rest are on GitHub. */
+function Foot({ more }: { more: boolean }) {
+  return (
+    <p className="gh-foot">
+      {more ? 'Showing your newest 100 unread notifications.' : 'Read notifications leave this list.'}{' '}
+      <a href="https://github.com/notifications" {...EXTERNAL}>
+        See all on GitHub
+      </a>
+    </p>
+  );
+}
+
 /**
  * Done takes the item away: from the keyboard (a click with no mouse press, detail 0), the focus goes to
  * the next one, else the one before, else the open tab.
@@ -150,6 +162,7 @@ function Item({ item, now }: { item: GithubItem; now: number }) {
 function Inbox({ status }: { status: GithubStatus }) {
   const items = useGithub((s) => s.items);
   const counts = useGithub((s) => s.counts);
+  const more = useGithub((s) => s.more);
   const loaded = useGithub((s) => s.loaded);
   const problem = useGithub((s) => s.problem);
   const tab = useGithub((s) => s.tab);
@@ -216,6 +229,7 @@ function Inbox({ status }: { status: GithubStatus }) {
             </details>
           </div>
         )}
+        {loaded && (list.length > 0 || more) && <Foot more={more} />}
       </div>
     </div>
   );
