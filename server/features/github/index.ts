@@ -85,9 +85,12 @@ export function githubFeature(options: GithubOptions = {}): Feature {
         off();
         return;
       }
-      const key = parseTokenKey(setting(options.tokenKey, 'TOKEN_ENCRYPTION_KEY'));
+      const rawKey = setting(options.tokenKey, 'TOKEN_ENCRYPTION_KEY');
+      const key = parseTokenKey(rawKey);
       if (!key) {
-        console.error('[github] TOKEN_ENCRYPTION_KEY must be 32 random bytes in base64 (openssl rand -base64 32); GitHub notifications are off');
+        // Without a key at all, the OAuth App is just for signing in.
+        if (rawKey) console.error('[github] TOKEN_ENCRYPTION_KEY must be 32 random bytes in base64 (openssl rand -base64 32); GitHub notifications are off');
+        else if (!ctx.quiet) console.log('[github] GitHub notifications are off (no TOKEN_ENCRYPTION_KEY); signing in with GitHub works without it');
         off();
         return;
       }
@@ -232,7 +235,14 @@ export function githubFeature(options: GithubOptions = {}): Feature {
         } catch (err) {
           console.error('[github] could not check a connection:', (err as Error).message);
         }
+        if (error === 'redirect_uri_mismatch') {
+          console.warn(
+            `[github] GitHub refused a callback URL (redirect_uri_mismatch): the OAuth App needs both ${ctx.publicOrigin}/api/integrations/github/callback and ${ctx.publicOrigin}/api/auth/github/callback`,
+          );
+        }
         if (!tx) {
+          // A sign-in whose callback isn't registered comes back here: it goes back where it started.
+          if (typeof state === 'string' && state.length <= 100 && (await ctx.auth.failGithubSignIn(req, res, state))) return;
           // No way of knowing where it came from: the page that closes the connect window (or links back).
           res.redirect(withResult('/github-callback.html', 'failed'));
           return;

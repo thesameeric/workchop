@@ -213,10 +213,32 @@ describe('GitHub switched off', () => {
     extra.push(...servers);
     for (const s of servers) expect(await offStatus(s, true)).toEqual([200, { available: false }]);
     const logged = errors.mock.calls.map((c) => String(c[0]));
-    expect(logged.filter((m) => m.includes('TOKEN_ENCRYPTION_KEY'))).toHaveLength(3);
+    // A key that isn't one is a mistake; none at all leaves the OAuth App to signing in.
+    expect(logged.filter((m) => m.includes('TOKEN_ENCRYPTION_KEY'))).toHaveLength(2);
     expect(logged.some((m) => m.includes('GITHUB_API_BASE'))).toBe(true);
     expect(logged.join(' ')).not.toContain('not-a-key-but-a-secret-value');
     expect(warnings.mock.calls.some((c) => String(c[0]).includes('PUBLIC_URL'))).toBe(true);
+  });
+
+  it('only says notifications are off without any TOKEN_ENCRYPTION_KEY (sign-in only), unless quiet', async () => {
+    const errors = vi.spyOn(console, 'error');
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const signInOnly = await startServer({
+      port: 0,
+      host: '127.0.0.1',
+      db,
+      iceServers: [],
+      publicUrl: 'http://localhost:5173',
+      features: [githubFeature({ ...configured(), tokenKey: null })],
+      auth: { google: null, apple: null, devLogin: true },
+    });
+    extra.push(signInOnly);
+    expect(await offStatus(signInOnly, true)).toEqual([200, { available: false }]);
+    expect(logs.mock.calls.map((c) => String(c[0]))).toContain('[github] GitHub notifications are off (no TOKEN_ENCRYPTION_KEY); signing in with GitHub works without it');
+    logs.mockClear();
+    extra.push(await start({ ...configured(), tokenKey: null }));
+    expect(logs).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
   });
 });
 

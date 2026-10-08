@@ -301,7 +301,7 @@ export async function startServer(opts: ServerOptions = {}) {
     io,
     db,
     store,
-    auth: { userFromRequest: auth.userFromRequest, requireUser: auth.requireUser },
+    auth: { userFromRequest: auth.userFromRequest, requireUser: auth.requireUser, failGithubSignIn: auth.failGithubSignIn },
     realtime,
     uploads,
     publicOrigin,

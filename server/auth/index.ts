@@ -66,7 +66,11 @@ export function safeReturnPath(v: unknown): string {
   }
 }
 
-/** Whether this app's own page opened the address (or the person typed it): never another site. */
+/**
+ * Whether this app's own page opened the address, or the person did outside any page (typed it, or
+ * opened a link from another app, which can still pass through another site's redirect): never
+ * another site's page.
+ */
 export function fromThisApp(req: express.Request, publicOrigin: string | null): boolean {
   const site = req.get('sec-fetch-site');
   if (site) return site === 'same-origin' || site === 'none';
@@ -282,6 +286,24 @@ export function createAuth(deps: AuthDeps) {
     res.redirect(tx.return_to);
   });
 
+  /**
+   * GitHub sends its answer to the OAuth App's own callback URL when the one asked for isn't
+   * registered, so a sign-in's can reach the notifications callback. If `state` is this browser's
+   * GitHub sign-in in progress, it's used up and goes back where it started; false otherwise.
+   */
+  const failGithubSignIn = async (req: express.Request, res: express.Response, state: string): Promise<boolean> => {
+    const txId = cookiesOf(req.headers.cookie)[txCookie];
+    if (!github || !txId) return false;
+    const { rows } = await db.query<{ return_to: string }>(
+      `DELETE FROM auth_tx WHERE id_hash = $1 AND provider = 'github' AND state = $2 RETURNING return_to`,
+      [hashToken(txId), state],
+    );
+    if (!rows[0]) return false;
+    setCookie(res, txCookie, null, { maxAge: 0 });
+    res.redirect(withError(rows[0].return_to, 'failed'));
+    return true;
+  };
+
   router.get('/auth/:provider/start', async (req, res) => {
     const name = req.params.provider;
     const provider = name === 'google' || name === 'apple' ? providers[name] : undefined;
@@ -475,6 +497,7 @@ export function createAuth(deps: AuthDeps) {
     sessions,
     userFromRequest,
     requireUser,
+    failGithubSignIn,
     socketMiddleware,
     async close() {
       clearInterval(cleanupTimer);

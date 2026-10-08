@@ -22,6 +22,11 @@ export interface ServerContext {
     userFromRequest(req: express.Request): Promise<AccountUser | null>;
     /** Middleware: 401 for guests; otherwise the user is in `res.locals.user`. */
     requireUser: express.RequestHandler;
+    /**
+     * For an OAuth callback that GitHub sent a sign-in's answer to: if `state` is this browser's
+     * GitHub sign-in in progress, goes back from it with a sign-in error and returns true.
+     */
+    failGithubSignIn(req: express.Request, res: express.Response, state: string): Promise<boolean>;
   };
   realtime: RealtimeApi;
   uploads: Uploads;

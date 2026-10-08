@@ -93,12 +93,12 @@ export function GithubAvatar({ status, size = 40 }: { status: GithubStatus; size
   return <img className="gh-avatar" src={status.avatarUrl} alt="" width={size} height={size} referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
 }
 
-/** For guests: GitHub needs an account. */
+/** For guests: GitHub needs an account, and connecting is a step of its own (signing in with GitHub too). */
 export function SignInToConnect() {
   return (
     <div className="gh-sign-in">
       <p>
-        <strong>Sign in to connect GitHub.</strong>
+        <strong>Sign in, then connect GitHub here.</strong>
       </p>
       <p className="muted small">Your GitHub connection is kept with your Workchop account.</p>
       <SignInOptions />

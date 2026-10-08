@@ -3,7 +3,7 @@ import { appInfo, type AppPlatform } from '../../../../shared/apps';
 import type { HelperDevice, PresenceState } from '../../../../shared/presence';
 import { saveAccountSettings } from '../../lib/account';
 import { ago } from '../../lib/time';
-import { toast, useStore } from '../../state/store';
+import { canSignIn, toast, useStore } from '../../state/store';
 import { CopyIcon, icon, TrashIcon } from '../../ui/icons';
 import helperUrl from '../../../../helper/workchop-presence.cjs?url';
 import { fetchDevices, pairDevice, removeDevice } from './api';
@@ -43,6 +43,7 @@ async function savePref(pref: Pref, value: boolean): Promise<void> {
 /** Settings > Privacy & status. */
 export function StatusSection() {
   const account = useStore((s) => s.account);
+  const signInOffered = useStore(canSignIn);
   // Re-read when the account's settings change.
   useStore((s) => s.account?.profile.settings);
   // A switch flips at once, and back if saving fails.
@@ -80,9 +81,9 @@ export function StatusSection() {
             onChange={(v) => flip('others', v)}
           />
         </>
-      ) : (
+      ) : signInOffered ? (
         <p className="muted small">Sign in to show the app you’re using automatically, with the desktop helper.</p>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { MAX_CHANNEL_NAME, MAX_TOPIC, type ChatChannel, type ConvKey } from '../../../../shared/chat';
 import { plainText } from '../../../../shared/chatText';
-import { useStore } from '../../state/store';
+import { canSignIn, useStore } from '../../state/store';
 import { usePopover } from '../../ui/Account';
 import {
   AddIcon,
@@ -431,6 +431,7 @@ function ThreadView({ id, conv }: { id: string; conv: ConvKey }) {
 function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClose: () => void }) {
   const canManage = useMayModerate();
   const guestEditor = useStore((s) => !s.account && s.office?.settings.buildPolicy === 'everyone');
+  const signInOffered = useStore(canSignIn);
   const canRename = !channel || (canManage && !channel.isDefault);
   const [name, setName] = useState(channel?.name ?? '');
   const [topic, setTopic] = useState(channel?.topic ?? '');
@@ -486,7 +487,13 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
         </label>
         {channel && !canRename && (
           <p className="muted small">
-            {channel.isDefault ? '#general keeps its name.' : guestEditor ? 'Sign in to rename channels.' : 'Only people who can edit this office can rename channels.'}
+            {channel.isDefault
+              ? '#general keeps its name.'
+              : !guestEditor
+                ? 'Only people who can edit this office can rename channels.'
+                : signInOffered
+                  ? 'Sign in to rename channels.'
+                  : 'Only the owner can rename channels here.'}
           </p>
         )}
         {error && <p className="form-error">{error}</p>}
@@ -506,7 +513,8 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
 /** Starting a direct message with someone here, or (signed in) a member who is away. */
 function NewMessage({ onClose }: { onClose: () => void }) {
   const everyone = usePeopleToMessage();
-  const signedIn = useStore((s) => !!s.account);
+  // Only where people can sign in: members who are away have accounts.
+  const offerSignIn = useStore((s) => !s.account && canSignIn(s));
   const [query, setQuery] = useState('');
   useEffect(() => void loadPeople(), []);
   useOverlayKeys((e) => {
@@ -547,7 +555,7 @@ function NewMessage({ onClose }: { onClose: () => void }) {
           ))}
           {!found.length && <p className="muted small">{q ? 'No one by that name.' : 'No one else has been here yet.'}</p>}
         </div>
-        {!signedIn && <p className="muted small">Sign in to message people who are away.</p>}
+        {offerSignIn && <p className="muted small">Sign in to message people who are away.</p>}
         <div className="chat-dialog-actions">
           <button type="button" className="btn" onClick={onClose}>
             Cancel
