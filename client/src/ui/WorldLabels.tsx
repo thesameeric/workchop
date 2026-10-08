@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Status, Zone } from '../../../shared/types';
+import { FocusBadge } from '../features/audio/Headphones';
 import { useAnchor } from '../lib/anchors';
 import { local, rendered } from '../lib/positions';
 import { useStore } from '../state/store';
@@ -21,12 +22,14 @@ const PlayerLabel = memo(function PlayerLabel({
   name,
   status,
   mic,
+  focus,
 }: {
   id: string;
   self: boolean;
   name: string;
   status: Status;
   mic: boolean;
+  focus: boolean;
 }) {
   const speaking = useStore((s) => !!s.speaking[self ? 'self' : id]);
   const emote = useStore((s) => s.emotes[id]);
@@ -38,6 +41,7 @@ const PlayerLabel = memo(function PlayerLabel({
         <div className={`nametag${speaking ? ' speaking' : ''}${self ? ' self' : ''}`}>
           <span className={`status-dot ${status}`} />
           <span className="nametag-name">{name}</span>
+          {focus && <FocusBadge />}
           {!mic && (
             <span className="nametag-muted">
               <MicOffIcon size={12} />
@@ -59,7 +63,7 @@ const PlayerLabel = memo(function PlayerLabel({
 function RemoteLabel({ id }: { id: string }) {
   const p = useStore((s) => s.players[id]);
   if (!p) return null;
-  return <PlayerLabel id={id} self={false} name={p.name} status={p.status} mic={p.mic} />;
+  return <PlayerLabel id={id} self={false} name={p.name} status={p.status} mic={p.mic} focus={!!p.focus} />;
 }
 
 function ZoneLabel({ zone, active }: { zone: Zone; active: boolean }) {
@@ -79,6 +83,7 @@ export function WorldLabels() {
   const selfId = useStore((s) => s.selfId) ?? 'self';
   const me = useStore((s) => s.me);
   const mic = useStore((s) => s.media.mic);
+  const focus = useStore((s) => s.focus);
   const zones = useStore((s) => s.office?.zones ?? []);
   const activeZoneId = useStore((s) => s.activeZoneId);
   return (
@@ -89,7 +94,7 @@ export function WorldLabels() {
       {ids.map((id) => (
         <RemoteLabel key={id} id={id} />
       ))}
-      <PlayerLabel id={selfId} self name={me.name} status={me.status} mic={mic} />
+      <PlayerLabel id={selfId} self name={me.name} status={me.status} mic={mic} focus={focus} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { getEntry, type Seat } from '../../../shared/catalog';
 import { findFreeSpot, findPath, isBlocked, moveWithCollision } from '../../../shared/geometry';
+import { focusHint } from '../features/audio/focus';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { getState, setState } from '../state/store';
@@ -166,11 +167,9 @@ export function stepLocal(dt: number, camera: THREE.Camera): number {
   hintTimer += dt;
   if (hintTimer > 0.25) {
     hintTimer = 0;
-    const hint = local.seat
-      ? 'Press E (or move) to stand up'
-      : nearestSeat(office, local.x, local.z, SIT_RANGE)
-        ? 'Press E to sit'
-        : null;
+    const hint =
+      focusHint() ??
+      (local.seat ? 'Press E (or move) to stand up' : nearestSeat(office, local.x, local.z, SIT_RANGE) ? 'Press E to sit' : null);
     if (hint !== getState().hint) setState({ hint });
   }
   return speed;

@@ -38,6 +38,9 @@
   --glass-raised: rgba(255, 255, 255, 0.12);
   --glass-hover: rgba(255, 255, 255, 0.16);
   --glass-danger: #ff8a8f;
+  /* Headphones (focus mode): the dock button, the banner and the badges on people. */
+  --focus: #8b5cf6;
+  --focus-soft: #c4b5fd;
   --glass-shadow: 0 10px 30px rgba(10, 12, 25, 0.25);
   /* Behind the 3D scene; matches its sky (world/Environment.tsx). */
   --scene: #d7deea;
@@ -1167,6 +1170,96 @@ kbd {
   opacity: 0.85;
 }
 
+/* Headphones (focus mode): a banner above the dock, with the hint above it */
+.focus-indicator {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  transform: translateX(-50%);
+  z-index: 23;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 5px 5px 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--focus) 88%, #000 12%);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(10, 12, 25, 0.25);
+}
+
+.focus-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.focus-text strong {
+  font-size: 0.82rem;
+}
+
+.focus-text small {
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+.office:has(.focus-indicator) .hint {
+  bottom: 134px;
+}
+
+/* Out of the way while the reactions menu is open (it covers them), and where an open side panel would. */
+body:has(.emote-menu) .focus-indicator,
+body:has(.emote-menu) .hint {
+  display: none;
+}
+
+@media (max-width: 1040px) {
+  .office:has(.side-panel) .focus-indicator {
+    display: none;
+  }
+}
+
+.focus-indicator button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.focus-indicator button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.focus-badge {
+  display: inline-flex;
+  color: var(--focus-soft);
+}
+
+.nametag.self .focus-badge {
+  color: #fff;
+}
+
+.people .link-btn {
+  color: var(--focus-soft);
+}
+
+.screen-confetti {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 90;
+  pointer-events: none;
+}
+
 /* Name tags floating above characters */
 .nametag {
   display: inline-flex;
@@ -1487,6 +1580,11 @@ kbd {
   color: var(--primary-ink);
 }
 
+.dock-btn.focus-on {
+  background: var(--focus);
+  color: #fff;
+}
+
 .badge-count {
   position: absolute;
   top: -4px;
@@ -1584,19 +1682,23 @@ kbd {
   border: 2px solid var(--glass-solid);
 }
 
-.emote-wrap {
-  position: relative;
-}
-
 .emote-menu {
-  position: absolute;
-  bottom: 56px;
-  left: 50%;
+  position: fixed;
+  z-index: 60;
   transform: translateX(-50%);
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, 44px);
   gap: 4px;
   padding: 6px;
   border-radius: 14px;
+  animation: menu-in 0.12s ease-out;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
 }
 
 .emote-menu button {
@@ -2221,6 +2323,18 @@ kbd {
   color: var(--primary-text);
 }
 
+.theme-options.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.noise-note {
+  margin: 0;
+}
+
+.noise-note.failed {
+  color: var(--danger);
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 960px) {
@@ -2386,6 +2500,30 @@ kbd {
 
   .hint {
     bottom: 72px;
+    width: max-content;
+    max-width: calc(100vw - 24px);
+    text-align: center;
+  }
+}
+
+@media (max-width: 720px) {
+  .focus-indicator {
+    bottom: 72px;
+  }
+
+  .office:has(.side-panel) .hint {
+    display: none;
+  }
+
+  .office:has(.focus-indicator) .hint {
+    bottom: 120px;
+  }
+}
+
+/* Number keys mean nothing on touch screens. */
+@media (pointer: coarse) {
+  .emote-menu kbd {
+    display: none;
   }
 }
 

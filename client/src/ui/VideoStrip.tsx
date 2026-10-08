@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { setState, useStore } from '../state/store';
 import { CloseIcon, ExpandIcon, MicOffIcon, ScreenIcon } from './icons';
@@ -13,10 +14,11 @@ interface TileProps {
   mic: boolean;
   screen: boolean;
   speaking: boolean;
+  focus: boolean;
   self?: boolean;
 }
 
-function Tile({ id, name, stream, videoOn, mic, screen, speaking, self }: TileProps) {
+function Tile({ id, name, stream, videoOn, mic, screen, speaking, focus, self }: TileProps) {
   return (
     <div className={`tile${speaking ? ' speaking' : ''}${screen ? ' screen' : ''}`}>
       {videoOn && stream ? (
@@ -28,6 +30,7 @@ function Tile({ id, name, stream, videoOn, mic, screen, speaking, self }: TilePr
       )}
       <div className="tile-name">
         {!mic && <MicOffIcon size={12} />}
+        {focus && <FocusBadge />}
         {screen && <ScreenIcon size={12} />}
         <span>{self ? `${name} (you)` : name}</span>
       </div>
@@ -53,7 +56,16 @@ function RemoteTile({ id }: { id: string }) {
   if (!player) return null;
   const hasVideo = !!stream?.getVideoTracks().length;
   return (
-    <Tile id={id} name={player.name} stream={stream} videoOn={player.cam && hasVideo} mic={player.mic} screen={player.screen} speaking={speaking} />
+    <Tile
+      id={id}
+      name={player.name}
+      stream={stream}
+      videoOn={player.cam && hasVideo}
+      mic={player.mic}
+      screen={player.screen}
+      speaking={speaking}
+      focus={!!player.focus}
+    />
   );
 }
 
@@ -62,11 +74,12 @@ export function VideoStrip() {
   const linked = useStore(useShallow((s) => Object.keys(s.linked).filter((id) => s.players[id])));
   const name = useStore((s) => s.me.name);
   const selfSpeaking = useStore((s) => !!s.speaking.self);
+  const focus = useStore((s) => s.focus);
   const { m, stream } = useSelfStream();
   if (!linked.length) return null;
   return (
     <div className="video-strip">
-      <Tile id="self" name={name} stream={stream} videoOn={(m.cam || m.screen) && !!stream} mic={m.mic} screen={m.screen} speaking={selfSpeaking} self />
+      <Tile id="self" name={name} stream={stream} videoOn={(m.cam || m.screen) && !!stream} mic={m.mic} screen={m.screen} speaking={selfSpeaking} focus={focus} self />
       {linked.map((id) => (
         <RemoteTile key={id} id={id} />
       ))}

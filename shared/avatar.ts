@@ -1,5 +1,5 @@
 import { clip } from './text';
-import type { AvatarConfig, FacialHair, GlassesStyle, HairStyle, HatStyle, Status, TopStyle } from './types';
+import type { AvatarConfig, FacialHair, GlassesStyle, HairStyle, HatStyle, PlayerPatch, ProfilePatch, Status, TopStyle } from './types';
 
 export const HAIR_STYLES: HairStyle[] = ['none', 'short', 'long', 'bun', 'ponytail', 'mohawk', 'curly', 'spiky'];
 export const TOP_STYLES: TopStyle[] = ['tshirt', 'hoodie', 'suit', 'dress'];
@@ -15,7 +15,38 @@ export const CLOTHING_COLORS = [
   '#ef476f', '#9b5de5', '#6d4c41', '#7f8c8d', '#111111', '#e9c46a',
 ];
 
-export const EMOTES = ['👋', '❤️', '😂', '👍', '🎉', '✋'];
+export interface Reaction {
+  emoji: string;
+  name: string;
+  /** The number key that sends it ('1'…'9', '0'). */
+  key: string;
+}
+
+/** Reactions everyone sees above your head (some also animate your character). */
+export const REACTIONS: readonly Reaction[] = [
+  { emoji: '👋', name: 'Wave', key: '1' },
+  { emoji: '❤️', name: 'Hearts', key: '2' },
+  { emoji: '😂', name: 'Laugh', key: '3' },
+  { emoji: '👍', name: 'Thumbs up', key: '4' },
+  { emoji: '🎉', name: 'Confetti', key: '5' },
+  { emoji: '✋', name: 'Raise hand', key: '6' },
+  { emoji: '💃', name: 'Dance', key: '7' },
+  { emoji: '👏', name: 'Clap', key: '8' },
+  { emoji: '🔥', name: 'Fire', key: '9' },
+  { emoji: '🙌', name: 'Hooray', key: '0' },
+];
+
+export const EMOTES: readonly string[] = REACTIONS.map((r) => r.emoji);
+
+export function isEmote(v: unknown): v is string {
+  return typeof v === 'string' && EMOTES.includes(v);
+}
+
+/** The reaction a number key sends (`key` is KeyboardEvent.key or .code, e.g. '7' or 'Digit7'). */
+export function reactionForKey(key: string): Reaction | undefined {
+  const digit = /^(?:Digit|Numpad)?([0-9])$/.exec(key)?.[1];
+  return digit === undefined ? undefined : REACTIONS.find((r) => r.key === digit);
+}
 
 export const DEFAULT_AVATAR: AvatarConfig = {
   skin: SKIN_TONES[1],
@@ -92,4 +123,16 @@ export function sanitizeName(v: unknown, max = 32): string {
   if (typeof v !== 'string') return '';
   // Strip control characters and collapse whitespace.
   return clip(v.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim(), max);
+}
+
+/** The part of a 'profile' message a client may change, cleaned; `name` falls back to `currentName`. */
+export function sanitizeProfile(raw: unknown, currentName: string): PlayerPatch {
+  const patch = (raw && typeof raw === 'object' ? raw : {}) as Record<keyof ProfilePatch, unknown>;
+  const clean: PlayerPatch = {};
+  if ('name' in patch) clean.name = sanitizeName(patch.name) || currentName;
+  if ('avatar' in patch) clean.avatar = sanitizeAvatar(patch.avatar);
+  if ('status' in patch) clean.status = sanitizeStatus(patch.status);
+  for (const key of ['mic', 'cam', 'screen', 'focus'] as const) if (key in patch) clean[key] = patch[key] === true;
+  // Anything else (like `app`, which only the server sets) is ignored.
+  return clean;
 }

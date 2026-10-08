@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { media } from '../lib/media';
+import { media, type NoiseState } from '../lib/media';
 
 interface MediaSnapshot {
   mic: boolean;
@@ -7,6 +7,7 @@ interface MediaSnapshot {
   screen: boolean;
   videoTrack: MediaStreamTrack | null;
   error: string | null;
+  noise: NoiseState;
   version: number;
 }
 
@@ -19,6 +20,7 @@ function getSnapshot(): MediaSnapshot {
       screen: media.screenOn,
       videoTrack: media.videoTrack,
       error: media.error,
+      noise: media.noise,
       version: media.version,
     };
   }

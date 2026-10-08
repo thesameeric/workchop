@@ -1,4 +1,5 @@
 import type { Feature } from '../features';
+import { feature as audio } from './audio';
 import { feature as chat } from './chat';
 
 /**
@@ -6,4 +7,4 @@ import { feature as chat } from './chat';
  * Each module exports `const feature: Feature = { name, migrations?, register(ctx) }`; import it
  * and add it to the list.
  */
-export const features: Feature[] = [chat];
+export const features: Feature[] = [chat, audio];

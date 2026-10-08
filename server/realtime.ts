@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
-import { EMOTES, sanitizeAvatar, sanitizeName, sanitizeStatus } from '../shared/avatar';
+import { isEmote, sanitizeAvatar, sanitizeName, sanitizeProfile, sanitizeStatus } from '../shared/avatar';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
@@ -331,17 +331,11 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     socket.on('profile', (patch) => {
       const p = me();
       if (!p || !office() || !room || !patch || typeof patch !== 'object' || !canProfile()) return;
-      const clean: PlayerPatch = {};
-      if ('name' in patch) clean.name = sanitizeName(patch.name) || p.name;
-      if ('avatar' in patch) clean.avatar = sanitizeAvatar(patch.avatar);
-      if ('status' in patch) clean.status = sanitizeStatus(patch.status);
-      for (const key of ['mic', 'cam', 'screen', 'focus'] as const) if (key in patch) clean[key] = patch[key] === true;
-      // Anything else (like `app`, which only the server sets) is ignored.
-      api.updatePlayer(room.officeId, p.id, clean);
+      api.updatePlayer(room.officeId, p.id, sanitizeProfile(patch, p.name));
     });
 
     socket.on('emote', (emoji) => {
-      if (!room || !EMOTES.includes(emoji) || !canEmote()) return;
+      if (!room || !isEmote(emoji) || !canEmote()) return;
       io.to(roomName(room.officeId)).emit('emote', socket.id, emoji);
     });
 

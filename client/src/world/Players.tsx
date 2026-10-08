@@ -1,9 +1,11 @@
-import { useFrame, useThree } from '@react-three/fiber';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { memo, useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { useShallow } from 'zustand/react/shallow';
+import { tapShoulder } from '../features/audio/focus';
+import { GESTURES, ReactionEffects } from '../features/audio/Reactions';
 import { local, remoteTargets, rendered } from '../lib/positions';
-import { useStore } from '../state/store';
+import { getState, useStore } from '../state/store';
 import { Avatar, BlobShadow, useMotion, type AvatarMotion } from './Avatar';
 import { stepLocal } from './movement';
 
@@ -11,7 +13,7 @@ const ringMaterial = new THREE.MeshBasicMaterial({ color: '#3ddc84', transparent
 const selfRingMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.55, depthWrite: false });
 const ringGeo = new THREE.RingGeometry(0.36, 0.44, 40);
 
-/** Speaking ring at a character's feet, and arm gestures for reactions. */
+/** Speaking ring at a character's feet, and the animations and particles of reactions. */
 const Overlay = memo(function Overlay({
   id,
   speakId,
@@ -27,21 +29,22 @@ const Overlay = memo(function Overlay({
   const emote = useStore((s) => s.emotes[id]);
 
   useEffect(() => {
-    if (!emote) return;
-    if (emote.emoji === '👋') Object.assign(motion.current, { gesture: 'wave', gestureUntil: performance.now() + 2400 });
-    if (emote.emoji === '✋') Object.assign(motion.current, { gesture: 'raise', gestureUntil: performance.now() + 3000 });
+    const g = emote && GESTURES[emote.emoji];
+    if (g) Object.assign(motion.current, { gesture: g.gesture, gestureUntil: performance.now() + g.ms });
   }, [emote, motion]);
 
   return (
     <>
       {speaking && <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]} geometry={ringGeo} material={ringMaterial} />}
       {isSelf && !speaking && <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]} geometry={ringGeo} material={selfRingMaterial} />}
+      <ReactionEffects emote={emote} />
     </>
   );
 });
 
 export function LocalPlayer() {
   const me = useStore((s) => s.me);
+  const focus = useStore((s) => s.focus);
   const selfId = useStore((s) => s.selfId) ?? 'self';
   const group = useRef<THREE.Group>(null);
   const motion = useMotion();
@@ -61,7 +64,7 @@ export function LocalPlayer() {
   return (
     <group ref={group}>
       <BlobShadow />
-      <Avatar config={me.avatar} motion={motion} />
+      <Avatar config={me.avatar} motion={motion} focus={focus} />
       <Overlay id={selfId} speakId="self" isSelf motion={motion} />
     </group>
   );
@@ -112,11 +115,37 @@ const RemotePlayer = memo(function RemotePlayer({ id }: { id: string }) {
   useEffect(() => () => void rendered.delete(id), [id]);
 
   const avatar = useMemo(() => info?.avatar, [info?.avatar]);
+  const focus = !!info?.focus;
+  // The hand pointer we showed over them; put back when they take the headphones off or leave.
+  const hovered = useRef(false);
+  useEffect(() => {
+    if (!focus) return;
+    return () => {
+      if (hovered.current) document.body.style.cursor = '';
+      hovered.current = false;
+    };
+  }, [focus]);
   if (!info || !avatar) return null;
+  // Someone wearing headphones can be tapped on the shoulder by clicking them.
+  const tap = (e: ThreeEvent<MouseEvent>) => {
+    if (e.delta > 5 || getState().mode !== 'play') return;
+    e.stopPropagation();
+    void tapShoulder(id);
+  };
+  const hover = (on: boolean) => () => {
+    if (on ? getState().mode !== 'play' : !hovered.current) return;
+    hovered.current = on;
+    document.body.style.cursor = on ? 'pointer' : '';
+  };
   return (
-    <group ref={group}>
+    <group
+      ref={group}
+      onClick={focus ? tap : undefined}
+      onPointerOver={focus ? hover(true) : undefined}
+      onPointerOut={focus ? hover(false) : undefined}
+    >
       <BlobShadow />
-      <Avatar config={avatar} motion={motion} />
+      <Avatar config={avatar} motion={motion} focus={focus} />
       <Overlay id={id} speakId={id} isSelf={false} motion={motion} />
     </group>
   );

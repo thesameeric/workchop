@@ -2,6 +2,7 @@
 // Code points of the Hugeicons glyphs in client/src/assets/hgi-subset.woff2.
 export const HUGEICONS = {
   'add-01': 0xf150c,
+  'ai-mic': 0xf154e,
   'alert-circle': 0xf1584,
   'archive-02': 0xf15e4,
   'archive-restore': 0xf15eb,
@@ -30,6 +31,7 @@ export const HUGEICONS = {
   'file-zip': 0xf1cb4,
   'hammer': 0xf31a9,
   'hashtag': 0xf1df7,
+  'headphone-off': 0xf31be,
   'headphones': 0xf1e04,
   'help-circle': 0xf1e11,
   'link-04': 0xf1fa8,
@@ -55,6 +57,7 @@ export const HUGEICONS = {
   'smile-plus': 0xf2632,
   'square-lock-02': 0xf26b1,
   'sun-03': 0xf2725,
+  'tap-01': 0xf27ac,
   'user-edit-01': 0xf291f,
   'user-multiple': 0xf292e,
   'video-01': 0xf2964,

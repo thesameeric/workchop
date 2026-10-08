@@ -333,11 +333,12 @@ export function NowPlayingPill() {
   const session = useStore((s) => (now ? s.spotifySessions[now.itemId] : undefined));
   const spotifyPlaying = useStore((s) => s.music.spotifyPlaying);
   const { muted, blocked } = useStore((s) => s.music);
+  const focus = useStore((s) => s.focus);
   if (!now || (now.kind === 'off' && !session)) return null;
   const title = session && spotifyPlaying ? `${session.name} — ${session.artists}` : now.kind === 'off' && session ? `${session.djName} is playing on Spotify` : now.title;
   return (
     <div className="now-playing">
-      <span className={`eq${muted || blocked ? ' still' : ''}`}>
+      <span className={`eq${muted || blocked || focus ? ' still' : ''}`} title={focus ? 'Headphones on: music is silent for you' : undefined}>
         <i />
         <i />
         <i />

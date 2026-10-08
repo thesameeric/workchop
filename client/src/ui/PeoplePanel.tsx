@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { STATUSES } from '../../../shared/avatar';
 import type { Status } from '../../../shared/types';
+import { setFocus, tapShoulder } from '../features/audio/focus';
+import { FocusBadge } from '../features/audio/Headphones';
 import { colorFor, initials } from '../lib/color';
 import { local, remoteTargets } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { messagePlayer, useStore } from '../state/store';
-import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon } from './icons';
+import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon, TapIcon } from './icons';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
 
@@ -23,6 +25,7 @@ export function PeoplePanel() {
   const linked = useStore((s) => s.linked);
   const me = useStore((s) => s.me);
   const mic = useStore((s) => s.media.mic);
+  const focus = useStore((s) => s.focus);
   useTick(500);
 
   const others = Object.values(players)
@@ -49,9 +52,18 @@ export function PeoplePanel() {
             ))}
           </select>
         </div>
+        {focus && <FocusBadge size={16} />}
         {!mic && <MicOffIcon size={16} className="muted" />}
       </div>
       {me.status === 'busy' && <p className="muted small pad">Do not disturb: you won’t connect with anyone outside private areas.</p>}
+      {focus && (
+        <p className="muted small pad">
+          Headphones on: you can’t hear anyone, but they can still hear you.{' '}
+          <button className="link-btn" onClick={() => setFocus(false)}>
+            Take them off
+          </button>
+        </p>
+      )}
       {others.length === 0 && <p className="muted center pad">You’re the only one here. Share the invite link!</p>}
       {others.map((p) => (
         <div key={p.id} className="person">
@@ -62,16 +74,22 @@ export function PeoplePanel() {
           <div className="person-info">
             <strong>{p.name}</strong>
             <span className="muted small">
-              {linked[p.id] ? <span className="badge">In conversation</span> : STATUS_LABEL[p.status]}
+              {p.focus ? 'Wearing headphones' : linked[p.id] ? <span className="badge">In conversation</span> : STATUS_LABEL[p.status]}
               {Number.isFinite(p.dist) && ` · ${p.dist.toFixed(0)} m`}
             </span>
           </div>
           <div className="person-icons">
+            {p.focus && <FocusBadge size={14} />}
             {!p.mic && <MicOffIcon size={14} />}
             {p.cam && !p.screen && <CamIcon size={14} />}
             {p.screen && <ScreenIcon size={14} />}
           </div>
           <div className="person-actions">
+            {p.focus && (
+              <button className="icon-btn" title={`Tap ${p.name} on the shoulder`} onClick={() => void tapShoulder(p.id)}>
+                <TapIcon size={16} />
+              </button>
+            )}
             <button className="icon-btn" title={`Go to ${p.name}`} onClick={() => getSession()?.goTo(p.id)}>
               <PinIcon size={16} />
             </button>

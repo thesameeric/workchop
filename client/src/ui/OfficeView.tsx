@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { EMOTES } from '../../../shared/avatar';
+import { reactionForKey } from '../../../shared/avatar';
+import { toggleFocus } from '../features/audio/focus';
+import { FocusIndicator } from '../features/audio/Headphones';
 import { media } from '../lib/media';
 import { getSession } from '../lib/session';
 import { setPanel, setState, useStore } from '../state/store';
@@ -101,7 +103,10 @@ function Help() {
       </div>
       <div>Click the floor to walk there, click a chair to sit</div>
       <div>
-        <kbd>E</kbd> sit/stand · <kbd>1</kbd>–<kbd>6</kbd> reactions · <kbd>M</kbd> mute · <kbd>V</kbd> camera
+        <kbd>E</kbd> sit/stand · <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd> reactions
+      </div>
+      <div>
+        <kbd>M</kbd> mute · <kbd>V</kbd> camera · <kbd>H</kbd> headphones
       </div>
       <div>Drag to turn the camera, scroll to zoom</div>
       <div className="muted">Walk up to people to talk. Private areas keep conversations inside.</div>
@@ -133,6 +138,7 @@ function useShortcuts() {
       else if (e.code === 'KeyM') void media.setMic(!media.micOn);
       else if (e.code === 'KeyV') void media.setCam(!media.camOn);
       else if (e.code === 'KeyB') setPanel('build');
+      else if (e.code === 'KeyH') toggleFocus();
       else if (e.code === 'Enter') {
         const target = e.target as Element;
         if (target.matches?.('button, a') && (target === keyFocused || target.closest('[role="menu"]'))) return;
@@ -140,8 +146,9 @@ function useShortcuts() {
         setState({ panel: 'chat', mode: 'play' });
       } else if (e.code === 'Escape' && mode === 'play') {
         setState((s) => (s.spotlight ? { spotlight: null } : s.panel !== 'none' ? { panel: 'none' } : {}));
-      } else if (/^Digit[1-6]$/.test(e.code)) {
-        getSession()?.emote(EMOTES[Number(e.code.slice(5)) - 1]);
+      } else {
+        const reaction = reactionForKey(e.code);
+        if (reaction) getSession()?.emote(reaction.emoji);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -168,6 +175,7 @@ export function OfficeView() {
       <SelfView />
       <SidePanel />
       <Hint />
+      <FocusIndicator />
       <Help />
       <Dock />
       <Spotlight />
