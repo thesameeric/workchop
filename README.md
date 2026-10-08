@@ -28,10 +28,17 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Spotify board:** share Spotify playlists, albums, tracks, podcasts, or a **Jam** invite. Everyone opens them in their own Spotify app.
 - **Spotify listen-along** (optional, needs `SPOTIFY_CLIENT_ID`, see below): people connect their own Spotify Premium account, someone presses ▶ "Play for everyone", and everyone connected at that jukebox hears the same track at the same position on their own account. Workchop only syncs what's playing; it never streams audio from one person to another.
 
+**Chat**
+- **Channels** for the whole office: every office starts with #general, anyone can add more (with a topic), and the owner and signed-in people who may edit the office rename and archive them.
+- **Direct messages**, saved when both people are signed in (they wait for whoever is away: start one with **+** next to Direct messages). With guests they're live: they last while you're both in the office, and what a guest sent you stays until you've read it. **Nearby** is a live chat with the people you're talking with.
+- **Threads** (reply to any message, optionally also in the channel), **@mentions** of people here or away and `@here` for everyone online, **reactions**, editing and deleting your messages, and light formatting: `**bold**`, `_italic_`, `` `code` ``, code blocks and links.
+- **Files:** attach, drag in or paste up to 5 per message. Images show as previews that open full size; other files as cards to download.
+- Unread channels are bold, with a count of your mentions. The dock's chat button counts your mentions and direct messages, and a mention or direct message also shows a notice that takes you to it.
+
 **Getting around**
 - `WASD` or the arrow keys move you relative to the camera, and `Shift` runs. Click the floor to walk there (with pathfinding); click a chair to walk over and sit.
 - Drag to orbit the camera and scroll to zoom. Walls and shelves between you and the camera fade out.
-- Text chat to everyone, to people nearby, or as a direct message. The people list shows who's in a conversation, with "go to" and "message" buttons.
+- The people list shows who's in a conversation, with "go to" and "message" buttons.
 - Works on phones: tap to walk, drag to look around.
 
 | Key | Action |
@@ -41,7 +48,8 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 | `1`–`6` | Reactions |
 | `M` / `V` | Toggle microphone / camera |
 | `B` | Build mode |
-| `Enter` | Open chat |
+| `Enter` | Open chat (in chat: send; `Shift+Enter` for a new line) |
+| `↑` / `Esc` | In chat: edit your last message / cancel a reply or an edit |
 | `R`, `Del`, `Ctrl+D`, `Esc` | Rotate, delete, duplicate, cancel (build mode) |
 
 ## Getting started
@@ -166,7 +174,7 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Names and characters of guests | Each person's browser (local storage) |
 | Jukebox settings: station, own tracks/stream, shared Spotify links | With the office (part of the jukebox item) |
 | Spotify sign-in | Each listener's browser (local storage); never sent to the Workchop server |
-| Chat | In memory only: the last 100 "everyone" messages per office, cleared on restart |
+| Chat: channels, messages, threads, reactions, mentions, who has read what | The database (attached files with the uploads). Kept until deleted, or for `CHAT_RETENTION_DAYS`. Nearby messages and direct messages with guests are never stored |
 | Who's online, positions, calls | In memory only (live state) |
 
 **Postgres or PGlite?** Use Postgres for anything hosted. Each office is a single document, so it's stored as a `jsonb` row in an `offices` table; the tables are created and upgraded automatically on start-up. Managed Postgres (Neon, Supabase, RDS, Render, Railway, Fly…) works too: set `DATABASE_URL`, plus `DATABASE_SSL=no-verify` if the provider uses a certificate Node doesn't trust. Without `DATABASE_URL`, the server runs PGlite, Postgres compiled to WebAssembly, inside its own process: no setup, fine for development and a single small server with a persistent disk, but it needs about 300–500 MB of memory and every query briefly pauses the server. Switching between the two doesn't move data over.
@@ -206,6 +214,7 @@ or `docker build -t workchop . && docker run -p 3001:3001 -e DATABASE_URL=postgr
 | `CLOUDFLARE_TURN_TTL` | `86400` | How long those credentials last, in seconds (600 to 172800) |
 | `CLIENT_IP_HEADER` | – | Header with each visitor's IP when behind a proxy: `x-forwarded-for` directly behind the bundled Caddy (set in Compose), `cf-connecting-ip` when every request comes through Cloudflare (set automatically on Containers and with the Tunnel). Only use a header the visitor can't set: leave it unset when nothing sits in front, and don't use `cf-connecting-ip` if your server can also be reached without going through Cloudflare |
 | `SPOTIFY_CLIENT_ID` | – | Turns on Spotify listen-along (see below) |
+| `CHAT_RETENTION_DAYS` | – (keep) | Delete chat messages (with their threads) that have been quiet for this many days, with their files (see [Chat](#chat)) |
 
 STUN alone is enough on most home and office networks. People behind strict corporate NATs or firewalls need a **TURN server** (for example [coturn](https://github.com/coturn/coturn)) for calls to connect.
 
@@ -218,6 +227,18 @@ Signing in is optional: anyone with an office link can still join as a guest. Pe
 - **Development:** `DEV_LOGIN=true npm run dev` adds a sign-in with just a name and email.
 
 Sessions last 30 days from the last visit, in an HttpOnly cookie (`__Host-wc_session` over HTTPS).
+
+### Chat
+
+Chat works out of the box; it keeps its messages in the database and attached files with the other uploads (`UPLOAD_MAX_BYTES` per file, `UPLOADS_QUOTA_MB` per office). Who may do what:
+
+- Everyone in an office, guests included, can read and write in its channels, create channels, set a channel's topic, and edit or delete their own messages. Guests are known by their connection, so after a reload they can no longer edit what they wrote before.
+- The owner, and signed-in people who may edit the office (everyone, unless the owner locked building to themselves), can also rename and archive channels and delete anyone's channel messages. Guests can't, even where they may build. #general can't be renamed or archived. Archived channels keep their history and can be unarchived.
+- Direct messages are only ever sent to, and readable by, the two people in them.
+
+Deleting a message deletes its files too. Set `CHAT_RETENTION_DAYS` to have messages deleted automatically, with their threads and files, once nobody has written in them (or in their thread) for that many days; files sent in live messages go after that long too. The server checks at most hourly, when someone comes in.
+
+A message's link (its "Copy link" action) opens the office at that message, for anyone who can see it.
 
 ### Music and Spotify
 
@@ -234,14 +255,14 @@ The built-in radio stations work out of the box. Two things to know before addin
 ```
 client/   React + react-three-fiber app (Vite)
   src/world/   3D scene: furniture models, avatar, movement, camera, build tools
-  src/ui/      Landing page, lobby, character editor, dock, chat, people and build panels,
+  src/ui/      Landing page, lobby, character editor, dock, people and build panels,
                the side panel (panels.tsx) and settings (settings.tsx) registries
   src/lib/     Socket session and its hooks (session.ts), sign-in and account (account.ts),
                WebRTC mesh (peers.ts), local media, speaking detection, file uploads (upload.ts),
                lounge radio (radio.ts, genmusic.ts), Spotify listen-along (spotify.ts)
-  src/features/  Client features, loaded automatically (see Development)
+  src/features/  Client features, loaded automatically (see Development), e.g. chat/
 server/   Express + Socket.IO
-  realtime.ts  Presence, movement, chat, office edits, WebRTC signalling relay, jukebox and listen-along sessions
+  realtime.ts  Presence, movement, office edits, WebRTC signalling relay, jukebox and listen-along sessions
   turn.ts      Short-lived Cloudflare TURN credentials
   room.ts      Who is linked to whom
   music.ts     Jukebox changes and who may make them, Spotify link previews
@@ -252,6 +273,7 @@ server/   Express + Socket.IO
   accounts.ts  Users, sign-in identities, office memberships
   uploads.ts   File uploads and downloads (database, disk or S3/R2)
   features.ts  Hooks for features: routes, socket handlers, tables (list in features/index.ts)
+  features/chat/  Channels, messages, threads, mentions, reactions, read markers (tables chat_*)
 shared/   Code used by both sides: types, furniture catalog, avatar options,
           office validation and edits, collision, pathfinding and proximity rules
 cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangler.jsonc, worker.ts)
@@ -261,6 +283,7 @@ cloudflare/  Worker that runs the Docker image on Cloudflare Containers (wrangle
 - **Media is peer-to-peer** (a mesh). Every connection always has one audio and one video transceiver, so muting, turning the camera on or off, or starting a screen share is just `replaceTrack`, with no renegotiation. Remote audio volume is set from the distance between the two people.
 - **Office edits are operations** (`add`, `update`, `remove`, `zone:*`, `settings`). They are applied optimistically on the client and validated and normalised by the server with the same `applyOp` code. The server then echoes them to everyone in its own order, so all clients converge. Rejected edits trigger a full resync.
 - **Music is synced by clock, not streamed.** Clients estimate the server's clock (`time` pings). The built-in stations are generated from it with a seeded pattern, so every browser plays the same bar. Track lists play from a shared start time. Listen-along sessions store the DJ's track, position and server time, and listeners seek to match (the DJ re-sends on track changes, pauses and seeks).
+- **Chat is stored, except what's live.** Channel messages and direct messages between signed-in people are rows in `chat_messages`; the server checks every mention (a member of the office, a guest who is here, or `@here`) before saving and notifying anyone, keeps mentions for people who are away, and remembers how far each signed-in person has read. Nearby messages and direct messages with guests only pass through the server.
 - **Everything in the world is generated in code** (furniture, characters, floor textures), so there are no asset files to load.
 
 ## Development
@@ -289,4 +312,5 @@ Icons come from the [Hugeicons](https://hugeicons.com) font in `scripts/hugeicon
 
 - Calls are a mesh: each person sends their stream to every person they're near. That works well for conversations of up to about 8 people. Larger groups (stages, all-hands) would need an SFU such as LiveKit or mediasoup.
 - Anyone with an office link can join it. The owner key, stored in the creator's browser, only controls who may edit.
+- Chat: each person can send about one message a second (bursts of 6) and create a channel every 20 seconds (bursts of 3); an office has up to 200 open channels. Messages are up to 4,000 characters with up to 5 files, and history loads 50 messages at a time.
 - Uploads: each office keeps up to `UPLOADS_QUOTA_MB` of files. Each visitor (IP address) can send 3 files at once and 60 per 10 minutes, and the server holds at most 4 files of the maximum size in memory at a time.

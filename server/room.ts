@@ -1,6 +1,6 @@
 import { shouldLink } from '../shared/geometry';
 import type { SpotifySession } from '../shared/music';
-import type { ChatMessage, PlayerState, Zone } from '../shared/types';
+import type { PlayerState, Zone } from '../shared/types';
 
 export interface LinkChanges {
   added: { a: string; b: string; sid: number }[];
@@ -16,7 +16,6 @@ export class Room {
   readonly players = new Map<string, PlayerState>();
   /** Pair key -> session id of that pair's current WebRTC connection. */
   readonly links = new Map<string, number>();
-  readonly chat: ChatMessage[] = [];
   /** Spotify listen-along sessions by jukebox id. */
   readonly spotify = new Map<string, SpotifySession>();
   private nextSid = 1;
@@ -76,10 +75,5 @@ export class Room {
       changes.removed.push({ a: id, b: peer });
     }
     return changes;
-  }
-
-  addChat(msg: ChatMessage): void {
-    this.chat.push(msg);
-    if (this.chat.length > 100) this.chat.splice(0, this.chat.length - 100);
   }
 }

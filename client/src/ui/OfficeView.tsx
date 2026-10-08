@@ -137,7 +137,7 @@ function useShortcuts() {
         const target = e.target as Element;
         if (target.matches?.('button, a') && (target === keyFocused || target.closest('[role="menu"]'))) return;
         e.preventDefault();
-        setState({ panel: 'chat', unread: 0, mode: 'play' });
+        setState({ panel: 'chat', mode: 'play' });
       } else if (e.code === 'Escape' && mode === 'play') {
         setState((s) => (s.spotlight ? { spotlight: null } : s.panel !== 'none' ? { panel: 'none' } : {}));
       } else if (/^Digit[1-6]$/.test(e.code)) {

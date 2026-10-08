@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { AccountUser, AuthProvider } from '../../../shared/account';
 import type { SpotifySession } from '../../../shared/music';
-import type { AvatarConfig, ChatMessage, ChatScope, Office, PlayerState, Status } from '../../../shared/types';
+import type { AvatarConfig, Office, PlayerState, Status } from '../../../shared/types';
 import { loadProfile } from '../lib/storage';
 import type { IconComponent } from '../ui/icons';
 
@@ -37,11 +37,6 @@ export interface NowPlaying {
 
 export type SpotifyStatus = 'disabled' | 'disconnected' | 'connecting' | 'ready' | 'error';
 
-export interface ChatTarget {
-  scope: ChatScope;
-  to?: string;
-}
-
 interface State {
   phase: Phase;
   officeId: string | null;
@@ -67,9 +62,8 @@ interface State {
   streams: Record<string, MediaStream>;
   speaking: Record<string, boolean>;
 
-  chat: ChatMessage[];
-  unread: number;
-  chatTarget: ChatTarget;
+  /** Asks the chat to open a conversation with this player (see messagePlayer); the chat clears it. */
+  chatWith: string | null;
 
   emotes: Record<string, { emoji: string; at: number }>;
 
@@ -147,9 +141,7 @@ export const useStore = create<State>()(() => ({
   linked: {},
   streams: {},
   speaking: {},
-  chat: [],
-  unread: 0,
-  chatTarget: { scope: 'all' },
+  chatWith: null,
   emotes: {},
   panel: 'none',
   modal: 'none',
@@ -203,9 +195,13 @@ export function setPanel(panel: Panel): void {
     const building = next === 'build' && canBuild();
     return {
       panel: next,
-      unread: next === 'chat' ? 0 : s.unread,
       mode: building ? 'build' : 'play',
       build: building ? s.build : initialBuild,
     };
   });
+}
+
+/** Opens the chat with a direct message to someone in the office (a player id). */
+export function messagePlayer(playerId: string): void {
+  setState({ panel: 'chat', mode: 'play', chatWith: playerId });
 }

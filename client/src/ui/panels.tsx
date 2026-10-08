@@ -2,8 +2,7 @@ import type { ComponentType } from 'react';
 import { createRegistry } from '../lib/registry';
 import { useStore } from '../state/store';
 import { BuildPanel } from './BuildPanel';
-import { ChatPanel } from './ChatPanel';
-import { ChatIcon, HammerIcon, MusicIcon, PeopleIcon, type IconComponent } from './icons';
+import { HammerIcon, MusicIcon, PeopleIcon, type IconComponent } from './icons';
 import { MusicPanel } from './MusicPanel';
 import { PeoplePanel } from './PeoplePanel';
 
@@ -38,18 +37,7 @@ export const usePanels = panels.useList;
 /** The React key for a panel's dock button (it changes when the panel is registered again). */
 export const panelKey = panels.keyOf;
 
-registerPanel({
-  id: 'chat',
-  title: 'Chat',
-  icon: ChatIcon,
-  Component: ChatPanel,
-  order: 10,
-  shortcut: 'Enter',
-  useBadge: () => {
-    const unread = useStore((s) => s.unread);
-    return unread > 9 ? '9+' : unread;
-  },
-});
+// Chat (order 10) is registered by its feature (features/chat).
 registerPanel({ id: 'music', title: 'Music', icon: MusicIcon, Component: MusicPanel, order: 20, hideOnMobile: true });
 registerPanel({
   id: 'people',

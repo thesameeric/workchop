@@ -43,7 +43,9 @@
     "PUBLIC_URL": "",
     // Uploaded files: "s3" for an R2 bucket (set the S3_* secrets; recommended), or "db" to keep
     // them in Postgres (uses up a small free database quickly). Empty: s3 when S3_BUCKET is set, else db.
-    "UPLOADS_STORAGE": ""
+    "UPLOADS_STORAGE": "",
+    // Delete chat conversations nobody has written in for this many days, e.g. "365". Empty: keep them.
+    "CHAT_RETENTION_DAYS": ""
   },
   // Secrets, set with `npx wrangler secret put NAME`: DATABASE_URL (required), DATABASE_SSL,
   // SPOTIFY_CLIENT_ID, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_KEY_API_TOKEN, optionally

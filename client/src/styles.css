@@ -1066,6 +1066,8 @@ kbd {
   overflow: hidden;
   background: var(--scene);
   color: var(--glass-ink);
+  /* The open side panel's width (a panel may ask for more, e.g. chat). */
+  --panel-w: 360px;
 }
 
 .world-canvas {
@@ -1271,6 +1273,16 @@ kbd {
   scrollbar-width: thin;
 }
 
+/* With a side panel open, the tiles line up beside it instead of going under it. */
+@media (min-width: 961px) {
+  .office:has(> .side-panel) .video-strip {
+    left: auto;
+    right: calc(var(--panel-w) + 24px);
+    transform: none;
+    max-width: calc(100vw - var(--panel-w) - 380px);
+  }
+}
+
 .tile {
   position: relative;
   flex: none;
@@ -1374,7 +1386,7 @@ kbd {
 }
 
 .self-view.beside-panel {
-  right: 384px;
+  right: calc(var(--panel-w) + 24px);
 }
 
 .self-view .video {
@@ -1615,7 +1627,7 @@ kbd {
   top: 12px;
   right: 12px;
   bottom: 84px;
-  width: 360px;
+  width: var(--panel-w);
   z-index: 28;
   display: flex;
   flex-direction: column;
@@ -1697,89 +1709,6 @@ kbd {
 
 .office .field > span {
   color: var(--glass-muted);
-}
-
-/* Chat */
-.chat-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.chat-msg {
-  max-width: 88%;
-}
-
-.chat-msg.own {
-  align-self: flex-end;
-  text-align: right;
-}
-
-.chat-meta {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  font-size: 0.75rem;
-  margin-bottom: 2px;
-}
-
-.chat-msg.own .chat-meta {
-  justify-content: flex-end;
-}
-
-.chat-name {
-  font-weight: 700;
-}
-
-.chat-scope {
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--glass-raised);
-  font-size: 0.68rem;
-}
-
-.chat-scope.dm {
-  background: rgba(155, 93, 229, 0.5);
-}
-
-.chat-scope.nearby {
-  background: rgba(61, 220, 132, 0.35);
-}
-
-.chat-text {
-  display: inline-block;
-  padding: 7px 11px;
-  border-radius: 12px;
-  background: var(--glass-raised);
-  white-space: pre-wrap;
-  word-break: break-word;
-  text-align: left;
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-.chat-msg.own .chat-text {
-  background: var(--primary);
-  color: var(--primary-ink);
-}
-
-.chat-form {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 6px;
-  padding: 10px;
-  border-top: 1px solid var(--glass-line);
-}
-
-.chat-form select {
-  max-width: 110px;
-}
-
-.chat-form input {
-  min-width: 0;
 }
 
 /* People */

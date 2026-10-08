@@ -4,10 +4,8 @@ import { EMOTES, sanitizeAvatar, sanitizeName, sanitizeStatus } from '../shared/
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
-import { clip } from '../shared/text';
 import type {
   AnimState,
-  ChatMessage,
   ClientToServerEvents,
   Office,
   OfficeOp,
@@ -18,7 +16,6 @@ import type {
 import type { Accounts } from './accounts';
 import { applyMusicOp, fetchLinkMeta } from './music';
 import type { OfficeStore } from './officeStore';
-import { randomId } from './officeStore';
 import { type LinkChanges, Room } from './room';
 
 export const MAX_PLAYERS_PER_ROOM = 100;
@@ -82,6 +79,8 @@ export interface RealtimeApi {
   /** The connection with this socket id, if it is still connected. */
   contextOf(socketId: string): SocketContext | undefined;
   onlineCount(officeId: string): number;
+  /** The players this one is in a call with right now. */
+  linkedPeers(officeId: string, playerId: string): string[];
 }
 
 /** Token bucket: `rate` actions per second with bursts up to `burst`. */
@@ -182,6 +181,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     },
     contextOf: (socketId) => contexts.get(socketId),
     onlineCount: (officeId: string) => rooms.get(officeId)?.players.size ?? 0,
+    linkedPeers: (officeId, playerId) => rooms.get(officeId)?.linkedPeers(playerId) ?? [],
   };
 
   io.on('connection', (socket: ClientSocket) => {
@@ -208,7 +208,6 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
     const { me, mayEdit } = ctx;
     contexts.set(socket.id, ctx);
 
-    const canChat = limiter(1, 5);
     const canEmote = limiter(2, 4);
     const canEdit = limiter(20, 60);
     const canProfile = limiter(2, 6);
@@ -307,7 +306,6 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
         selfId: socket.id,
         office: stored.office,
         players: [...r.players.values()],
-        chat: r.chat.filter((m) => m.scope === 'all'),
         isOwner,
         spotify: [...r.spotify.values()],
         uploadKey: socket.data.uploadKey!,
@@ -340,26 +338,6 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts?: Ac
       for (const key of ['mic', 'cam', 'screen', 'focus'] as const) if (key in patch) clean[key] = patch[key] === true;
       // Anything else (like `app`, which only the server sets) is ignored.
       api.updatePlayer(room.officeId, p.id, clean);
-    });
-
-    socket.on('chat', (text, scope, to) => {
-      const p = me();
-      if (!p || !room || typeof text !== 'string' || !canChat()) return;
-      const body = clip(text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim(), 1000);
-      if (!body) return;
-      const msg: ChatMessage = { id: randomId(12), from: p.id, name: p.name, text: body, scope: 'all', ts: Date.now() };
-      if (scope === 'nearby') {
-        msg.scope = 'nearby';
-        io.to([p.id, ...room.linkedPeers(p.id)]).emit('chat', msg);
-      } else if (scope === 'dm') {
-        if (typeof to !== 'string' || !room.players.has(to) || to === p.id) return;
-        msg.scope = 'dm';
-        msg.to = to;
-        io.to([p.id, to]).emit('chat', msg);
-      } else {
-        room.addChat(msg);
-        io.to(roomName(room.officeId)).emit('chat', msg);
-      }
     });
 
     socket.on('emote', (emoji) => {

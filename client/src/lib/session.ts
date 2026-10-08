@@ -12,7 +12,7 @@ import type {
   ServerToClientEvents,
 } from '../../../shared/types';
 import type { UploadedFile } from '../../../shared/uploads';
-import { getState, initialBuild, setState, toast, type ChatTarget, type RemotePlayer } from '../state/store';
+import { getState, initialBuild, setState, toast, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
 import { accountUpdated, refreshAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
@@ -141,7 +141,6 @@ export class OfficeSession {
           isOwner: res.isOwner,
           office: res.office,
           players,
-          chat: rejoin ? getState().chat : res.chat,
           linked: {},
           streams: {},
           spotifySessions: Object.fromEntries(res.spotify.map((s) => [s.itemId, s])),
@@ -298,12 +297,6 @@ export class OfficeSession {
       });
     });
     s.on('rtc:signal', (from, sid, data) => this.peers?.signal(from, sid, data));
-    s.on('chat', (msg) => {
-      setState((st) => ({
-        chat: [...st.chat.slice(-199), msg],
-        unread: st.panel === 'chat' || msg.from === st.selfId ? st.unread : st.unread + 1,
-      }));
-    });
     s.on('emote', (id, emoji) => {
       const at = Date.now();
       setState((st) => ({ emotes: { ...st.emotes, [id]: { emoji, at } } }));
@@ -380,10 +373,6 @@ export class OfficeSession {
     if (!this.socket.connected) return;
     Object.assign(l, { x, z, ry, anim, at: now });
     this.socket.emit('move', x, z, ry, anim);
-  }
-
-  chat(text: string, target: ChatTarget): void {
-    this.socket.emit('chat', text, target.scope, target.to);
   }
 
   emote(emoji: string): void {
@@ -614,8 +603,7 @@ export function leaveOffice(): void {
     linked: {},
     streams: {},
     speaking: {},
-    chat: [],
-    unread: 0,
+    chatWith: null,
     emotes: {},
     panel: 'none',
     modal: 'none',
