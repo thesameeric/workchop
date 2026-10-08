@@ -188,6 +188,8 @@ export const feature: Feature = {
         let saved: DeskNote | null;
         try {
           saved = await db.transaction(async (tx) => {
+            // One note at a time per desk owner, so notes sent at once can't overshoot the limit.
+            await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`desk-notes:${room.officeId}:${owner.ownerUserId}`]);
             // A full desk makes room by dropping its oldest read notes; unread ones are never dropped.
             const { rows } = await tx.query<{ total: number; read: number }>(
               `SELECT count(*)::int AS total, (count(*) FILTER (WHERE read_at IS NOT NULL))::int AS read

@@ -431,9 +431,11 @@ function LampLights() {
 // ---------- Darkened areas ----------
 
 const SHADE_H = 2.75;
+/** The shade's floor, just under the ground (seen from inside, everything above it is shaded). */
+const SHADE_FLOOR = -0.05;
 const WALL_T = 0.3;
 
-/** A box over an area's floor cells: its top, and sides only where the area ends. */
+/** A closed box over an area's floor cells: its top and bottom, and sides only where the area ends. */
 function shadeGeometry(cells: { x: number; z: number }[], width: number, depth: number): THREE.BufferGeometry {
   const inArea = new Set(cells.map((c) => `${c.x},${c.z}`));
   const pos: number[] = [];
@@ -451,27 +453,52 @@ function shadeGeometry(cells: { x: number; z: number }[], width: number, depth: 
     const z0 = z === 0 ? -WALL_T : z;
     const z1 = z === depth - 1 ? depth + WALL_T : z + 1;
     const H = SHADE_H;
+    const B = SHADE_FLOOR;
     quad([x0, H, z0], [x1, H, z0], [x1, H, z1], [x0, H, z1], [0, 1, 0]);
-    if (!inArea.has(`${x - 1},${z}`)) quad([x0, 0, z0], [x0, 0, z1], [x0, H, z1], [x0, H, z0], [-1, 0, 0]);
-    if (!inArea.has(`${x + 1},${z}`)) quad([x1, 0, z0], [x1, 0, z1], [x1, H, z1], [x1, H, z0], [1, 0, 0]);
-    if (!inArea.has(`${x},${z - 1}`)) quad([x0, 0, z0], [x1, 0, z0], [x1, H, z0], [x0, H, z0], [0, 0, -1]);
-    if (!inArea.has(`${x},${z + 1}`)) quad([x0, 0, z1], [x1, 0, z1], [x1, H, z1], [x0, H, z1], [0, 0, 1]);
+    quad([x0, B, z0], [x1, B, z0], [x1, B, z1], [x0, B, z1], [0, -1, 0]);
+    if (!inArea.has(`${x - 1},${z}`)) quad([x0, B, z0], [x0, B, z1], [x0, H, z1], [x0, H, z0], [-1, 0, 0]);
+    if (!inArea.has(`${x + 1},${z}`)) quad([x1, B, z0], [x1, B, z1], [x1, H, z1], [x1, H, z0], [1, 0, 0]);
+    if (!inArea.has(`${x},${z - 1}`)) quad([x0, B, z0], [x1, B, z0], [x1, H, z0], [x0, H, z0], [0, 0, -1]);
+    if (!inArea.has(`${x},${z + 1}`)) quad([x0, B, z1], [x1, B, z1], [x1, H, z1], [x0, H, z1], [0, 0, 1]);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   return g;
 }
 
-/** Darkness over one area, fading in and out. */
-function AreaShade({ geometry, dark }: { geometry: THREE.BufferGeometry; dark: boolean }) {
+/** Whether a point is inside an area's shade box (seen from above). */
+function shadeContains(cells: { x: number; z: number }[], width: number, depth: number): (x: number, z: number) => boolean {
+  const inArea = new Set(cells.map((c) => `${c.x},${c.z}`));
+  return (x, z) => {
+    if (x < -WALL_T || z < -WALL_T || x > width + WALL_T || z > depth + WALL_T) return false;
+    const cx = Math.min(width - 1, Math.max(0, Math.floor(x)));
+    const cz = Math.min(depth - 1, Math.max(0, Math.floor(z)));
+    return inArea.has(`${cx},${cz}`);
+  };
+}
+
+/**
+ * Darkness over one area, fading in and out. From outside, the faces towards the camera shade
+ * what's behind them. With the camera inside the box (zoomed in low), the faces behind everything
+ * are drawn instead, only where something nearer is in the box: the depth test is turned around.
+ */
+function AreaShade({ geometry, contains, dark }: { geometry: THREE.BufferGeometry; contains: (x: number, z: number) => boolean; dark: boolean }) {
   const mesh = useRef<THREE.Mesh>(null);
   const material = useMemo(() => new THREE.MeshBasicMaterial({ color: '#060a1a', transparent: true, opacity: 0, depthWrite: false }), []);
   useEffect(() => () => material.dispose(), [material]);
-  useFrame((_, dt) => {
+  useFrame(({ camera }, dt) => {
     const target = dark ? 0.62 : 0;
     material.opacity += (target - material.opacity) * (1 - Math.exp(-dt * 3.5));
     if (Math.abs(target - material.opacity) < 0.002) material.opacity = target;
-    if (mesh.current) mesh.current.visible = material.opacity > 0.003;
+    const visible = material.opacity > 0.003;
+    if (mesh.current) mesh.current.visible = visible;
+    if (!visible) return;
+    const inside = camera.position.y < SHADE_H && contains(camera.position.x, camera.position.z);
+    if (inside !== (material.side === THREE.BackSide)) {
+      material.side = inside ? THREE.BackSide : THREE.FrontSide;
+      material.depthFunc = inside ? THREE.GreaterDepth : THREE.LessEqualDepth;
+      material.needsUpdate = true;
+    }
   });
   return <mesh ref={mesh} geometry={geometry} material={material} renderOrder={1} raycast={noRaycast} visible={false} />;
 }
@@ -484,13 +511,17 @@ function Darkness() {
   const dark = useStore(useShallow((s) => (s.office ? [...darkAreas(s.office)].sort() : [])));
   const shades = useMemo(() => {
     if (!zones) return [];
-    return [...areaCells(zones, width, depth)].map(([area, cells]) => ({ area, geometry: shadeGeometry(cells, width, depth) }));
+    return [...areaCells(zones, width, depth)].map(([area, cells]) => ({
+      area,
+      geometry: shadeGeometry(cells, width, depth),
+      contains: shadeContains(cells, width, depth),
+    }));
   }, [zones, width, depth]);
   useEffect(() => () => shades.forEach((s) => s.geometry.dispose()), [shades]);
   return (
     <>
-      {shades.map(({ area, geometry }) => (
-        <AreaShade key={area} geometry={geometry} dark={dark.includes(area)} />
+      {shades.map(({ area, geometry, contains }) => (
+        <AreaShade key={area} geometry={geometry} contains={contains} dark={dark.includes(area)} />
       ))}
     </>
   );
@@ -499,6 +530,17 @@ function Darkness() {
 // ---------- Hover outline ----------
 
 const outlineMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.BackSide, toneMapped: false });
+/** For merged leaves (see models.tsx): pushed out along the normals, the same width everywhere. */
+const hullMaterial = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  vertexShader: `
+    void main() {
+      vec4 p = modelViewMatrix * vec4(position, 1.0);
+      p.xyz += normalize(normalMatrix * normal) * 0.012;
+      gl_Position = projectionMatrix * p;
+    }`,
+  fragmentShader: 'void main() { gl_FragColor = vec4(1.0); }',
+});
 
 /** A white rim around the item under the pointer: its model again, a bit bigger, inside out. */
 function HoverOutline({ item }: { item: OfficeItem }) {
@@ -520,10 +562,14 @@ function Outline({ item }: { item: OfficeItem }) {
         mesh.visible = false;
         return;
       }
-      mesh.material = outlineMaterial;
       mesh.castShadow = mesh.receiveShadow = false;
-      mesh.scale.addScalar(0.03);
       mesh.raycast = () => {};
+      if (mesh.userData.hull) {
+        mesh.material = hullMaterial;
+        return;
+      }
+      mesh.material = outlineMaterial;
+      mesh.scale.addScalar(0.03);
     });
   });
   return (

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { io as connect, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_AVATAR } from '../shared/avatar';
-import type { SpotifySession } from '../shared/music';
+import { jukeboxData, type SpotifySession } from '../shared/music';
 import type { ClientToServerEvents, JoinResponse, ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
 import { createTestDb } from './helpers/db';
@@ -239,7 +239,7 @@ describe('realtime', () => {
     const guest = await join(id, 'Guest');
     const office = owner.res.ok ? owner.res.office : null;
     const jukebox = office!.items.find((i) => i.type === 'jukebox')!;
-    expect(jukebox.data?.station).toBe('lofi');
+    expect(jukeboxData(jukebox).station).toBe('lofi');
 
     // Any guest can change the station; everyone gets the update.
     const seen = next(owner.socket, 'office:op');
@@ -262,7 +262,7 @@ describe('realtime', () => {
     owner.socket.emit('office:op', { t: 'update', item: { ...jukebox, x: jukebox.x - 1, data: { station: null, links: [] } } });
     const [moveOp] = await moved;
     expect(moveOp).toMatchObject({ t: 'update', item: { x: jukebox.x - 1, data: { station: 'ambient' } } });
-    expect(moveOp.t === 'update' && moveOp.item.data?.links).toHaveLength(1);
+    expect(moveOp.t === 'update' && jukeboxData(moveOp.item).links).toHaveLength(1);
 
     // Turning some other item into a jukebox can't smuggle in a forged board or stream.
     const desk = office!.items.find((i) => i.type === 'desk')!;
@@ -271,7 +271,7 @@ describe('realtime', () => {
     owner.socket.emit('office:op', { t: 'update', item: { ...desk, type: 'jukebox', data: forged } });
     const [retypeOp] = await retyped;
     expect(retypeOp).toMatchObject({ t: 'update', item: { id: desk.id, type: 'jukebox', data: { station: null, links: [] } } });
-    expect(retypeOp.t === 'update' && retypeOp.item.data?.stream).toBeUndefined();
+    expect(retypeOp.t === 'update' && jukeboxData(retypeOp.item).stream).toBeUndefined();
 
     await server.store.flush();
     const savedBox = (await saved(id)).office.items.find((i) => i.id === jukebox.id)!;

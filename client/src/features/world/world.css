@@ -218,7 +218,8 @@
   gap: 8px;
 }
 
-.wc-release {
+/* Two classes, to win over the global .link-btn colour. */
+.world-card .wc-release {
   display: block;
   margin: 10px auto 0;
   color: var(--glass-muted);
@@ -468,7 +469,7 @@
   max-width: 240px;
 }
 
-.desk-release {
+.desk-panel .desk-release {
   align-self: center;
   margin: 0 0 16px;
   color: var(--glass-muted);

@@ -1,5 +1,6 @@
 import type { AccountUser } from './account';
 import type { JukeboxData, MusicOp, SpotifySession, SpotifySessionUpdate } from './music';
+import type { DeskData, LightData } from './world';
 
 // Types shared by the browser client and the Node server.
 
@@ -70,7 +71,7 @@ export interface OfficeItem {
   data?: ItemData;
 }
 
-export type ItemData = JukeboxData | Record<string, unknown>;
+export type ItemData = JukeboxData | LightData | DeskData | Record<string, unknown>;
 
 /** A private area: people inside hear only each other, regardless of distance. */
 export interface Zone {

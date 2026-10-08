@@ -86,6 +86,12 @@ const syncPanel = () => {
 syncPanel();
 useStore.subscribe(syncPanel);
 
+// On phones the card is a sheet where side panels open: opening a panel closes it.
+const narrow = window.matchMedia('(max-width: 720px)');
+useStore.subscribe((s, prev) => {
+  if (s.panel !== prev.panel && s.panel !== 'none' && narrow.matches) openCard(null);
+});
+
 onSession('world', (session) => {
   const { socket } = session;
   // Say how many notes are waiting once, when you come in (not after reconnecting).

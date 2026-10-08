@@ -162,6 +162,7 @@ function DeskCard({ desk }: { desk: OfficeItem }) {
 
 function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
   const mine = useStore((s) => (s.account && s.office ? deskOf(s.office, s.account.id) : undefined));
+  const canSignIn = useStore((s) => s.providers.google || s.providers.apple || s.providers.dev);
   const [busy, setBusy] = useState(false);
   const claim = async () => {
     setBusy(true);
@@ -183,7 +184,7 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
             </button>
           </div>
         </>
-      ) : (
+      ) : canSignIn ? (
         <>
           <p className="wc-text">Sign in to claim a desk: your name goes on it, and people can leave you notes.</p>
           <div className="wc-actions">
@@ -200,6 +201,8 @@ function FreeDesk({ desk, signedIn }: { desk: OfficeItem; signedIn: boolean }) {
             </button>
           </div>
         </>
+      ) : (
+        <p className="wc-text">Desks are for signed-in members. You can still leave notes on claimed desks.</p>
       )}
     </>
   );

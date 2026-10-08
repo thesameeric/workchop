@@ -265,4 +265,24 @@ describe('desk notes', () => {
     expect(list.ok && list.notes.length).toBe(MAX_NOTES_PER_DESK);
     expect(list.ok && list.notes.some((n) => n.id === 'filler0abc')).toBe(false);
   });
+
+  it('never go over the limit, even when many arrive at once', async () => {
+    const ana = await signIn('Ana');
+    const { id } = await setUp();
+    const a = await join(base, id, 'Ana', { jar: ana.jar });
+    await a.socket.emitWithAck('desk:claim', 'd1');
+    // Room for two more.
+    await server.db.query(
+      `INSERT INTO desk_notes (id, office_id, item_id, owner_user_id, author_name, text, color)
+       SELECT 'rush' || i || 'abcd', $1, 'd1', $2, 'Bot', 'n' || i, '#ffe066' FROM generate_series(1, $3::int) AS i`,
+      [id, ana.user.id, MAX_NOTES_PER_DESK - 2],
+    );
+    const guests = await Promise.all(['Gus', 'Hal', 'Ida', 'Jo'].map((name) => join(base, id, name)));
+    const results = await Promise.all(
+      guests.flatMap((g) => [1, 2, 3].map((n) => g.socket.emitWithAck('desk:note', 'd1', { text: `Note ${n}`, color: '#ffe066' }))),
+    );
+    expect(results.filter((r) => r.ok)).toHaveLength(2);
+    const { rows } = await server.db.query<{ n: number }>('SELECT count(*)::int AS n FROM desk_notes WHERE office_id = $1', [id]);
+    expect(rows[0].n).toBe(MAX_NOTES_PER_DESK);
+  });
 });
