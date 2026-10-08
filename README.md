@@ -37,6 +37,10 @@ A 3D virtual office in the browser, in the spirit of [Gather](https://www.gather
 - **Files:** attach, drag in or paste up to 5 per message. Images show as previews that open full size; other files as cards to download.
 - Unread channels are bold, with a count of your mentions. The dock's chat button counts your mentions and direct messages, and a mention or direct message also shows a notice that takes you to it.
 
+**Coins**
+- Signed-in members have a wallet of virtual coins (just for fun: no real money, nothing to buy or cash out). See [Coins](#coins).
+- Thank a coworker with a tip from the Wallet panel (its dock button shows your balance) or the people list, and everyone in the office sees a little celebration over them.
+
 **Getting around**
 - `WASD` or the arrow keys move you relative to the camera, and `Shift` runs. Click the floor to walk there (with pathfinding); click a chair to walk over and sit.
 - Drag to orbit the camera and scroll to zoom. Walls and shelves between you and the camera fade out.
@@ -185,6 +189,7 @@ Workchop then hands each visitor short-lived credentials and refreshes them for 
 | Chat: channels, messages, threads, reactions, mentions, who has read what | The database (attached files with the uploads). Kept until deleted, or for `CHAT_RETENTION_DAYS`. Nearby messages and direct messages with guests are never stored |
 | Headphones (focus mode) | In memory only, while you're in the office |
 | Noise suppression choice, devices | Each person's browser (local storage) |
+| Coin wallets and every coin movement (a ledger) | The database |
 | Who's online, positions, calls | In memory only (live state) |
 | Current app (picked by hand or from the desktop helper) | In memory only, never stored; a helper's report expires after 45 s without a heartbeat |
 | Desktop helper pairings: computer name, when paired and last used | The database (`api_tokens`), with only a SHA-256 of each token |
@@ -283,6 +288,17 @@ Browsers can't see which app you're using, so Workchop has two ways to show it:
 **Starting it at login:** macOS, a LaunchAgent (`~/Library/LaunchAgents/com.workchop.presence.plist` running `node ~/workchop-presence.cjs run` with `RunAtLoad`); Windows, a shortcut in `shell:startup` to `node %USERPROFILE%\workchop-presence.cjs run` (or Task Scheduler); Linux, a systemd user service (`ExecStart=/usr/bin/node %h/workchop-presence.cjs run`, `systemctl --user enable --now workchop-presence`).
 
 **Server side.** `PUT /api/me/app-presence` with `Authorization: Bearer wcp_…` and `{"app": "<id>" | "other" | null, "platform": "macos" | "windows" | "linux", "v": 1}` answers 204. The server takes about one report per 2 s per token. When none of your tabs is in an office, it answers with `Retry-After: 30` and the helper waits. On Cloudflare Containers, the Worker answers helper reports itself (204, `Retry-After: 60`) when the container isn't running, and passes reports on only within 5 minutes of someone using Workchop (open tabs check in every 4 minutes), so a helper never starts the container and can't keep it running. Nothing to configure: the feature needs no settings of its own.
+
+### Coins
+
+Every signed-in member has one wallet, the same in every office. Guests see "Sign in to get a wallet". Coins come from:
+
+- a **welcome bonus** of 100 coins the first time they join an office (or open their wallet),
+- a **daily check-in** of 20 coins on their first visit each UTC day,
+- **being present**: 5 coins for every 30 minutes in an office while not *Away* or idle (idle: no walking, chatting or reacting for 10 minutes with mic, camera and screen off), up to 40 a day. The server keeps the time; nothing is reported by the browser,
+- **tips** from coworkers: 1–500 coins with an optional note (140 characters), to someone signed in and in the same office, up to 10 tips a minute. Everyone there sees the shout-out and its note.
+
+The server decides everything. Each change runs in one database transaction that locks the wallets involved (always in the same order, so two tips can't deadlock), refuses to go below zero (also enforced by a `CHECK` on the balance), and writes a ledger row with the new balance. Unique keys make the daily bonus, presence coins and tips happen at most once, even when a tip is retried. An office's owner can turn coins off there (Wallet panel → *Coins in this office*): tipping is hidden and nobody earns coins in that office, while wallets stay as they are. Coins need no configuration.
 
 ## How it works
 

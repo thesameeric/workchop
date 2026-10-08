@@ -9,6 +9,7 @@ import { getSession } from '../lib/session';
 import { messagePlayer, useStore } from '../state/store';
 import { PlayerApp } from '../features/presence/AppChip';
 import { CamIcon, ChatIcon, MicOffIcon, PinIcon, ScreenIcon, TapIcon } from './icons';
+import { personActionKey, usePersonActions } from './personActions';
 
 const STATUS_LABEL: Record<Status, string> = { available: 'Available', busy: 'Do not disturb', away: 'Away' };
 
@@ -27,6 +28,7 @@ export function PeoplePanel() {
   const me = useStore((s) => s.me);
   const mic = useStore((s) => s.media.mic);
   const focus = useStore((s) => s.focus);
+  const actions = usePersonActions();
   useTick(500);
 
   const others = Object.values(players)
@@ -103,6 +105,9 @@ export function PeoplePanel() {
             >
               <ChatIcon size={16} />
             </button>
+            {actions.map((a) => (
+              <a.Component key={personActionKey(a)} player={p} />
+            ))}
           </div>
         </div>
       ))}
