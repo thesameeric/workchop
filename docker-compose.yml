@@ -32,7 +32,8 @@ services:
       APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
       APPLE_KEY_ID: ${APPLE_KEY_ID:-}
       APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
-      # GitHub notifications: the OAuth App, and the key that encrypts saved GitHub tokens.
+      # GitHub sign-in and notifications: the OAuth App, and the key that encrypts saved GitHub tokens
+      # (notifications only).
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}

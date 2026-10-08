@@ -2,9 +2,9 @@ import { sanitizeAvatar, sanitizeName, sanitizeStatus } from './avatar';
 import { clip } from './text';
 import type { AvatarConfig, Status } from './types';
 
-// Accounts: people who signed in (Google, Apple, or the dev login). Guests have none.
+// Accounts: people who signed in (Google, Apple, GitHub, or the dev login). Guests have none.
 
-export type AuthProvider = 'google' | 'apple' | 'dev';
+export type AuthProvider = 'google' | 'apple' | 'github' | 'dev';
 
 /** What a signed-in person keeps with their account: their character, status and settings. */
 export interface UserProfile {

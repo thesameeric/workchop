@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
-import type express from 'express';
 import type { AccountUser } from '../../../shared/account';
 import type { GithubStatus, GithubStatusAnswer } from '../../../shared/github';
-import { safeReturnPath } from '../../auth';
+import { fromThisApp, safeReturnPath } from '../../auth';
 import type { Feature } from '../../features';
 import { windowLimiter } from '../../limits';
 import { createApi, NeedsReconnect, NotLinked, RateLimited } from './api';
@@ -88,19 +87,19 @@ export function githubFeature(options: GithubOptions = {}): Feature {
       }
       const key = parseTokenKey(setting(options.tokenKey, 'TOKEN_ENCRYPTION_KEY'));
       if (!key) {
-        console.error('[github] TOKEN_ENCRYPTION_KEY must be 32 random bytes in base64 (openssl rand -base64 32); GitHub is off');
+        console.error('[github] TOKEN_ENCRYPTION_KEY must be 32 random bytes in base64 (openssl rand -base64 32); GitHub notifications are off');
         off();
         return;
       }
       if (!ctx.publicOrigin) {
-        console.warn('[github] GitHub needs PUBLIC_URL (the address people open Workchop at); it is off');
+        console.warn('[github] GitHub notifications need PUBLIC_URL (the address people open Workchop at); they are off');
         off();
         return;
       }
       const oauthBase = baseUrl(setting(options.oauthBase, 'GITHUB_OAUTH_BASE') ?? 'https://github.com');
       const apiBase = baseUrl(setting(options.apiBase, 'GITHUB_API_BASE') ?? 'https://api.github.com');
       if (!oauthBase || !apiBase) {
-        console.error('[github] GITHUB_OAUTH_BASE and GITHUB_API_BASE must be http(s) addresses; GitHub is off');
+        console.error('[github] GITHUB_OAUTH_BASE and GITHUB_API_BASE must be http(s) addresses; GitHub notifications are off');
         off();
         return;
       }
@@ -190,24 +189,12 @@ export function githubFeature(options: GithubOptions = {}): Feature {
       // Each attempt mints a new token if it succeeds, and GitHub re-prompts and revokes tokens past
       // 10 an hour, so attempts are limited.
       const mayConnect = windowLimiter(5, 10 * 60_000);
-      /** Whether this app's own page opened the address (or the person typed it): never another site. */
-      const fromThisApp = (req: express.Request) => {
-        const site = req.get('sec-fetch-site');
-        if (site) return site === 'same-origin' || site === 'none';
-        // Browsers without Sec-Fetch-Site still say where the page was.
-        const from = req.get('origin') ?? req.get('referer');
-        try {
-          return !!from && new URL(from).origin === ctx.publicOrigin;
-        } catch {
-          return false;
-        }
-      };
 
       ctx.app.get('/integrations/github/connect', async (req, res) => {
         res.set('Cache-Control', 'no-store');
         const returnTo = returnPath(req.query.return);
         // Another site mustn't connect (or re-connect) you behind your back.
-        if (!fromThisApp(req)) {
+        if (!fromThisApp(req, ctx.publicOrigin)) {
           res.redirect(withResult(returnTo, 'failed'));
           return;
         }

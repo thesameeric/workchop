@@ -90,7 +90,7 @@ async function appleLogin(user?: string) {
 
 describe('sign-in', () => {
   it('lists the providers that are set up', async () => {
-    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: true, apple: true, dev: true });
+    expect(await (await fetch(`${base}/api/auth/providers`)).json()).toEqual({ google: true, apple: true, github: false, dev: true });
   });
 
   it('signs in with Google, with a fresh hashed session each time', async () => {

@@ -57,7 +57,7 @@ export async function fetchOfficeInfo(id: string): Promise<{ id: string; name: s
 
 export async function fetchProviders(): Promise<Record<AuthProvider, boolean>> {
   const p = await json<Partial<Record<AuthProvider, boolean>>>(await fetch('/api/auth/providers', { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS) }));
-  return { google: p.google === true, apple: p.apple === true, dev: p.dev === true };
+  return { google: p.google === true, apple: p.apple === true, github: p.github === true, dev: p.dev === true };
 }
 
 /** Who is signed in (null for guests); throws when the server can't be reached. */

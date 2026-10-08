@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import type { AccountUser } from '../../../shared/account';
 import { signInUrl, signInWithDev, signOut } from '../lib/account';
 import { colorFor, initials } from '../lib/color';
-import { useStore } from '../state/store';
-import { ChevronDownIcon, SignInIcon, SignOutIcon, UserEditIcon } from './icons';
+import { canSignIn, useStore } from '../state/store';
+import { ChevronDownIcon, GithubIcon, SignInIcon, SignOutIcon, UserEditIcon } from './icons';
 
 /**
  * Open/close state for a menu that closes on Escape or a click outside `ref` (the button and menu)
@@ -70,7 +70,7 @@ export function menuKeys(e: KeyboardEvent<HTMLElement>, close: (refocus?: boolea
   items[next]?.focus();
 }
 
-/** The account's picture (Google's), or its initials. */
+/** The account's picture (from Google or GitHub), or its initials. */
 export function UserAvatar({ user, size = 32 }: { user: AccountUser; size?: number }) {
   const [broken, setBroken] = useState(false);
   if (user.avatarUrl && !broken) {
@@ -166,14 +166,14 @@ function AppleLogo() {
   );
 }
 
-/** The sign-in methods the server offers: Google and Apple buttons, and the dev login when it's on. */
+/** The sign-in methods the server offers: Google, Apple and GitHub buttons, and the dev login when it's on. */
 export function SignInOptions() {
   const providers = useStore((s) => s.providers);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const oauth = providers.google || providers.apple;
+  const oauth = providers.google || providers.apple || providers.github;
 
   const devLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -201,6 +201,12 @@ export function SignInOptions() {
             <a className="provider-btn apple" href={signInUrl('apple')}>
               <AppleLogo />
               <span>Continue with Apple</span>
+            </a>
+          )}
+          {providers.github && (
+            <a className="provider-btn github" href={signInUrl('github')}>
+              <GithubIcon size={20} />
+              <span>Continue with GitHub</span>
             </a>
           )}
         </div>
@@ -235,9 +241,9 @@ export function SignInOptions() {
 
 /** "Sign in" for guests in a page header, opening the sign-in options (nothing when sign-in is off). */
 export function SignInButton() {
-  const providers = useStore((s) => s.providers);
+  const signIn = useStore(canSignIn);
   const { open, setOpen, ref, buttonRef } = usePopover();
-  if (!providers.google && !providers.apple && !providers.dev) return null;
+  if (!signIn) return null;
   return (
     <div className="account" ref={ref}>
       <button className="btn small" ref={buttonRef} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
