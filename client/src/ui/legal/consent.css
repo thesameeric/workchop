@@ -1,0 +1,7 @@
+/* The consent line on the sign-up pages (Consent.tsx). Under a wide form's button, which sits on the
+   right until it fills the width on narrow screens, it lines up with it. */
+@media (min-width: 721px) {
+  .auth-card.wide .auth-consent {
+    text-align: right;
+  }
+}

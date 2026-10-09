@@ -41,6 +41,7 @@ export const ShuffleIcon = icon('shuffle');
 export const ExpandIcon = icon('arrow-expand-02');
 export const MusicIcon = icon('music-note-03');
 export const PlayIcon = icon('play');
+export const PauseIcon = icon('pause');
 export const VolumeIcon = icon('volume-high');
 export const VolumeLowIcon = icon('volume-low');
 export const VolumeOffIcon = icon('volume-off');
@@ -101,6 +102,10 @@ export const MinusIcon = icon('minus-sign');
 export const PlusIcon = icon('plus-sign');
 export const SearchIcon = icon('search-01');
 export const GpsIcon = icon('gps-01');
+// Landing page
+export const MenuIcon = icon('menu-01');
+export const PhoneIcon = icon('smart-phone-01');
+export const GlobeIcon = icon('global');
 // Workspaces
 export const HomeIcon = icon('home-01');
 export const WorkspaceIcon = icon('user-group');

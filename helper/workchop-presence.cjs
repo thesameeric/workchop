@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Workchop desktop helper: tells your Workchop office which app you're using ("In Figma").
+// Homeoffice desktop helper: tells your office in Homeoffice which app you're using ("In Figma").
 //
 // Every 5 seconds it reads ONLY the identifier of the app in front (a macOS bundle id, a Windows
 // process name or a Linux window class), never window titles, URLs or anything on screen. It maps
-// that to an id from Workchop's list ON THIS COMPUTER (unknown apps become "other") and sends just
+// that to an id from Homeoffice's list ON THIS COMPUTER (unknown apps become "other") and sends just
 // that id when it changes, plus a heartbeat every 15 s.
 //
-//   node workchop-presence.cjs pair <workchop address> [token]   (or pipe the token in)
+//   node workchop-presence.cjs pair <homeoffice address> [token]   (or pipe the token in)
 //   node workchop-presence.cjs run
 //   node workchop-presence.cjs status | unpair
 //
@@ -266,9 +266,9 @@ function apiUrl(server, p) {
 
 async function fetchMatchers(server, fetchFn = fetch) {
   const res = await fetchFn(apiUrl(server, 'api/app-presence/apps'), { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`Workchop answered ${res.status}`);
+  if (!res.ok) throw new Error(`Homeoffice answered ${res.status}`);
   const m = await res.json();
-  if (!m || m.v !== 1 || !Array.isArray(m.apps)) throw new Error('That does not look like a Workchop server.');
+  if (!m || m.v !== 1 || !Array.isArray(m.apps)) throw new Error('That does not look like a Homeoffice server.');
   return m;
 }
 
@@ -312,12 +312,12 @@ function createHelper(opts) {
     } catch (err) {
       state.failures++;
       state.waitUntil = t + Math.min(60000, POLL_MS * 2 ** state.failures);
-      if (state.failures === 1) log(`Can't reach Workchop (${err && err.message}); retrying.`);
+      if (state.failures === 1) log(`Can't reach Homeoffice (${err && err.message}); retrying.`);
       return app;
     }
     state.failures = 0;
     await res.body?.cancel().catch(() => {});
-    if (res.status === 401) throw new Unpaired('This computer was removed from your Workchop account. Pair it again: Settings > Desktop helper.');
+    if (res.status === 401) throw new Unpaired('This computer was removed from your Homeoffice account. Pair it again: Settings > Desktop helper.');
     if (res.status === 204) {
       if (changed) log(unsupported ? "This desktop can't tell which app is in front." : `Now: ${app || 'nothing'}`);
       state.last = app;
@@ -327,7 +327,7 @@ function createHelper(opts) {
       if (!idle && t - (config.matchersAt || 0) > REFRESH_LIST_MS) await refreshList();
     } else {
       state.waitUntil = t + retryAfterMs(res, res.status === 429 || res.status >= 500 ? 5000 : 60000);
-      if (res.status !== 429) log(`Workchop answered ${res.status}; trying again later.`);
+      if (res.status !== 429) log(`Homeoffice answered ${res.status}; trying again later.`);
     }
     return app;
   }
@@ -358,7 +358,7 @@ function createHelper(opts) {
 function readStdin() {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) {
-      process.stdout.write('Paste the token from Workchop (Settings > Desktop helper): ');
+      process.stdout.write('Paste the token from Homeoffice (Settings > Desktop helper): ');
     }
     let data = '';
     process.stdin.setEncoding('utf8');
@@ -377,7 +377,7 @@ async function pair(args, { file, fetchFn = fetch, platform }) {
   try {
     server = new URL(address).origin;
   } catch {
-    throw new Error('Usage: node workchop-presence.cjs pair <workchop address> [token]');
+    throw new Error('Usage: node workchop-presence.cjs pair <homeoffice address> [token]');
   }
   // From stdin by default, so the token doesn't show up in the process list.
   const token = given || (await readStdin());
@@ -385,8 +385,8 @@ async function pair(args, { file, fetchFn = fetch, platform }) {
   const matchers = await fetchMatchers(server, fetchFn);
   const res = await send(server, token, { app: null, platform, v: 1 }, fetchFn);
   await res.body?.cancel().catch(() => {});
-  if (res.status === 401) throw new Error('Workchop did not accept this token. Create a new one in Settings > Desktop helper.');
-  if (res.status !== 204 && res.status !== 429) throw new Error(`Workchop answered ${res.status}.`);
+  if (res.status === 401) throw new Error('Homeoffice did not accept this token. Create a new one in Settings > Desktop helper.');
+  if (res.status !== 204 && res.status !== 429) throw new Error(`Homeoffice answered ${res.status}.`);
   writeConfig(file, { server, token, matchers, matchersAt: Date.now() });
   console.log(`Paired with ${server}. Start it with: node ${path.basename(process.argv[1] || 'workchop-presence.cjs')} run`);
 }
@@ -403,13 +403,13 @@ async function main(argv) {
 
   if (command === 'unpair') {
     fs.rmSync(file, { force: true });
-    console.log('Removed the token from this computer. Remove the computer in Workchop too: Settings > Desktop helper.');
+    console.log('Removed the token from this computer. Remove the computer in Homeoffice too: Settings > Desktop helper.');
     return;
   }
 
   if (command === 'status' || command === 'run') {
     const config = readConfig(file);
-    if (!config || !config.server || !config.token) throw new Error('Not paired yet. In Workchop, open Settings > Desktop helper and pair this computer.');
+    if (!config || !config.server || !config.token) throw new Error('Not paired yet. In Homeoffice, open Settings > Desktop helper and pair this computer.');
     const detect = createDetector({ platform, log });
     if (command === 'status') {
       if (detect.ready) {
@@ -448,14 +448,14 @@ async function main(argv) {
     }
   }
 
-  console.log(`Workchop desktop helper: shows your office which app you're using.
+  console.log(`Homeoffice desktop helper: shows your office which app you're using.
 
-  node workchop-presence.cjs pair <workchop address> [token]   pair this computer (or pipe the token in)
-  node workchop-presence.cjs run [--verbose]                    share your current app
-  node workchop-presence.cjs status                             what it would send now
-  node workchop-presence.cjs unpair                             forget the token
+  node workchop-presence.cjs pair <homeoffice address> [token]   pair this computer (or pipe the token in)
+  node workchop-presence.cjs run [--verbose]                      share your current app
+  node workchop-presence.cjs status                               what it would send now
+  node workchop-presence.cjs unpair                               forget the token
 
-Only the app's id from Workchop's list is sent (unknown apps as "other"), never window titles.
+Only the app's id from Homeoffice's list is sent (unknown apps as "other"), never window titles.
 Config: ${configPath()}`);
 }
 

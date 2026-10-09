@@ -1,4 +1,4 @@
-# Serve Workchop through a Cloudflare Tunnel instead of Caddy: no open ports, and Cloudflare
+# Serve Homeoffice through a Cloudflare Tunnel instead of Caddy: no open ports, and Cloudflare
 # provides HTTPS. Create the tunnel in the Cloudflare dashboard (Networking > Tunnels) and add a
 # published application route from your hostname to http://app:3001. Then add to .env:
 #

@@ -6,7 +6,7 @@ import { local } from '../../../lib/positions';
 import { useDarkTheme } from '../../../lib/theme';
 import { useStore } from '../../../state/store';
 import { useSceneColors } from '../../../world/Environment';
-import { resetSceneLighting, sceneLighting } from '../../../world/layers';
+import { resetSceneLighting, sceneLighting } from '../../../world/lighting';
 import { useWeather } from '../state';
 import { CloudShadows } from './CloudShadows';
 import { Precipitation } from './Precipitation';

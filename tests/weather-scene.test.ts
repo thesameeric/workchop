@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { easeLook, fogRange, lookFrom, newFx } from '../client/src/features/weather/scene/sky';
-import { defaultSceneLighting } from '../client/src/world/layers';
+import { defaultSceneLighting } from '../client/src/world/lighting';
 
 // How the weather scene eases in and keeps the office visible.
 

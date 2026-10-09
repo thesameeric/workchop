@@ -1,7 +1,4 @@
-import { OrbitControls } from '@react-three/drei';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { useRef, type ReactNode } from 'react';
-import * as THREE from 'three';
+import { Component, lazy, Suspense, type ReactNode } from 'react';
 import {
   CLOTHING_COLORS,
   FACIAL_HAIR,
@@ -15,41 +12,39 @@ import {
 } from '../../../shared/avatar';
 import type { AvatarConfig } from '../../../shared/types';
 import { useDarkTheme } from '../lib/theme';
-import { Avatar, BlobShadow, useMotion } from '../world/Avatar';
 import { ShuffleIcon } from './icons';
 
-function Spinner({ avatar }: { avatar: AvatarConfig }) {
-  const group = useRef<THREE.Group>(null);
-  const motion = useMotion();
-  const waved = useRef(false);
-  useFrame((state) => {
-    if (!waved.current && state.clock.elapsedTime > 0.6) {
-      waved.current = true;
-      Object.assign(motion.current, { gesture: 'wave', gestureUntil: performance.now() + 1800 });
-    }
-  });
-  return (
-    <group ref={group}>
-      <BlobShadow />
-      <Avatar config={avatar} motion={motion} />
-    </group>
-  );
+const AvatarStage = lazy(() => import('./AvatarStage'));
+
+/**
+ * If the 3D preview can't load (its file is gone after an update, a flaky connection, no WebGL), the
+ * box stays empty and the rest of the page keeps working.
+ */
+class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    if (import.meta.env.DEV) console.error('The character preview failed to load.', error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
 }
 
 export function AvatarPreview({ avatar, height = 280 }: { avatar: AvatarConfig; height?: number }) {
   const dark = useDarkTheme();
   return (
     <div className="avatar-preview" style={{ height }}>
-      <Canvas shadows="percentage" dpr={[1, 2]} camera={{ position: [0, 1.3, 3.2], fov: 35 }}>
-        <hemisphereLight args={['#ffffff', '#b9a99a', 1.3]} />
-        <directionalLight position={[2, 4, 3]} intensity={1.6} castShadow />
-        <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-          <circleGeometry args={[1.1, 40]} />
-          <meshStandardMaterial color={dark ? '#4a5068' : '#e7e9f5'} />
-        </mesh>
-        <Spinner avatar={avatar} />
-        <OrbitControls target={[0, 0.95, 0]} enablePan={false} enableZoom={false} autoRotate autoRotateSpeed={1.6} minPolarAngle={1} maxPolarAngle={1.6} />
-      </Canvas>
+      <PreviewBoundary>
+        <Suspense fallback={null}>
+          <AvatarStage avatar={avatar} dark={dark} />
+        </Suspense>
+      </PreviewBoundary>
     </div>
   );
 }

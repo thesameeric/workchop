@@ -134,7 +134,7 @@ export function createAuth(deps: AuthDeps) {
   const providers: Partial<Record<'google' | 'apple', OidcProvider>> = {};
   let github: GithubProvider | null = null;
   if (options.google || options.apple || options.github) {
-    if (!publicOrigin) console.warn('[auth] Google, Apple and GitHub sign-in need PUBLIC_URL (the address people open Workchop at); they are off');
+    if (!publicOrigin) console.warn('[auth] Google, Apple and GitHub sign-in need PUBLIC_URL (the address people open Homeoffice at); they are off');
     else {
       if (options.github) github = githubProvider(options.github, `${publicOrigin}/api/auth/github/callback`);
       if (options.google) providers.google = googleProvider(options.google);

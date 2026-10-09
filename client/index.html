@@ -3,13 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#5b6cff" />
-    <meta name="description" content="Workchop — a 3D virtual office with proximity voice and video." />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f5fb" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#11131b" />
+    <meta name="description" content="A 3D office in your browser. Walk up to a teammate to talk, step into a meeting room for privacy, and help customers face to face." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>Workchop</title>
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>Homeoffice: a 3D office in your browser</title>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Homeoffice" />
+    <meta property="og:title" content="Homeoffice: an office your team can walk into" />
+    <meta property="og:description" content="A 3D office in your browser. Walk up to a teammate to talk, step into a meeting room for privacy, and help customers face to face." />
+    <meta property="og:image" content="https://homeoffice.town/landing/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A small 3D office: people at desks, two talking in a glass meeting room and a customer at a help desk." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Homeoffice: an office your team can walk into" />
+    <meta name="twitter:description" content="A 3D office in your browser. Walk up to a teammate to talk, step into a meeting room for privacy, and help customers face to face." />
+    <meta name="twitter:image" content="https://homeoffice.town/landing/og.jpg" />
     <link rel="preload" href="/src/assets/hgi-subset.woff2" as="font" type="font/woff2" crossorigin />
     <script>
-      // Apply the saved theme before the first paint (src/lib/theme.ts takes over from here).
+      // Before the first paint: apply the saved theme (src/lib/theme.ts takes over from here), and
+      // start fetching the landing page's hero still.
       (function () {
         var saved = null;
         try {
@@ -17,10 +32,25 @@
         } catch (e) {}
         var dark = saved === 'dark' || (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        // Only for guests on the home page, and the one its <picture> picks (src/landing3d/poster.ts):
+        // otherwise it would wait until the app has run.
+        var signedIn = false;
+        try {
+          signedIn = localStorage.getItem('workchop:signed-in') === '1';
+        } catch (e) {}
+        if (location.pathname === '/' && !signedIn) {
+          var poster = document.createElement('link');
+          poster.rel = 'preload';
+          poster.as = 'image';
+          poster.href = matchMedia('(max-width: 639px)').matches ? '/landing/hero-narrow.webp' : '/landing/hero-wide.webp';
+          poster.setAttribute('fetchpriority', 'high');
+          document.head.appendChild(poster);
+        }
       })();
     </script>
   </head>
   <body>
+    <noscript><p style="font:16px system-ui;margin:2rem">Homeoffice is a 3D office in your browser. It needs JavaScript to run.</p></noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

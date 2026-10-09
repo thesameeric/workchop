@@ -201,7 +201,7 @@ async function takeLock(dir: string, file: string): Promise<void> {
       continue;
     }
     throw new Error(
-      `Another Workchop server (${who}) is using the database in ${dir}. Stop it first, or set DATA_DIR to another ` +
+      `Another Homeoffice server (${who}) is using the database in ${dir}. Stop it first, or set DATA_DIR to another ` +
         `directory. If no other server is running, delete ${file}.`,
     );
   }

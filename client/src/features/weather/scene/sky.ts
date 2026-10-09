@@ -1,7 +1,7 @@
 import { getMoonPosition, getPosition } from 'suncalc';
 import * as THREE from 'three';
 import { conditionOf, type WeatherCondition, type WeatherPlace, type WeatherReport } from '../../../../../shared/weather';
-import { defaultSceneLighting, type SceneLighting } from '../../../world/layers';
+import { defaultSceneLighting, type SceneLighting } from '../../../world/lighting';
 
 // What the scene should look like for a place's sun and weather right now. The scene eases towards it.
 

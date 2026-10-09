@@ -6,6 +6,7 @@ import type { OfficeInfo } from '../../../../shared/workspace';
 import { finePointer } from '../../lib/touch';
 import { AvatarPreview } from '../../ui/AvatarEditor';
 import { ShuffleIcon, SupportIcon } from '../../ui/icons';
+import { LEGAL_LINKED, PRIVACY_PATH } from '../../ui/legal';
 import { DeviceCheck, useJoin } from '../../ui/Lobby';
 import { forgetMe, forgetOpen, loadSaved, prepareVisit, type Question } from './state';
 
@@ -82,6 +83,12 @@ export function CustomerLobby({ info }: { info: OfficeInfo }) {
       Not you? Start over
     </button>
   );
+  // In a new tab: the question typed so far stays. Not until the legal pages are linked.
+  const privacy = LEGAL_LINKED && (
+    <a href={PRIVACY_PATH} target="_blank" rel="noopener" className="muted small">
+      Privacy
+    </a>
+  );
 
   return (
     <form
@@ -121,6 +128,7 @@ export function CustomerLobby({ info }: { info: OfficeInfo }) {
               Ask something else instead
             </button>
             {notYou}
+            {privacy}
           </div>
         ) : (
           <>
@@ -136,10 +144,15 @@ export function CustomerLobby({ info }: { info: OfficeInfo }) {
               <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
               <span>
                 Remember me on this device
-                <span className="muted small">Leave it off on a shared computer: your name and email are forgotten when we’re done.</span>
+                <span className="muted small">Leave it off on a shared computer: this browser forgets your name and email when we’re done.</span>
               </span>
             </label>
-            {notYou && <div className="support-lobby-links">{notYou}</div>}
+            {(notYou || privacy) && (
+              <div className="support-lobby-links">
+                {notYou}
+                {privacy}
+              </div>
+            )}
           </>
         )}
         {problem && (

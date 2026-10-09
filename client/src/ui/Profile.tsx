@@ -7,6 +7,7 @@ import { navigate, nextParam, withNext } from '../lib/router';
 import { useStore } from '../state/store';
 import { NewPasswordField, PasswordInput, PROVIDER_NAMES, ProviderLogo } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
+import { Logo } from './Brand';
 import { BackIcon, CheckIcon, DevicesIcon, KeyIcon, MailIcon, SignInIcon, SignOutIcon, UserEditIcon, VerifiedIcon } from './icons';
 
 // Your account: name and character, email, password, the ways you sign in, and your devices. A page
@@ -522,7 +523,7 @@ export function ProfilePage() {
       <div className="landing-bg" aria-hidden="true" />
       <header className="landing-header">
         <button className="brand link" onClick={() => navigate('/')}>
-          <span className="brand-mark">◆</span> Workchop
+          <Logo />
         </button>
         <button className="btn small" onClick={() => navigate(next)}>
           <BackIcon size={16} /> {next.startsWith('/o/') ? 'Back to the office' : 'Back'}

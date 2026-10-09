@@ -1,10 +1,11 @@
+import { create } from 'zustand';
 import type { AccountUser, AuthProvider, UserProfile } from '../../../shared/account';
 import type { AvatarConfig, Status } from '../../../shared/types';
 import { getState, setState, toast } from '../state/store';
 import { acceptInviteRequest, ApiError, devSignIn, fetchMe, fetchProviders, finishSignUpRequest, passwordSignIn, resetPasswordRequest, signOutRequest, updateMe } from './api';
 import { navigate, wantDefault, withNext } from './router';
 import { backToLobby, getSession } from './session';
-import { loadProfile, saveProfile } from './storage';
+import { forgetVisits, loadProfile, saveProfile } from './storage';
 import { getTheme, isTheme, setTheme } from './theme';
 
 // The signed-in person's account on the client: loading it, signing in and out, and saving the
@@ -27,6 +28,7 @@ export function applyAccount(user: AccountUser | null): void {
   const { account, me, phase } = getState();
   if (!user) {
     setState({ account: null });
+    if (account) forgetVisits();
     // Back to this browser's own character, except mid-visit (you stay who people see).
     if (account && phase !== 'office') {
       const local = loadProfile();
@@ -57,10 +59,56 @@ export function accountUpdated(user: AccountUser): void {
   adoptTheme(user);
 }
 
+/** Whether the server has said how people can sign in. Until it has, `providers` are all off. */
+const providersState = create(() => ({ known: false }));
+export const providersKnown = (): boolean => providersState.getState().known;
+export const useProvidersKnown = (): boolean => providersState((s) => s.known);
+
+/** After a failed try: again in 1, 2, 4, 8 and 16 s, then every 30 s. */
+const PROVIDERS_RETRY_MS = [1000, 2000, 4000, 8000, 16000];
+const PROVIDERS_RETRY_LATER_MS = 30_000;
+let providersFailed = 0;
+let providersRetry: ReturnType<typeof setTimeout> | undefined;
+let providersAsking: Promise<void> | undefined;
+
+/**
+ * Asks the server how people can sign in, until it answers (a restarting server says 503 for a
+ * moment): again later while the page is visible, and at once when you come back to it.
+ */
+function loadProviders(): Promise<void> {
+  providersAsking ??= fetchProviders()
+    .then(
+      (providers) => {
+        setState({ providers });
+        providersState.setState({ known: true });
+        clearTimeout(providersRetry);
+        window.removeEventListener('focus', askProvidersAgain);
+        document.removeEventListener('visibilitychange', askProvidersAgain);
+      },
+      () => {
+        if (!providersFailed) {
+          window.addEventListener('focus', askProvidersAgain);
+          document.addEventListener('visibilitychange', askProvidersAgain);
+        }
+        clearTimeout(providersRetry);
+        providersRetry = setTimeout(askProvidersAgain, PROVIDERS_RETRY_MS[providersFailed] ?? PROVIDERS_RETRY_LATER_MS);
+        providersFailed++;
+      },
+    )
+    .finally(() => {
+      providersAsking = undefined;
+    });
+  return providersAsking;
+}
+
+/** A hidden page waits until it's shown again. */
+function askProvidersAgain(): void {
+  if (!providersKnown() && document.visibilityState === 'visible') void loadProviders();
+}
+
 /** Asks the server who is signed in and how they can sign in (at startup). */
 export async function loadAccount(): Promise<void> {
-  const [providers, user] = await Promise.all([fetchProviders().catch(() => null), fetchMe().catch(() => undefined)]);
-  if (providers) setState({ providers });
+  const [, user] = await Promise.all([loadProviders(), fetchMe().catch(() => undefined)]);
   // undefined: the server didn't answer; carry on as a guest.
   if (user !== undefined) {
     applyAccount(user);
@@ -85,7 +133,7 @@ const AUTH_ERRORS: Record<string, string> = {
   expired: 'Sign-in took too long. Please try again.',
   unavailable: 'The sign-in service can’t be reached right now. Please try again later.',
   failed: 'Sign-in didn’t work. Please try again.',
-  'linked-elsewhere': 'That sign-in already belongs to another Workchop account.',
+  'linked-elsewhere': 'That sign-in already belongs to another Homeoffice account.',
 };
 
 /** A failed sign-in comes back with ?auth_error=…: say what happened, and tidy up the address. */
@@ -178,14 +226,19 @@ export function errorText(err: unknown): string {
 /** Signs out. Inside an office you go back to its lobby, to come in again as a guest. */
 export async function signOut(): Promise<void> {
   const { phase, officeId } = getState();
-  // The lobby waits until we're signed out, so it doesn't show the account's name first.
-  setState({ accountReady: false });
+  // A workspace's lobby waits until we're signed out, so it doesn't show the account's name first.
+  // Elsewhere it's at once, so home shows the landing page rather than your workspaces meanwhile.
+  const lobby = phase === 'office' || phase === 'lobby';
+  if (lobby) setState({ accountReady: false });
+  else applyAccount(null);
   if (phase === 'office' && officeId) backToLobby();
   try {
     await signOutRequest();
     applyAccount(null);
   } catch (err) {
     toast(`Couldn’t sign out: ${(err as Error).message}`, 'error');
+    // Still signed in, then.
+    if (!lobby) void refreshAccount();
   } finally {
     setState({ accountReady: true });
   }

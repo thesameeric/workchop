@@ -35,11 +35,11 @@ interface Env {
   TURN_URL?: string;
   TURN_USERNAME?: string;
   TURN_CREDENTIAL?: string;
-  /** The address people open Workchop at, e.g. https://office.example.com (needed for sign-in). */
+  /** The address people open Homeoffice at, e.g. https://office.example.com (needed for sign-in). */
   PUBLIC_URL?: string;
   /** Resend API key for emailing sign-up links and password resets. */
   RESEND_API_KEY?: string;
-  /** The sender, on a domain verified in Resend: "Workchop <noreply@mail.example.com>" (required with RESEND_API_KEY). */
+  /** The sender, on a domain verified in Resend: "Homeoffice <noreply@mail.example.com>" (required with RESEND_API_KEY). */
   EMAIL_FROM?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -173,9 +173,9 @@ export class WorkchopServer extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const container = this.ctx.container;
-    if (!container) return unavailable('No container is configured for Workchop.');
+    if (!container) return unavailable('No container is configured for Homeoffice.');
     if (!this.env.DATABASE_URL && this.env.EPHEMERAL_STORAGE !== 'true') {
-      return unavailable('Workchop needs a database on Cloudflare: set the DATABASE_URL secret (see the README).');
+      return unavailable('Homeoffice needs a database on Cloudflare: set the DATABASE_URL secret (see the README).');
     }
     const url = new URL(request.url);
     if (url.pathname !== HELPER_PATH) this.lastVisit = Date.now();
@@ -187,7 +187,7 @@ export class WorkchopServer extends DurableObject<Env> {
       await this.started();
     } catch (err) {
       console.error('[workchop] the server did not start:', err);
-      return unavailable('Workchop is starting up. Please try again in a moment.');
+      return unavailable('Homeoffice is starting up. Please try again in a moment.');
     }
 
     const forwarded = new Request(new URL(url.pathname + url.search, `http://container:${PORT}`), request);
@@ -199,7 +199,7 @@ export class WorkchopServer extends DurableObject<Env> {
     } catch (err) {
       this.ready = null;
       console.error('[workchop] request to the server failed:', err);
-      return unavailable('Workchop is restarting. Please try again in a moment.');
+      return unavailable('Homeoffice is restarting. Please try again in a moment.');
     }
   }
 

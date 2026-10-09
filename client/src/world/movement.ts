@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type { Camera } from 'three';
 import { getEntry, type Seat } from '../../../shared/catalog';
 import { findFreeSpot, findPath, isBlocked, moveWithCollision, standUpSpot } from '../../../shared/geometry';
 import type { Office } from '../../../shared/types';
@@ -86,13 +86,12 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t;
 }
 
-const forward = new THREE.Vector3();
 let hintTimer = 0;
 /** How long click-to-walk has made no progress; the path is dropped after a moment. */
 let stuckTime = 0;
 
 /** Advance the local player one frame. Returns the horizontal speed (for animation). */
-export function stepLocal(dt: number, camera: THREE.Camera): number {
+export function stepLocal(dt: number, camera: Camera): number {
   const office = getState().office;
   if (!office) return 0;
   const { colliders } = officeData(office);
@@ -105,14 +104,16 @@ export function stepLocal(dt: number, camera: THREE.Camera): number {
     if (local.seat) standUp();
     local.path = null;
     local.pathSeat = null;
-    camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
+    // The camera's forward direction on the floor (its -z axis, flattened).
+    const e = camera.matrixWorld.elements;
+    const flat = Math.hypot(e[8], e[10]) || 1;
+    const fx = -e[8] / flat;
+    const fz = -e[10] / flat;
     // Screen-relative movement: up = away from the camera.
-    const rx = -forward.z;
-    const rz = forward.x;
-    let mx = forward.x * input.y + rx * input.x;
-    let mz = forward.z * input.y + rz * input.x;
+    const rx = -fz;
+    const rz = fx;
+    let mx = fx * input.y + rx * input.x;
+    let mz = fz * input.y + rz * input.x;
     const len = Math.hypot(mx, mz) || 1;
     mx /= len;
     mz /= len;

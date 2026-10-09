@@ -8,7 +8,7 @@ import { shade } from '../lib/color';
 import { local } from '../lib/positions';
 import { useDarkTheme } from '../lib/theme';
 import { useStore } from '../state/store';
-import { sceneLighting, SUN_DISTANCE } from './layers';
+import { sceneLighting, SUN_DISTANCE } from './lighting';
 import { OpacityContext, Box } from './prims';
 import { floorTexture } from './textures';
 

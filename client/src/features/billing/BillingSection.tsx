@@ -5,6 +5,7 @@ import { may } from '../../../../shared/workspace';
 import { errorText } from '../../lib/account';
 import { ApiError } from '../../lib/api';
 import { setState, toast, useStore } from '../../state/store';
+import { Logo } from '../../ui/Brand';
 import { AlertIcon, CreditCardIcon, ExternalIcon, PrintIcon } from '../../ui/icons';
 import { cancelPlan, changeSeats, resumePlan, retryPayment, startCheckout } from './api';
 import { addSeatsCost, chargeStatus, day, listed, per, PLAN_NAMES, plural, problemOf, PURPOSES } from './format';
@@ -361,7 +362,11 @@ function Receipt({ charge, email }: { charge: BillingReceipt; email: string | nu
   }
   return createPortal(
     <div className="billing-receipt">
-      <p className="billing-receipt-brand">◆ Workchop</p>
+      <p className="billing-receipt-brand">
+        <span className="brand">
+          <Logo size={18} />
+        </span>
+      </p>
       <h1>Receipt</h1>
       <dl>
         <dt>Workspace</dt>

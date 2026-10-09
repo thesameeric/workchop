@@ -222,7 +222,7 @@ function ListenAlong({ item, session }: { item: OfficeItem; session: SpotifySess
           <button className="btn small primary" disabled={status.status === 'connecting'} onClick={() => void spotify?.connect()}>
             {status.status === 'connecting' ? 'Connecting…' : session ? 'Connect Spotify to listen along' : 'Connect Spotify'}
           </button>
-          <span className="muted small">Your account must be approved by whoever runs this Workchop (Spotify allows a few per app).</span>
+          <span className="muted small">Your account must be approved by whoever runs this Homeoffice server (Spotify allows a few per app).</span>
         </div>
       )}
       {status.error && <p className="form-error small">{status.error}</p>}

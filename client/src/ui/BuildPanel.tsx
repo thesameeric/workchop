@@ -6,7 +6,7 @@ import type { FloorStyle, OfficeSettings, Zone } from '../../../shared/types';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { buildRule, canBuild, setState, useStore } from '../state/store';
-import { buildActions } from '../world/Ground';
+import { buildActions } from '../world/buildActions';
 import { Swatches } from './AvatarEditor';
 import { CopyIcon, LockIcon, PinIcon, RotateIcon, TrashIcon } from './icons';
 

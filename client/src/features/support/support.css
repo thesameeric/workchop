@@ -44,7 +44,6 @@
 
 .field-optional {
   font-weight: 500;
-  opacity: 0.8;
 }
 
 .field-optional::before {
@@ -76,6 +75,13 @@
   flex-wrap: wrap;
   gap: 8px 18px;
   margin-bottom: 18px;
+}
+
+/* At least 24px tall, to tap. */
+.support-lobby-links > * {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
 }
 
 .support-remember {

@@ -374,7 +374,7 @@ describe('PGlite data directory lock', () => {
 
     // …but a live one (this test's parent process) keeps it.
     writeFileSync(path.join(dir, '.workchop.lock'), JSON.stringify({ pid: process.ppid, hostname: hostname() }));
-    await expect(openPGlite(dir)).rejects.toThrow(/Another Workchop server/);
+    await expect(openPGlite(dir)).rejects.toThrow(/Another Homeoffice server/);
     warn.mockRestore();
   });
 });

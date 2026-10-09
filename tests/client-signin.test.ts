@@ -27,6 +27,8 @@ const fake = vi.hoisted(() => {
       fake.state = { ...prev, account };
       for (const listener of fake.listeners) listener(fake.state, prev);
     },
+    /** Whether the server has said how people can sign in yet. */
+    known: true,
     /** What's in the dock and in Settings. */
     panels: new Set<string>(),
     sections: new Set<string>(),
@@ -45,6 +47,11 @@ vi.mock('../client/src/state/store', async (importActual) => {
   return { ...actual, useStore, getState: useStore.getState, canSignIn: (s: Pick<typeof fake.state, 'providers'> = fake.state) => actual.canSignIn(s) };
 });
 vi.mock('../client/src/lib/session', () => ({ getSession: () => null, leaveOffice: () => {}, onSession: () => {} }));
+vi.mock('../client/src/lib/account', async (importActual) => ({
+  ...(await importActual<typeof import('../client/src/lib/account')>()),
+  providersKnown: () => fake.known,
+  useProvidersKnown: () => fake.known,
+}));
 vi.mock('../client/src/lib/theme', () => ({ getTheme: () => 'system', isTheme: () => false, setTheme: () => {} }));
 vi.mock('../client/src/ui/panels', () => ({
   registerPanel: ({ id }: { id: string }) => {
@@ -94,6 +101,15 @@ describe('sign-in methods (client)', () => {
     expect(options).toContain('Continue with GitHub');
     expect(options).not.toContain('Google');
     expect(options).not.toContain('Apple');
+  });
+
+  it('says it is loading, rather than offering nothing, until the server has said', () => {
+    fake.known = false;
+    fake.setProviders({});
+    const options = render(SignInOptions);
+    expect(options).toContain('Loading sign-in options');
+    expect(options).not.toContain('github');
+    fake.known = true;
   });
 });
 
