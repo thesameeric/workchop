@@ -15,7 +15,8 @@ export interface PaystackTx {
   paid_at?: string | null;
   channel?: string;
   gateway_response?: string;
-  gateway_response_code?: string;
+  /** 'approved' for checkout payments; null for charges of a saved card. */
+  gateway_response_code?: string | null;
   fees?: number | string | null;
   /** An object, or a JSON string (or "" / 0 when there's none). */
   metadata?: unknown;

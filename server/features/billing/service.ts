@@ -369,8 +369,8 @@ export class Billing {
     if (amountOf(tx.requested_amount ?? tx.amount) !== charge.amount) return 'amount';
     if (metadataOf(tx).office_id !== charge.officeId) return 'office';
     if ((tx.customer?.email ?? '').toLowerCase() !== charge.payerEmail.toLowerCase()) return 'email';
-    // Paystack's only success code since June 2026 (older transactions may not have one).
-    if (tx.gateway_response_code !== undefined && tx.gateway_response_code !== 'approved') return 'gateway';
+    // Paystack's only success code since June 2026; charges of a saved card (and older transactions) have none.
+    if (typeof tx.gateway_response_code === 'string' && tx.gateway_response_code !== 'approved') return 'gateway';
     return null;
   }
 
@@ -401,8 +401,20 @@ export class Billing {
       const problem = this.mismatch(charge, tx);
       if (!problem) await this.apply(charge, tx);
       else {
-        console.error(`[billing] payment ${reference} doesn't match its charge (${problem}): not applied`);
-        await this.store.markCharge(this.deps.db, reference, 'failed', ['pending', 'action_needed', 'failed', 'abandoned'], { gatewayResponse: `mismatch: ${problem}` });
+        // Money was taken but can't be applied: give it back, and (a saved card) don't charge it by
+        // itself again, or the next run would take the money again. The owner pays from Billing.
+        console.error(`[billing] payment ${reference} doesn't match its charge (${problem}): not applied, refunding it`);
+        const refund = await this.deps.db.transaction(async (q) => {
+          const marked = await this.store.markCharge(q, reference, 'failed', ['pending', 'action_needed', 'failed', 'abandoned'], { gatewayResponse: `mismatch: ${problem}` });
+          if (!marked || charge.refund) return false;
+          await this.store.setRefund(q, reference, 'due');
+          if (charge.purpose === 'renewal' || charge.purpose === 'seats') {
+            const account = await this.store.forUpdate(q, charge.officeId);
+            if (account?.autoRenew) await this.store.change(q, account, { autoRenew: false }, { now: this.now, actor: null, action: 'mismatch' });
+          }
+          return true;
+        });
+        if (refund) await this.refund(reference);
       }
     } else if (tx.status === 'failed' || tx.status === 'reversed') {
       if (await this.store.markCharge(this.deps.db, reference, 'failed', open, { gatewayResponse: tx.gateway_response ?? tx.status })) {

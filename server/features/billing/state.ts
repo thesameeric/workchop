@@ -168,7 +168,7 @@ export function nextRetry(t0: number, now: number): number | null {
 }
 
 /** Declines that trying again won't fix. */
-export const hardDecline = (gatewayResponse: string) => /expired|lost|stolen|invalid card|restricted/i.test(gatewayResponse);
+export const hardDecline = (gatewayResponse: string) => /expired|lost|stolen|invalid card|restricted|inactive/i.test(gatewayResponse);
 
 /** Seats a renewal charges for: the lowered number if there is one, never fewer than are in use, at least 1. */
 export const renewalSeats = (a: Pick<Account, 'seats' | 'seatsNext'>, used: number) => Math.max(a.seatsNext ?? a.seats, used, 1);
