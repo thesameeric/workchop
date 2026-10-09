@@ -1,3 +1,4 @@
+import { canonicalRedirect } from './canonical';
 import { DurableObject } from 'cloudflare:workers';
 import { withGeo } from './geo';
 
@@ -10,6 +11,8 @@ import { withGeo } from './geo';
 
 interface Env {
   WORKCHOP: DurableObjectNamespace<WorkchopServer>;
+  /** The app's pages and scripts (dist/client). */
+  ASSETS: Fetcher;
   /** Where to create the Durable Object on first use ("weur", "enam", "apac"…); empty means near the first visitor. */
   LOCATION_HINT?: string;
   /**
@@ -307,10 +310,15 @@ function server(env: Env) {
 
 export default {
   async fetch(request, env): Promise<Response> {
-    if (isInternal(new URL(request.url).pathname)) {
+    const url = new URL(request.url);
+    // Another of its addresses: to PUBLIC_URL, the same path (308 keeps an API call's method and body).
+    const elsewhere = canonicalRedirect(url, env.PUBLIC_URL);
+    if (elsewhere) return Response.redirect(elsewhere, request.method === 'GET' || request.method === 'HEAD' ? 301 : 308);
+    if (isInternal(url.pathname)) {
       return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
     }
-    return server(env).fetch(withGeo(request, request.cf));
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/socket.io/')) return server(env).fetch(withGeo(request, request.cf));
+    return env.ASSETS.fetch(request);
   },
   // Daily (wrangler.jsonc's triggers.crons), only with billing on.
   async scheduled(_controller, env, ctx) {

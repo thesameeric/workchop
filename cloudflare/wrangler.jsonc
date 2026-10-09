@@ -5,12 +5,21 @@
   "compatibility_date": "2026-10-01",
 
   // The app's pages and scripts (built by `npm run build` into dist/client) are served from
-  // Cloudflare's edge. Only the API and realtime connections reach the container.
+  // Cloudflare's edge. Only the API and realtime connections reach the container. The Worker sees
+  // every request first, to send other addresses (workers.dev, www.) to PUBLIC_URL.
   "assets": {
     "directory": "../dist/client",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/socket.io/*"]
+    "run_worker_first": true
   },
+
+  // Workchop's own domain, a zone in this Cloudflare account: Cloudflare adds the DNS records and the
+  // certificate. Set PUBLIC_URL to it below; the workers.dev address then redirects there.
+  "routes": [
+    { "pattern": "homeoffice.town", "custom_domain": true },
+    { "pattern": "www.homeoffice.town", "custom_domain": true }
+  ],
 
   "containers": [
     {
@@ -40,7 +49,7 @@
     // container stops (15 minutes after everyone leaves, on deploys and on host restarts).
     "EPHEMERAL_STORAGE": "false",
     // The address people open Workchop at, e.g. "https://office.example.com" (sign-in needs it).
-    "PUBLIC_URL": "https://workchop.osivwiokiti.workers.dev",
+    "PUBLIC_URL": "https://homeoffice.town",
     // Uploaded files: "s3" for an R2 bucket (set the S3_* secrets; recommended), or "db" to keep
     // them in Postgres (uses up a small free database quickly). Empty: s3 when S3_BUCKET is set, else db.
     "UPLOADS_STORAGE": "",
