@@ -20,6 +20,9 @@
     { "pattern": "homeoffice.town", "custom_domain": true },
     { "pattern": "www.homeoffice.town", "custom_domain": true }
   ],
+  // Keep the workers.dev address answering (with routes set, Wrangler turns it off otherwise): old
+  // links then redirect to PUBLIC_URL.
+  "workers_dev": true,
 
   "containers": [
     {
