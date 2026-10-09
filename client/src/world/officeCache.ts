@@ -4,7 +4,7 @@ import type { Office } from '../../../shared/types';
 
 export interface OfficeData {
   colliders: AABB[];
-  seats: (Seat & { itemId: string; solid: boolean })[];
+  seats: (Seat & { itemId: string; type: string; solid: boolean })[];
 }
 
 let cachedFor: Office | null = null;
@@ -17,17 +17,18 @@ export function officeData(office: Office): OfficeData {
     cached = {
       colliders: buildColliders(office),
       seats: office.items.flatMap((item) =>
-        seatsOf(item).map((s) => ({ ...s, itemId: item.id, solid: !!getEntry(item.type)?.solid })),
+        seatsOf(item).map((s) => ({ ...s, itemId: item.id, type: item.type, solid: !!getEntry(item.type)?.solid })),
       ),
     };
   }
   return cached;
 }
 
-export function nearestSeat(office: Office, x: number, z: number, maxDist: number) {
+export function nearestSeat(office: Office, x: number, z: number, maxDist: number, accept: (seat: OfficeData['seats'][number]) => boolean = () => true) {
   let best: OfficeData['seats'][number] | null = null;
   let bestD = maxDist;
   for (const s of officeData(office).seats) {
+    if (!accept(s)) continue;
     const d = Math.hypot(s.x - x, s.z - z);
     if (d < bestD) {
       bestD = d;

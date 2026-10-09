@@ -11,6 +11,7 @@ import { canSignIn, getState, setState, toast, useStore } from '../state/store';
 import { AccountButton, SignInButton, SignInOptions } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { CamIcon, CamOffIcon, LockIcon, MicIcon, MicOffIcon, UserEditIcon } from './icons';
+import { lobbyFor } from './lobbies';
 import { useMediaState, VideoView } from './media';
 
 const isMember = (role: Role) => role !== 'guest';
@@ -75,6 +76,8 @@ export function Lobby() {
   }, [officeId, attempt, ready, accountId, guestLink]);
 
   const info = lookup && !('denied' in lookup) ? lookup : undefined;
+  // A feature's own lobby for this visitor (support customers), else the usual one.
+  const custom = info && lobbyFor(info);
   // The first time in each workspace (per account, on this browser) is through the lobby: camera and mic first.
   const goStraight = !!info && !!account?.profile.avatar && isMember(info.role) && enteredBefore(account.id, officeId);
 
@@ -95,9 +98,11 @@ export function Lobby() {
   // Ask for camera/mic once we know you'll stay here, so people can check how they look before going
   // in.
   const showLobby = ready && lookup !== undefined && (!goStraight || straight === 'failed');
+  const startMic = custom?.media?.mic;
+  const startCam = custom?.media?.cam;
   useEffect(() => {
-    if (showLobby && !media.audioTrack && !media.camTrack) void media.start().then(() => elsewhere() && media.stopAll());
-  }, [showLobby]);
+    if (showLobby && !media.audioTrack && !media.camTrack) void media.start(startMic, startCam).then(() => elsewhere() && media.stopAll());
+  }, [showLobby, startMic, startCam]);
   // Off to another page (not into the office), they go off again; checked once this render is done,
   // as React also unmounts and remounts once in development.
   useEffect(() => () => void setTimeout(() => elsewhere() && media.stopAll()), []);
@@ -145,10 +150,12 @@ export function Lobby() {
           )}
         </div>
       </LobbyHeader>
-      {/* Wait to know who you are: signed in, you come in as your profile says; guests pick a name
-          and a character here. */}
-      {!ready || (goStraight && straight !== 'failed') ? (
+      {/* Wait to know who you are and what this workspace is: signed in, you come in as your profile
+          says; guests pick a name and a character here; some workspaces have a lobby of their own. */}
+      {!ready || !info || (goStraight && straight !== 'failed') ? (
         <p className="lobby-wait muted">{straight === 'joining' ? 'Joining…' : 'Loading…'}</p>
+      ) : custom ? (
+        <custom.Component info={info} />
       ) : accountId ? (
         <SignedInJoin info={info} />
       ) : (
@@ -243,7 +250,7 @@ function AccessDeniedPage({ reason }: { reason: AccessDenied }) {
 }
 
 /** Goes in; `prepare` runs first (a guest's name and character). */
-function useJoin(info: OfficeInfo | undefined, prepare?: () => void) {
+export function useJoin(info: OfficeInfo | undefined, prepare?: () => void) {
   const officeId = useStore((s) => s.officeId)!;
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -324,7 +331,20 @@ function LobbyForm({ info }: { info: OfficeInfo | undefined }) {
 }
 
 /** Camera and mic, to see how you look before going in, and the Join button. */
-function DeviceCheck({ joinLabel, canJoin, joining, error }: { joinLabel: string; canJoin: boolean; joining: boolean; error: string | null }) {
+export function DeviceCheck({
+  joinLabel,
+  canJoin,
+  joining,
+  error,
+  note = 'You’ll hear and see people when you walk close to them. You can change this any time.',
+}: {
+  joinLabel: string;
+  canJoin: boolean;
+  joining: boolean;
+  error: string | null;
+  /** What happens to your mic and camera inside. */
+  note?: string;
+}) {
   const m = useMediaState();
   const preview = useMemo(() => (m.videoTrack ? new MediaStream([m.videoTrack]) : null), [m.videoTrack]);
   return (
@@ -342,9 +362,7 @@ function DeviceCheck({ joinLabel, canJoin, joining, error }: { joinLabel: string
         </div>
       </div>
       {m.error && <p className="form-error">{m.error}</p>}
-      <p className="muted small">
-        You’ll hear and see people when you walk close to them. You can change this any time.
-      </p>
+      <p className="muted small">{note}</p>
       <button className="btn primary wide big" disabled={!canJoin || joining}>
         {joining ? 'Joining…' : joinLabel}
       </button>

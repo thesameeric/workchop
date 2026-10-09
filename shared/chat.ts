@@ -19,6 +19,8 @@ export const MAX_REACTIONS = 20;
  * - `d:<user id>` a saved direct message with that (signed-in) person
  * - `p:<player id>` a live direct message with someone in the office (a guest is involved)
  * - `nearby` the people you're in a call with (live)
+ * - `t:<ticket id>` a support ticket's chat (saved; see shared/support.ts), and other features'
+ *   conversations with a prefix of their own
  */
 export type ConvKey = string;
 
@@ -44,6 +46,8 @@ export interface ChatMessage {
   channelId: string | null;
   /** A saved direct message: the two user ids, sorted, joined with ":". */
   dm: string | null;
+  /** A feature's saved conversation, as its key (`t:<ticket id>`). */
+  conv: string | null;
   /** Not saved: shown to the people around you, or a direct message involving a guest. */
   live?: 'nearby' | 'dm';
   /** A live direct message's recipient (a player id). */
@@ -143,6 +147,7 @@ export interface MentionNotice {
 
 declare module './types' {
   interface ClientToServerEvents {
+    /** None for customers (guests of support workspaces): they only chat in their ticket. */
     'chat:channels': (ack: (res: ChatResult<ChannelsAnswer>) => void) => void;
     /** The office's members, for mentions and direct messages (none for guests). */
     'chat:people': (ack: (res: ChatResult<{ people: ChatPerson[] }>) => void) => void;

@@ -8,6 +8,7 @@ import type { Office, OfficeItem } from '../../../../shared/types';
 import {
   areaAt,
   areaCells,
+  BOARD_TYPE,
   darkAreas,
   deskOf,
   deskOwner,
@@ -26,6 +27,7 @@ import { ItemModel } from '../../world/models';
 import { walkTo } from '../../world/movement';
 import { officeData } from '../../world/officeCache';
 import { boxGeo, mat } from '../../world/prims';
+import { Aquarium, InfoBoard, SupportDesk } from './lobby';
 import { DESK_LAMP_BULB, DeskLamp, LightSwitch, PLANT_MODELS, useBulb } from './models';
 import { hasNewFailure, useGithub } from '../github/state';
 import { useShownApp } from '../presence/state';
@@ -38,6 +40,9 @@ import { cardAnchor, openCard, sceneActions, useWorld } from './state';
 for (const [type, Model] of Object.entries(PLANT_MODELS)) registerItemModel(type, Model);
 registerItemModel('desk-lamp', DeskLamp);
 registerItemModel(SWITCH_TYPE, LightSwitch);
+registerItemModel('support-desk', SupportDesk);
+registerItemModel('aquarium', Aquarium);
+registerItemModel(BOARD_TYPE, InfoBoard);
 
 // ---------- Desk monitors ----------
 
@@ -641,13 +646,15 @@ function Outline({ item }: { item: OfficeItem }) {
   const done = useRef(new WeakSet<THREE.Object3D>());
   useLayoutEffect(() => {
     group.current?.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh || done.current.has(mesh)) return;
-      done.current.add(mesh);
-      if (mesh.userData.hitArea) {
-        mesh.visible = false;
+      if (done.current.has(o)) return;
+      done.current.add(o);
+      // Click areas, and what's left out of the outline (inside a fish tank).
+      if (o.userData.hitArea || o.userData.noOutline) {
+        o.visible = false;
         return;
       }
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
       mesh.castShadow = mesh.receiveShadow = false;
       mesh.raycast = () => {};
       if (mesh.userData.hull) {
@@ -738,7 +745,7 @@ registerItemDecor({ id: 'world-ci-badge', order: 15, types: ['desk'], Component:
 registerItemDecor({ id: 'world-nameplate', order: 20, types: ['desk'], Component: Nameplate });
 registerItemDecor({ id: 'world-stickies', order: 30, types: ['desk'], Component: Stickies });
 registerItemDecor({ id: 'world-lamp-glow', order: 40, types: LAMP_TYPES, Component: LampGlow });
-registerItemDecor({ id: 'world-outline', order: 50, types: ['desk', ...LAMP_TYPES, SWITCH_TYPE, ...PLANT_TYPES], Component: HoverOutline });
+registerItemDecor({ id: 'world-outline', order: 50, types: ['desk', ...LAMP_TYPES, SWITCH_TYPE, ...PLANT_TYPES, BOARD_TYPE, 'aquarium'], Component: HoverOutline });
 
 registerSceneLayer({ id: 'world-sitters', order: 20, Component: SitterTracker });
 registerSceneLayer({ id: 'world-darkness', order: 30, Component: Darkness });

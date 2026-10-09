@@ -1,6 +1,7 @@
+import { itemFootprint } from '../../../../shared/geometry';
 import { PLANTS } from '../../../../shared/plants';
 import type { OfficeItem } from '../../../../shared/types';
-import { deskOwner, isLightOn, isLightSwitch, LAMP_TYPES, SWITCH_TYPE, type DeskNote, type StickySummary } from '../../../../shared/world';
+import { BOARD_TYPE, deskOwner, isLightOn, isLightSwitch, LAMP_TYPES, SWITCH_TYPE, type DeskNote, type StickySummary } from '../../../../shared/world';
 import { may } from '../../../../shared/workspace';
 import { onSession } from '../../lib/session';
 import { dismissToast, getState, setPanel, toast, useStore } from '../../state/store';
@@ -8,14 +9,15 @@ import { StickyNoteIcon } from '../../ui/icons';
 import { registerOverlay } from '../../ui/overlays';
 import { registerPanel, type PanelDef } from '../../ui/panels';
 import { registerItemInteraction, registerNearbyAction, registerWorldModule } from '../../world/extensions';
-import { areaLit, toggleLight } from './actions';
+import { areaLit, mayChangeWorld, toggleLight } from './actions';
 import { WorldCard } from './cards';
 import { DeskPanel } from './DeskPanel';
-import { initialWorld, openCard, toggleCard, useWorld } from './state';
+import { initialWorld, openCard, toggleCard, useWorld, type Card } from './state';
 import './world.css';
 
 // World micro-interactions: desk monitors that wake up when someone sits down, lamps and light
-// switches, plants that tell you what they are, desks people claim and the notes left on them.
+// switches, plants that tell you what they are, desks people claim and the notes left on them,
+// info boards and fish tanks.
 // The 3D parts (./scene) load with the scene; this file only wires up the rest.
 
 registerWorldModule(() => import('./scene'));
@@ -33,8 +35,13 @@ registerItemInteraction(
   PLANTS.map((p) => p.type),
   { onClick: (item) => toggleCard('plant', item), onHover: hover },
 );
-registerItemInteraction([...LAMP_TYPES, SWITCH_TYPE], { onClick: toggleLight, onHover: hover });
+// Not for customers (they don't change the lights for everyone).
+registerItemInteraction([...LAMP_TYPES, SWITCH_TYPE], { onClick: toggleLight, onHover: hover, available: (you) => mayChangeWorld(you) });
+registerItemInteraction([BOARD_TYPE], { onClick: (item) => toggleCard('board', item), onHover: hover });
+registerItemInteraction(['aquarium'], { onClick: (item) => toggleCard('aquarium', item), onHover: hover });
+// Nobody claims desks in support workspaces (staff take support desks for a while instead).
 registerItemInteraction(['desk'], {
+  available: (you) => you.kind !== 'support',
   onClick: (item) => {
     const account = getState().account;
     // Your own desk: straight to your notes.
@@ -48,6 +55,7 @@ const touchOnly = window.matchMedia('(hover: none) and (pointer: coarse)');
 
 // E near a light switch (or a floor lamp) switches it.
 registerNearbyAction('world-lights', (office, x, z) => {
+  if (!mayChangeWorld()) return null;
   let best: { item: OfficeItem; d: number } | null = null;
   for (const item of office.items) {
     const isSwitch = isLightSwitch(item);
@@ -63,7 +71,27 @@ registerNearbyAction('world-lights', (office, x, z) => {
   return { distance: best.d, hint: `${how} to turn ${what} ${on ? 'off' : 'on'}`, run: () => toggleLight(item) };
 });
 
-// "My desk" in the dock, for members (guests can't have a desk).
+// E next to an info board or a fish tank opens its card.
+const SIGHTS: Record<string, { kind: Card['kind']; hint: string; touch: string }> = {
+  [BOARD_TYPE]: { kind: 'board', hint: 'Press E or click to read the board', touch: 'Tap the board to read it' },
+  aquarium: { kind: 'aquarium', hint: 'Press E or click to see the fish', touch: 'Tap the tank to see the fish' },
+};
+registerNearbyAction('world-sights', (office, x, z) => {
+  let best: { item: OfficeItem; d: number } | null = null;
+  for (const item of office.items) {
+    const f = item.type in SIGHTS ? itemFootprint(item) : null;
+    if (!f) continue;
+    // From its edge: tanks are long.
+    const d = Math.hypot(Math.max(f.minX - x, 0, x - f.maxX), Math.max(f.minZ - z, 0, z - f.maxZ));
+    if (d < 1.2 && (!best || d < best.d)) best = { item, d };
+  }
+  if (!best) return null;
+  const { item } = best;
+  const sight = SIGHTS[item.type];
+  return { distance: best.d, hint: touchOnly.matches ? sight.touch : sight.hint, run: () => toggleCard(sight.kind, item) };
+});
+
+// "My desk" in the dock, for members (guests can't have a desk), outside support workspaces.
 const deskPanel: PanelDef = {
   id: 'desk',
   title: 'My desk',
@@ -78,9 +106,10 @@ const deskPanel: PanelDef = {
 };
 let removePanel: (() => void) | null = null;
 const syncPanel = () => {
-  const member = may(getState().role, 'see-members');
-  if (member && !removePanel) removePanel = registerPanel(deskPanel);
-  else if (!member && removePanel) {
+  const { role, kind } = getState();
+  const show = may(role, 'see-members') && kind !== 'support';
+  if (show && !removePanel) removePanel = registerPanel(deskPanel);
+  else if (!show && removePanel) {
     removePanel();
     removePanel = null;
   }

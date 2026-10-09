@@ -2,8 +2,9 @@ import { OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Component, Suspense, useEffect, useRef, type ComponentRef, type ReactNode } from 'react';
 import * as THREE from 'three';
+import { getEntry } from '../../../shared/catalog';
 import { local } from '../lib/positions';
-import { useStore } from '../state/store';
+import { getState, useStore } from '../state/store';
 import { BuildGrid, Floor, Lights, PerimeterWalls, Sky, Zones } from './Environment';
 import { Ground } from './Ground';
 import { Items } from './Items';
@@ -13,15 +14,42 @@ import { Projector } from './Projector';
 
 const target = new THREE.Vector3();
 const delta = new THREE.Vector3();
+const offset = new THREE.Vector3();
+const spherical = new THREE.Spherical();
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-/** Orbit camera that follows your character around. */
+/** Whether an item's seats face each other across it (a support desk). */
+function facesAcross(itemId: string): boolean {
+  const type = getState().office?.items.find((i) => i.id === itemId)?.type;
+  return !!type && !!getEntry(type)?.seats?.some((s) => s.turn);
+}
+
+/** The shortest turn from angle `a` to angle `b`. */
+function turn(a: number, b: number): number {
+  return Math.atan2(Math.sin(b - a), Math.cos(b - a));
+}
+
+/**
+ * Orbit camera that follows your character around. Sitting down across a desk from someone, it
+ * swings round to look over your shoulder at them (until you move it yourself).
+ */
 function CameraRig() {
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const prev = useRef<THREE.Vector3 | null>(null);
+  const seatId = useRef<string | null>(null);
+  const swing = useRef<{ theta: number; phi: number; radius: number } | null>(null);
   const building = useStore((s) => s.mode === 'build');
   const camera = useThree((s) => s.camera);
 
-  useFrame(() => {
+  useEffect(() => {
+    const c = controls.current;
+    if (!c) return;
+    const stop = () => void (swing.current = null);
+    c.addEventListener('start', stop);
+    return () => c.removeEventListener('start', stop);
+  }, []);
+
+  useFrame((_, dt) => {
     const c = controls.current;
     if (!c) return;
     target.set(local.x, 0.9, local.z);
@@ -38,6 +66,27 @@ function CameraRig() {
       c.target.add(delta);
       prev.current.copy(target);
     }
+
+    const seat = local.seat;
+    if ((seat?.itemId ?? null) !== seatId.current) {
+      seatId.current = seat?.itemId ?? null;
+      swing.current = null;
+      if (seat && facesAcross(seat.itemId)) {
+        spherical.setFromVector3(offset.copy(camera.position).sub(c.target));
+        // Behind you, a little above your head.
+        swing.current = { theta: seat.ry + Math.PI, phi: 1.05, radius: Math.min(Math.max(spherical.radius, 3.5), 5) };
+      }
+    }
+    const to = swing.current;
+    if (!to) return;
+    spherical.setFromVector3(offset.copy(camera.position).sub(c.target));
+    const k = reducedMotion.matches ? 1 : 1 - Math.exp(-dt * 5);
+    const dTheta = turn(spherical.theta, to.theta);
+    spherical.theta += dTheta * k;
+    spherical.phi += (to.phi - spherical.phi) * k;
+    spherical.radius += (to.radius - spherical.radius) * k;
+    camera.position.copy(c.target).add(offset.setFromSpherical(spherical));
+    if (Math.abs(dTheta) < 0.005 && Math.abs(to.phi - spherical.phi) < 0.005 && Math.abs(to.radius - spherical.radius) < 0.01) swing.current = null;
   });
 
   // Rotate with the left button while playing; in build mode the left button builds and the right one rotates.

@@ -112,6 +112,7 @@ export function createCoins(opts: CoinsOptions = {}): Feature {
             const players = [...room.players.values()];
             const target = tip.toPlayerId ? room.players.get(tip.toPlayerId) : players.find((p) => p.userId === tip.toUserId);
             if (!target) return answer({ ok: false, error: 'They’re not in this office' });
+            if (me.customer || target.customer) return answer({ ok: false, error: 'Visitors can’t send or get coins' });
             if (!target.userId) return answer({ ok: false, error: 'They need to sign in to get coins' });
             if (target.userId === s.user.id) return answer({ ok: false, error: 'You can’t send coins to yourself' });
             let limit = tipLimits.get(s.user.id);

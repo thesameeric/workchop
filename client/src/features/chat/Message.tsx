@@ -144,7 +144,8 @@ export const Message = memo(function Message({ m, grouped, inThread, highlight, 
   const mine = isMine(m);
   const saved = !m.live && !m.pending;
   const canReact = saved && !m.deleted;
-  const canReply = saved && !m.deleted && !m.parentId && !inThread;
+  // Features' conversations (support tickets) have no threads, and no links to their messages.
+  const canReply = saved && !m.deleted && !m.parentId && !inThread && !m.conv;
   const canEdit = saved && mine && !m.deleted;
   const canDelete = saved && !m.deleted && (mine || (canModerate && !!m.channelId));
   const hasActions = (canReact || canReply || canEdit || canDelete) && !editing;
@@ -184,7 +185,7 @@ export const Message = memo(function Message({ m, grouped, inThread, highlight, 
         {!grouped && (
           <div className="msg-head">
             <span className="msg-name">{m.name}</span>
-            {!m.userId && <span className="msg-tag">guest</span>}
+            {!m.userId && !m.conv && <span className="msg-tag">guest</span>}
             <time title={fullTime(m.createdAt)}>{m.pending === 'sending' ? 'Sending…' : timeLabel(m.createdAt)}</time>
           </div>
         )}
@@ -258,9 +259,11 @@ export const Message = memo(function Message({ m, grouped, inThread, highlight, 
                   <EditIcon size={17} />
                 </button>
               )}
-              <button type="button" title="Copy link" onClick={() => void copyLink(m)}>
-                <LinkIcon size={17} />
-              </button>
+              {!m.conv && (
+                <button type="button" title="Copy link" onClick={() => void copyLink(m)}>
+                  <LinkIcon size={17} />
+                </button>
+              )}
               {canDelete && (
                 <button type="button" title="Delete" className="danger" onClick={() => setConfirming(true)}>
                   <TrashIcon size={17} />

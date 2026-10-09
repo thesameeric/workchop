@@ -214,6 +214,8 @@ function CreateWorkspace() {
     nameRef.current?.scrollIntoView({ block: 'center' });
   }, []);
 
+  const placeholder = kind === 'support' ? 'Help Desk' : 'Our Office';
+
   const pickKind = (next: OfficeKind) => {
     setKind(next);
     setTemplate(TEMPLATES.find((t) => t.kind === next)!.id);
@@ -224,7 +226,7 @@ function CreateWorkspace() {
     setBusy(true);
     setError(null);
     try {
-      const { id } = await createOffice(name.trim() || 'Our Office', kind, template);
+      const { id } = await createOffice(name.trim() || placeholder, kind, template);
       navigate(`/o/${id}`);
     } catch (err) {
       setError(errorText(err));
@@ -255,7 +257,7 @@ function CreateWorkspace() {
       </div>
       <label className="field">
         <span>Name</span>
-        <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Our Office" maxLength={48} />
+        <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholder} maxLength={48} />
       </label>
       <div className="field">
         <span id="template-label">Template</span>

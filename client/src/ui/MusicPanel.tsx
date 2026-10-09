@@ -9,6 +9,7 @@ import {
   type StationChoice,
 } from '../../../shared/music';
 import type { OfficeItem } from '../../../shared/types';
+import { isCustomer } from '../../../shared/workspace';
 import { getSession } from '../lib/session';
 import { ago } from '../lib/time';
 import { canBuild, setMusicPrefs, setState, useStore } from '../state/store';
@@ -160,6 +161,19 @@ function RadioSection({ item }: { item: OfficeItem }) {
   );
 }
 
+/** What the jukebox plays, for those who don't choose it (support customers). */
+function OnAir({ item }: { item: OfficeItem }) {
+  const { station } = jukeboxData(item);
+  const name = station === 'tracks' ? 'Our tracks' : station === 'stream' ? 'Our live stream' : (STATIONS.find((s) => s.id === station)?.name ?? 'Nothing');
+  return (
+    <section className="music-section">
+      <h3>Playing</h3>
+      <p>{name}</p>
+      <p className="muted small">The staff pick the music here. Turn it up or down for yourself above.</p>
+    </section>
+  );
+}
+
 function ListenAlong({ item, session }: { item: OfficeItem; session: SpotifySession | undefined }) {
   const status = useStore((s) => s.spotify);
   const selfId = useStore((s) => s.selfId);
@@ -289,6 +303,8 @@ function SpotifySection({ item }: { item: OfficeItem }) {
 
 export function MusicPanel() {
   const office = useStore((s) => s.office);
+  // Support customers listen; the server doesn't let them change the music.
+  const listener = useStore((s) => isCustomer(s.role, s.kind));
   const chosen = useStore((s) => s.musicItemId);
   const nearId = useStore((s) => s.music.nowPlaying?.itemId ?? null);
   const jukeboxes = office?.items.filter(isJukebox) ?? [];
@@ -321,8 +337,14 @@ export function MusicPanel() {
         <span>{area.zone ? `Heard by everyone in ${area.zone.name}` : `Heard within ${area.radius} m of the jukebox`}</span>
       </div>
       <VolumeControl />
-      <RadioSection item={item} />
-      <SpotifySection item={item} />
+      {listener ? (
+        <OnAir item={item} />
+      ) : (
+        <>
+          <RadioSection item={item} />
+          <SpotifySection item={item} />
+        </>
+      )}
     </div>
   );
 }

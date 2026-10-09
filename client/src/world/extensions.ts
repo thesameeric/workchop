@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import type { Office, OfficeItem } from '../../../shared/types';
+import type { OfficeKind, Role } from '../../../shared/workspace';
 import { createRegistry } from '../lib/registry';
 
 // Hooks for features that add to the 3D world: models for new item types, extra 3D bits on items,
@@ -42,6 +43,8 @@ export interface ItemInteraction {
   onClick(item: OfficeItem): void;
   /** The pointer moved onto (true) or off (false) the item. */
   onHover?(item: OfficeItem, hovered: boolean): void;
+  /** Whether it's offered to you (e.g. not to customers); always when left out. Not offered, the item isn't clickable. */
+  available?(you: { kind: OfficeKind; role: Role | null }): boolean;
 }
 
 const interactions = new Map<string, ItemInteraction>();
@@ -52,6 +55,12 @@ export function registerItemInteraction(types: string[], interaction: ItemIntera
 
 export function getItemInteraction(type: string): ItemInteraction | undefined {
   return interactions.get(type);
+}
+
+/** An item type's interaction, if it's offered to you. */
+export function offeredInteraction(type: string, you: { kind: OfficeKind; role: Role | null }): ItemInteraction | undefined {
+  const interaction = interactions.get(type);
+  return interaction && (interaction.available?.(you) ?? true) ? interaction : undefined;
 }
 
 /** Something to do by pressing E near it (besides sitting down), e.g. a light switch. */

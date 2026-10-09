@@ -31,6 +31,7 @@ export interface MessageRow {
   office_id: string;
   channel_id: string | null;
   dm_key: string | null;
+  conv_key: string | null;
   parent_id: string | null;
   in_channel: boolean;
   author_user_id: string | null;
@@ -62,6 +63,7 @@ export function toMessage(row: MessageRow): ChatMessage {
     id: row.id,
     channelId: row.channel_id,
     dm: row.dm_key,
+    conv: row.conv_key,
     parentId: row.parent_id,
     inChannel: row.in_channel,
     userId: row.author_user_id,
@@ -111,6 +113,8 @@ export interface NewMessage {
   dmKey: string | null;
   /** The two people of a saved direct message. */
   dmUsers?: [string, string];
+  /** A feature's conversation (see conversations.ts). */
+  convKey: string | null;
   parentId: string | null;
   inChannel: boolean;
   userId: string | null;
@@ -253,7 +257,10 @@ export class ChatStore {
   }
 
   /** A page of a conversation (top-level messages and replies also sent to it), oldest first. */
-  async history(where: { channelId: string } | { officeId: string; dmKey: string }, beforeId?: string): Promise<{ rows: MessageRow[]; hasMore: boolean }> {
+  async history(
+    where: { channelId: string } | { officeId: string; dmKey: string } | { officeId: string; convKey: string },
+    beforeId?: string,
+  ): Promise<{ rows: MessageRow[]; hasMore: boolean }> {
     const res =
       'channelId' in where
         ? await this.db.query<MessageRow>(
@@ -262,9 +269,9 @@ export class ChatStore {
             [where.channelId, beforeId ?? null],
           )
         : await this.db.query<MessageRow>(
-            `${SELECT_MESSAGES} WHERE m.office_id = $1 AND m.dm_key = $2 AND (m.parent_id IS NULL OR m.in_channel) AND ${before(3)}
+            `${SELECT_MESSAGES} WHERE m.office_id = $1 AND m.${'dmKey' in where ? 'dm_key' : 'conv_key'} = $2 AND (m.parent_id IS NULL OR m.in_channel) AND ${before(3)}
              ORDER BY m.created_at DESC, m.id DESC LIMIT ${PAGE_SIZE + 1}`,
-            [where.officeId, where.dmKey, beforeId ?? null],
+            [where.officeId, 'dmKey' in where ? where.dmKey : where.convKey, beforeId ?? null],
           );
     return { rows: res.rows.slice(0, PAGE_SIZE).reverse(), hasMore: res.rows.length > PAGE_SIZE };
   }
@@ -320,9 +327,9 @@ export class ChatStore {
         if (!parent || parent.deleted_at) throw new ChatError('That message was deleted.');
       }
       const res = await tx.query<MessageRow>(
-        `INSERT INTO chat_messages (office_id, channel_id, dm_key, parent_id, in_channel, author_user_id, author_name, author_player_id, text, attachments, mentions)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb) RETURNING *`,
-        [m.officeId, m.channelId, m.dmKey, m.parentId, m.inChannel, m.userId, m.name, m.playerId, m.text, jsonb(m.attachments), jsonb(m.mentions)],
+        `INSERT INTO chat_messages (office_id, channel_id, dm_key, conv_key, parent_id, in_channel, author_user_id, author_name, author_player_id, text, attachments, mentions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb) RETURNING *`,
+        [m.officeId, m.channelId, m.dmKey, m.convKey, m.parentId, m.inChannel, m.userId, m.name, m.playerId, m.text, jsonb(m.attachments), jsonb(m.mentions)],
       );
       const message = res.rows[0];
       if (m.attachments.length) {
@@ -348,8 +355,8 @@ export class ChatStore {
           [m.officeId, m.dmKey, m.dmUsers[0], m.dmUsers[1], message.created_at],
         );
       }
-      // Writing in a conversation means you've seen it.
-      if (m.userId) await this.markRead(m.userId, m.officeId, m.conv, tx, message.created_at);
+      // Writing in a conversation means you've seen it (features keep track of their own).
+      if (m.userId && !m.convKey) await this.markRead(m.userId, m.officeId, m.conv, tx, message.created_at);
       await this.addMentions(tx, m.mentionUsers, message.id, m.officeId, m.conv);
       return { message, parent };
     });
@@ -427,7 +434,8 @@ export class ChatStore {
   /**
    * Deletes messages (with their threads) that have been quiet for `days`, a batch at a time, and
    * direct message conversations left empty; returns how many threads went, and the upload ids of
-   * their files and of files sent that long ago in live messages.
+   * their files and of files sent that long ago in live messages. Features' conversations are left
+   * to their features (deleteConversations).
    */
   async sweep(days: number, batch = 500): Promise<{ threads: number; uploads: string[] }> {
     let threads = 0;
@@ -435,7 +443,8 @@ export class ChatStore {
     for (;;) {
       const done = await this.db.transaction(async (tx) => {
         const old = await tx.query<{ id: string }>(
-          `SELECT id FROM chat_messages WHERE parent_id IS NULL AND COALESCE(last_reply_at, created_at) < now() - make_interval(days => $1) LIMIT $2`,
+          `SELECT id FROM chat_messages
+           WHERE parent_id IS NULL AND conv_key IS NULL AND COALESCE(last_reply_at, created_at) < now() - make_interval(days => $1) LIMIT $2`,
           [days, batch],
         );
         if (!old.rowCount) return true;
@@ -461,5 +470,29 @@ export class ChatStore {
     );
     uploads.push(...live.rows.map((r) => r.upload_id));
     return { threads, uploads };
+  }
+
+  /** Uploads older than a day that no message (saved or live) has, a batch at a time. */
+  async unattached(batch = 500): Promise<string[]> {
+    const res = await this.db.query<{ id: string }>(
+      `SELECT u.id FROM uploads u
+       WHERE u.created_at < now() - interval '1 day' AND NOT EXISTS (SELECT 1 FROM chat_attachments a WHERE a.upload_id = u.id)
+       LIMIT $1`,
+      [batch],
+    );
+    return res.rows.map((r) => r.id);
+  }
+
+  /** Deletes features' conversations (all their messages); returns the upload ids of their files. */
+  async deleteConversations(officeId: string, keys: string[]): Promise<string[]> {
+    if (!keys.length) return [];
+    return this.db.transaction(async (tx) => {
+      const files = await tx.query<{ upload_id: string }>(
+        `SELECT a.upload_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE m.office_id = $1 AND m.conv_key = ANY($2::text[])`,
+        [officeId, keys],
+      );
+      await tx.query('DELETE FROM chat_messages WHERE office_id = $1 AND conv_key = ANY($2::text[])', [officeId, keys]);
+      return files.rows.map((r) => r.upload_id);
+    });
   }
 }

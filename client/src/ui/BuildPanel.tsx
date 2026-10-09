@@ -19,6 +19,7 @@ const WALL_COLORS = ['#e9e4f2', '#f2efe9', '#dfe6e9', '#ffe8d6', '#d8f3dc', '#cd
 function ItemsTab() {
   const build = useStore((s) => s.build);
   const selected = useStore((s) => s.office?.items.find((i) => i.id === s.build.selectedId) ?? null);
+  const kind = useStore((s) => s.kind);
   const [category, setCategory] = useState<Category>('Work');
   const entry = selected ? getEntry(selected.type) : null;
 
@@ -43,7 +44,7 @@ function ItemsTab() {
         ))}
       </div>
       <div className="catalog">
-        {CATALOG_LIST.filter((e) => e.category === category).map((e) => (
+        {CATALOG_LIST.filter((e) => e.category === category && (!e.kinds || e.kinds.includes(kind))).map((e) => (
           <button
             key={e.type}
             className={`catalog-item${build.tool === 'place' && build.placeType === e.type ? ' active' : ''}`}

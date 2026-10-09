@@ -117,13 +117,12 @@ export function PeoplePanel() {
             <button className="icon-btn" title={`Go to ${p.name}`} onClick={() => getSession()?.goTo(p.id)}>
               <PinIcon size={16} />
             </button>
-            <button
-              className="icon-btn"
-              title={`Message ${p.name}`}
-              onClick={() => messagePlayer(p.id)}
-            >
-              <ChatIcon size={16} />
-            </button>
+            {/* Support customers chat in their ticket, not in direct messages. */}
+            {!p.customer && (
+              <button className="icon-btn" title={`Message ${p.name}`} onClick={() => messagePlayer(p.id)}>
+                <ChatIcon size={16} />
+              </button>
+            )}
             {actions.map((a) => (
               <a.Component key={personActionKey(a)} player={p} />
             ))}

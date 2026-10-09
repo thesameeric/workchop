@@ -520,6 +520,21 @@ describe('chat attachments', () => {
 });
 
 describe('chat retention', () => {
+  it('deletes files nobody attached to a message within a day', async () => {
+    const { id } = await createOffice(base);
+    const ann = await join(base, id, 'Ann');
+    const conv = `c:${(await general(ann.socket)).id}`;
+    const stray = await upload(ann.socket, keyOf(ann.res), id, 'stray.png', Buffer.from('stray'));
+    const kept = await upload(ann.socket, keyOf(ann.res), id, 'kept.png', Buffer.from('kept'));
+    const fresh = await upload(ann.socket, keyOf(ann.res), id, 'fresh.png', Buffer.from('fresh'));
+    ok(await send(ann.socket, { conv, text: 'here', attachments: [{ id: kept.id }] }));
+    await server.db.query(`UPDATE uploads SET created_at = now() - interval '2 days' WHERE id = ANY($1::uuid[])`, [[stray.id, kept.id]]);
+    // A visit starts the clean-up (hourly by default).
+    await join(base, id, 'Bob');
+    await until(async () => (await fetch(`${base}${stray.url}`)).status === 404);
+    expect([(await fetch(`${base}${kept.url}`)).status, (await fetch(`${base}${fresh.url}`)).status]).toEqual([200, 200]);
+  });
+
   it('deletes conversations quiet for longer than CHAT_RETENTION_DAYS, with their files', async () => {
     const { id } = await createOffice(base);
     const ann = await join(base, id, 'Ann');

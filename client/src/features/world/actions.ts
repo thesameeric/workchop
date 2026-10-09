@@ -1,5 +1,6 @@
 import type { OfficeItem } from '../../../../shared/types';
-import { darkAreas, isLightOn, isLightSwitch, switchArea, type DeskNote, type WorldResult } from '../../../../shared/world';
+import type { OfficeKind, Role } from '../../../../shared/workspace';
+import { darkAreas, isLightOn, isLightSwitch, switchArea, type BoardData, type DeskNote, type WorldResult } from '../../../../shared/world';
 import { getSession } from '../../lib/session';
 import { getState, toast } from '../../state/store';
 
@@ -28,6 +29,11 @@ export function areaLit(item: OfficeItem): boolean {
   const office = getState().office;
   if (!office) return true;
   return !darkAreas(office).has(switchArea(office.zones, item));
+}
+
+/** Customers in a support workspace look around but don't change things (lights, music) for everyone. */
+export function mayChangeWorld(you: { kind: OfficeKind; role: Role | null } = getState()): boolean {
+  return !(you.kind === 'support' && you.role === 'guest');
 }
 
 /** Click (or E) on a lamp or light switch. */
@@ -83,4 +89,8 @@ export function markRead(id: string | 'all'): Promise<boolean> {
 
 export function deleteNote(id: string): Promise<boolean> {
   return act((ack) => getSession()!.socket.emit('desk:note:delete', id, guestKey(), ack));
+}
+
+export function writeBoard(itemId: string, data: BoardData): Promise<Ack<object>> {
+  return ask((ack) => getSession()!.socket.emit('world:board', itemId, data, ack));
 }

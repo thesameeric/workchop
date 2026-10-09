@@ -67,6 +67,8 @@ export class OfficeSession {
   private joined: { selfId: string; uploadKey: string } | null = null;
   private joinedHandlers = new Set<(rejoin: boolean) => void>();
   private leaveHandlers = new Set<() => void>();
+  /** Heard at full volume wherever they are (a support agent and their customer). */
+  private fullVolume: string | null = null;
   private uploadMaxBytes: number | undefined;
   private closed = false;
   /** You're leaving the workspace yourself: being removed from it needs no message. */
@@ -293,7 +295,7 @@ export class OfficeSession {
     s.on('player:joined', (p) => {
       remoteTargets.set(p.id, { x: p.x, z: p.z, ry: p.ry, anim: p.anim });
       setState((st) => ({ players: { ...st.players, [p.id]: toRemote(p) } }));
-      toast(`${p.name} joined`);
+      if (announceVisits()) toast(`${p.name} joined`);
     });
     s.on('player:left', (id) => {
       const name = getState().players[id]?.name;
@@ -306,7 +308,7 @@ export class OfficeSession {
         delete linked[id];
         return { players, linked, spotlight: st.spotlight === id ? null : st.spotlight };
       });
-      if (name) toast(`${name} left`);
+      if (name && announceVisits()) toast(`${name} left`);
     });
     s.on('player:moved', ([id, x, z, ry, anim]) => {
       const t = remoteTargets.get(id);
@@ -368,6 +370,12 @@ export class OfficeSession {
     s.on('office:removed', (reason) => {
       if (this.leaving) return;
       const name = getState().office?.settings.name || 'this office';
+      // A support customer there a long while without a question: back to the lobby, to ask one.
+      if (reason === 'idle') {
+        backToLobby();
+        toast(`You were in ${name} a while without a question. Come back in when you have one.`);
+        return;
+      }
       leaveOffice();
       toast(reason === 'guests-off' ? `Guests can no longer come into ${name}.` : `You were removed from ${name}.`, 'error');
     });
@@ -512,6 +520,14 @@ export class OfficeSession {
   }
 
   /**
+   * Hear this person (a player id) at full volume wherever they are, or nobody (null): a support
+   * agent and the customer they're serving, who are linked from across the office.
+   */
+  setFullVolume(playerId: string | null): void {
+    this.fullVolume = playerId;
+  }
+
+  /**
    * Remote audio gets quieter with distance (and silent across private-zone walls). Headphones mute
    * it (iOS ignores volume, and the calls stay up so taking them off brings everyone back at once).
    */
@@ -520,7 +536,7 @@ export class OfficeSession {
     const zones = st.office?.zones ?? [];
     for (const [id, el] of this.audio) {
       const t = remoteTargets.get(id);
-      const v = t ? proximityVolume(local, t, zones) : 0;
+      const v = id === this.fullVolume ? 1 : t ? proximityVolume(local, t, zones) : 0;
       if (Math.abs(el.volume - v) > 0.01) el.volume = v;
       if (el.muted !== st.focus) el.muted = st.focus;
     }
@@ -585,6 +601,9 @@ export class OfficeSession {
     remoteTargets.clear();
   }
 }
+
+/** Who comes and goes is news in a team's office, not in a support workspace's lobby. */
+const announceVisits = () => getState().kind !== 'support';
 
 /** Runs a feature's callback; one that throws is logged and doesn't break the others. */
 function guard(fn: () => void): void {

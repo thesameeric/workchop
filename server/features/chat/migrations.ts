@@ -98,4 +98,15 @@ export const migrations: Migration[] = [
       -- Every office starts with #general.
       INSERT INTO chat_channels (office_id, name, is_default) SELECT id, 'general', true FROM offices;`,
   },
+  {
+    id: 101,
+    name: 'chat_conversations',
+    sql: `
+      -- Conversations other features own (a support ticket's chat is "t:<ticket id>"). They are
+      -- deleted by their feature, not by the retention sweep.
+      ALTER TABLE chat_messages ADD COLUMN conv_key text;
+      ALTER TABLE chat_messages DROP CONSTRAINT chat_messages_check;
+      ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_one_conv CHECK (num_nonnulls(channel_id, dm_key, conv_key) = 1);
+      CREATE INDEX chat_messages_conv_idx ON chat_messages (office_id, conv_key, created_at, id) WHERE conv_key IS NOT NULL;`,
+  },
 ];

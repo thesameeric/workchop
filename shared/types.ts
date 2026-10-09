@@ -47,16 +47,26 @@ export interface PlayerState {
   focus?: boolean;
   /** The app the person is using right now (an app id), set only by the server. */
   app?: string | null;
+  /**
+   * A customer of a support workspace (a guest there, see isCustomer in shared/workspace.ts): shown
+   * as a visitor, and only in their ticket's chat. Set by the server when they come in, and false
+   * (in a player:updated) if they're made a member while inside. Customers carry no userId.
+   */
+  customer?: boolean;
 }
 
-/** Changes to a player's public state. Fields features add to PlayerState are included automatically. */
-export type PlayerPatch = Partial<Omit<PlayerState, 'id' | 'x' | 'z' | 'ry' | 'anim' | 'userId'>>;
+/**
+ * Changes to a player's public state (player:updated). Fields features add to PlayerState are
+ * included automatically. `userId` and `customer` change only when a customer is made a member.
+ */
+export type PlayerPatch = Partial<Omit<PlayerState, 'id' | 'x' | 'z' | 'ry' | 'anim'>>;
 
 /**
- * What a client may change about itself with a 'profile' message (the server sets `app`). A
- * signed-in person's name and avatar are ignored: they come from the account (PATCH /api/me).
+ * What a client may change about itself with a 'profile' message (the server sets `app`, `userId`
+ * and `customer`). A signed-in person's name and avatar are ignored: they come from the account
+ * (PATCH /api/me); so are customers' names.
  */
-export type ProfilePatch = Omit<PlayerPatch, 'app'>;
+export type ProfilePatch = Omit<PlayerPatch, 'app' | 'userId' | 'customer'>;
 
 /** A piece of furniture or structure placed in an office. x/z is the footprint centre. */
 export interface OfficeItem {

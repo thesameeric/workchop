@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode 
 import { createPortal } from 'react-dom';
 import type { Space } from '../../../shared/account';
 import { reactionForKey } from '../../../shared/avatar';
+import { isCustomer } from '../../../shared/workspace';
 import { toggleFocus } from '../features/audio/focus';
 import { FocusIndicator } from '../features/audio/Headphones';
 import { fetchSpaces } from '../lib/api';
@@ -123,7 +124,8 @@ function WorkspaceMenu({ onClose }: { onClose: (refocus?: boolean) => void }) {
 function OfficeChip() {
   const name = useStore((s) => s.office?.settings.name ?? '');
   const count = useStore((s) => Object.keys(s.players).length + 1);
-  const badge = useStore((s) => (s.isOwner ? 'owner' : s.role === 'admin' || s.role === 'guest' ? s.role : null));
+  // Support customers are all guests: nothing to tell them apart by.
+  const badge = useStore((s) => (s.isOwner ? 'owner' : s.role === 'admin' || (s.role === 'guest' && s.kind !== 'support') ? s.role : null));
   const signedIn = useStore((s) => !!s.account);
   const { open, setOpen, close, ref, menuRef, buttonRef } = usePopover();
   const [at, setAt] = useState({ left: 0, top: 0 });
@@ -216,6 +218,7 @@ function Hint() {
 }
 
 function Help() {
+  const customer = useStore((s) => isCustomer(s.role, s.kind));
   const [open, setOpen] = useState(() => {
     try {
       return localStorage.getItem('workchop:help-dismissed') !== '1';
@@ -253,7 +256,8 @@ function Help() {
         <kbd>D</kbd> / arrows to move, <kbd>Shift</kbd> to run
       </div>
       <div>Click the floor to walk there, click a chair to sit</div>
-      <div>Click plants, lamps and desks to use them</div>
+      {/* Customers look around: lamps and desks aren't theirs to use. */}
+      <div>{customer ? 'Click plants, fish tanks and boards to find out more' : 'Click plants, lamps and desks to use them'}</div>
       <div>
         <kbd>E</kbd> sit/stand · <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd> reactions
       </div>
@@ -284,12 +288,13 @@ function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       byKey = true;
       if (isTyping() || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-      const { modal, mode } = useStore.getState();
+      const { modal, mode, role, kind } = useStore.getState();
       if (modal !== 'none') return;
       if (e.code === 'KeyE') interact();
       else if (e.code === 'KeyM') void media.setMic(!media.micOn);
       else if (e.code === 'KeyV') void media.setCam(!media.camOn);
-      else if (e.code === 'KeyB') setPanel('build');
+      // Support customers don't build.
+      else if (e.code === 'KeyB' && !isCustomer(role, kind)) setPanel('build');
       else if (e.code === 'KeyH') toggleFocus();
       else if (e.code === 'Enter') {
         const target = e.target as Element;

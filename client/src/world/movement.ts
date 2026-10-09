@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { getEntry, type Seat } from '../../../shared/catalog';
-import { findFreeSpot, findPath, isBlocked, moveWithCollision } from '../../../shared/geometry';
+import { findFreeSpot, findPath, isBlocked, moveWithCollision, standUpSpot } from '../../../shared/geometry';
 import type { Office } from '../../../shared/types';
 import { focusHint } from '../features/audio/focus';
 import { local } from '../lib/positions';
 import { getSession } from '../lib/session';
 import { getState, setState, toast } from '../state/store';
-import { nearbyActionFinders, type NearbyAction } from './extensions';
+import { getItemInteraction, nearbyActionFinders, type NearbyAction } from './extensions';
 import { axis } from './input';
 import { nearestSeat, officeData } from './officeCache';
 
@@ -36,21 +36,15 @@ export function standUp(): void {
   if (!office) return;
   const item = office.items.find((i) => i.id === seat.itemId);
   const { colliders } = officeData(office);
-  if (item && getEntry(item.type)?.solid) {
-    // Step forward off the sofa.
-    const spot = findFreeSpot(seat.x + Math.sin(seat.ry) * 0.8, seat.z + Math.cos(seat.ry) * 0.8, colliders, office.settings);
-    local.x = spot.x;
-    local.z = spot.z;
-  } else if (isBlocked(local.x, local.z, colliders, office.settings)) {
-    const spot = findFreeSpot(local.x, local.z, colliders, office.settings);
-    local.x = spot.x;
-    local.z = spot.z;
-  }
+  const spot = standUpSpot(seat, !!item && !!getEntry(item.type)?.solid, colliders, office.settings);
+  local.x = spot.x;
+  local.z = spot.z;
 }
 
 /** The nearest thing to do with E where you stand: sit down, or what features offer (light switches…). */
 function nearestAction(office: Office): NearbyAction | null {
-  const seat = nearestSeat(office, local.x, local.z, SIT_RANGE);
+  // Items with a click action of their own decide who sits there (support desks).
+  const seat = nearestSeat(office, local.x, local.z, SIT_RANGE, (s) => !getItemInteraction(s.type));
   let best: NearbyAction | null = seat
     ? { distance: Math.hypot(seat.x - local.x, seat.z - local.z), hint: 'Press E to sit', run: () => sitOn(seat) }
     : null;

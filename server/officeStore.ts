@@ -74,18 +74,18 @@ export class OfficeStore {
   }
 
   /**
-   * Create and immediately persist a new office, members only, with `ownerId` (an account) as its
-   * owner. Throws if it can't be saved.
+   * Create and immediately persist a new office, members only (or with the guest link `guestToken`
+   * on), with `ownerId` (an account) as its owner. Throws if it can't be saved.
    */
-  async create(name: string, template: TemplateId, opts: { kind?: OfficeKind; ownerId?: string } = {}): Promise<StoredOffice> {
+  async create(name: string, template: TemplateId, opts: { kind?: OfficeKind; ownerId?: string; guestToken?: string } = {}): Promise<StoredOffice> {
     let id = randomId();
     while (this.cache.has(id) || (await this.repo.exists(id))) id = randomId();
     const stored: StoredOffice = {
       office: createFromTemplate(template, id, name),
       ownerKey: crypto.randomBytes(18).toString('base64url'),
       kind: opts.kind ?? 'team',
-      guests: 'off',
-      guestToken: null,
+      guests: opts.guestToken ? 'link' : 'off',
+      guestToken: opts.guestToken ?? null,
     };
     await this.repo.create(stored, opts.ownerId ?? null);
     this.cache.set(id, stored);

@@ -67,6 +67,8 @@ export const feature: Feature = {
           if (!me || !room || typeof to !== 'string' || to === me.id) return reply({ ok: false, error: 'You can’t tap them right now.' });
           const them = room.players.get(to);
           if (!them) return reply({ ok: false, error: 'They’re no longer here.' });
+          // Customers only reach the agent serving them (the one person they're in a call with).
+          if (me.customer && !ctx.realtime.linkedPeers(room.officeId, me.id).includes(to)) return reply({ ok: false, error: 'You can’t tap them right now.' });
           if (!them.focus) return reply({ ok: false, error: `${them.name} took their headphones off. Just say hi!` });
           if (!canTap()) return reply({ ok: false, error: 'Slow down a little.' });
           // Signed-in people are the same person in every tab; guests are their connection.

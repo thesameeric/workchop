@@ -38,7 +38,7 @@ function Desk({ c }: { c: string }) {
   );
 }
 
-function Chair({ c }: { c: string }) {
+export function Chair({ c }: { c: string }) {
   return (
     <group>
       <Cyl p={[0, 0.03, 0]} rad={0.26} h={0.04} c={DARK} />
@@ -472,6 +472,50 @@ function Arcade({ c }: { c: string }) {
   );
 }
 
+let queueScreen: THREE.MeshBasicMaterial | null = null;
+const queueScreenGeo = new THREE.PlaneGeometry(2.76, 1.12);
+
+/** The queue screen's picture until the support feature draws the real one. */
+function queueScreenMaterial(): THREE.MeshBasicMaterial {
+  if (queueScreen) return queueScreen;
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 260;
+  const ctx = canvas.getContext('2d')!;
+  const bg = ctx.createLinearGradient(0, 0, 0, 260);
+  bg.addColorStop(0, '#1f2d63');
+  bg.addColorStop(1, '#0f1530');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 640, 260);
+  ctx.fillStyle = '#5b6cff';
+  ctx.fillRect(0, 0, 640, 8);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 64px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText('Now serving', 320, 110);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+  ctx.font = '500 30px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText('We’ll call you when it’s your turn', 320, 180);
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+  queueScreen = new THREE.MeshBasicMaterial({ map, toneMapped: false });
+  return queueScreen;
+}
+
+/** A big screen on the wall (its back against the back of the footprint). */
+function QueueBoard() {
+  return (
+    <group>
+      <Box p={[0, 1.72, -0.24]} s={[1.2, 0.5, 0.02]} c={METAL} />
+      <Box p={[0, 1.72, -0.18]} s={[2.9, 1.26, 0.1]} c="#16181d" rounded />
+      <mesh geometry={queueScreenGeo} material={queueScreenMaterial()} position={[0, 1.72, -0.128]} />
+      <Box p={[0, 1.04, -0.2]} s={[0.5, 0.05, 0.05]} c="#5b6cff" emissive="#5b6cff" emissiveIntensity={0.8} shadow={false} />
+    </group>
+  );
+}
+
 const recordGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.012, 24);
 const archGeo = new THREE.TorusGeometry(0.36, 0.035, 8, 28, Math.PI);
 
@@ -561,7 +605,10 @@ export const ItemModel = memo(function ItemModel({
     case 'jukebox': return <Jukebox c={c} itemId={itemId} data={data as JukeboxData | undefined} />;
     default: {
       const Model = getItemModel(type);
-      return Model && item ? <Model item={item} c={c} /> : <Box p={[0, 0.25, 0]} s={[0.5, 0.5, 0.5]} c="#ff00ff" />;
+      if (Model && item) return <Model item={item} c={c} />;
+      // The support feature draws the queue screen; this one shows until it has.
+      if (type === 'queue-board') return <QueueBoard />;
+      return <Box p={[0, 0.25, 0]} s={[0.5, 0.5, 0.5]} c="#ff00ff" />;
     }
   }
 });

@@ -25,11 +25,21 @@ export interface OfficeInfo {
   online: number;
 }
 
+/**
+ * Customers are the guests of a support workspace (they come in with its customer link). They appear
+ * as "Visitor", chat only in their ticket and can't change the shared world (lights, music, notes).
+ * Their PlayerState has `customer: true`, so everyone can tell.
+ */
+export const isCustomer = (role: Role | null | undefined, kind: OfficeKind | null | undefined) => role === 'guest' && kind === 'support';
+
 /** Why GET /api/offices/:id (403 `{ error, reason }`) or a join refused you. */
 export type AccessDenied = 'sign-in' | 'members-only' | 'link';
 
-/** Why you were taken out of an office ('office:removed'): removed from its members, or guests turned off. */
-export type RemovedReason = 'removed' | 'guests-off';
+/**
+ * Why you were taken out of an office ('office:removed'): removed from its members (or, as a
+ * customer, by staff), guests turned off, or (customers) there a long while without an open ticket.
+ */
+export type RemovedReason = 'removed' | 'guests-off' | 'idle';
 
 export interface Member {
   userId: string;
