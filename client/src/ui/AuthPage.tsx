@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { normalizeEmail, passwordProblem, sanitizeUserName, type Space } from '../../../shared/account';
-import { acceptInvite, accountUpdated, afterSignIn, errorText, finishSignUp, resetPassword, signOut } from '../lib/account';
+import { acceptInvite, accountUpdated, afterSignIn, errorText, finishSignUp, resetPassword, signOut, useProvidersKnown } from '../lib/account';
 import { ApiError, confirmEmailRequest, fetchSpaces, forgotPasswordRequest, peekLinkRequest, previewInvite, signUpRequest, type InvitePreview } from '../lib/api';
 import { goHome, navigate, nextParam, withNext } from '../lib/router';
 import {
@@ -16,7 +16,9 @@ import { finePointer } from '../lib/touch';
 import { canSignIn, getState, toast, useStore } from '../state/store';
 import { Link, NewPasswordField, ProviderButtons, SignInOptions, UserAvatar } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
+import { Logo } from './Brand';
 import { MailIcon } from './icons';
+import { Consent } from './legal/Consent';
 
 // The pages for signing in and up, and for the links we email: /signin, /signup (and /signup#t=… to
 // finish), /forgot, /reset#t=…, /confirm-email#t=… and /invite#t=…. The router takes the token out of
@@ -29,7 +31,7 @@ export function AuthShell({ title, intro, wide, children }: { title?: string; in
       <div className="landing-bg" aria-hidden="true" />
       <header className="landing-header">
         <button className="brand link" onClick={() => goHome()}>
-          <span className="brand-mark">◆</span> Workchop
+          <Logo />
         </button>
       </header>
       <main className={`card auth-card${wide ? ' wide' : ''}`}>
@@ -112,14 +114,24 @@ function EmailField({ value, onChange }: { value: string; onChange: (value: stri
   );
 }
 
+/** In place of the ways to sign in until the server has said which it offers (it's asked again meanwhile). */
+function OptionsLoading() {
+  return (
+    <p className="auth-alt muted" role="status">
+      Loading sign-in options…
+    </p>
+  );
+}
+
 function SignInPage() {
   const account = useStore((s) => s.account);
   const offered = useStore(canSignIn);
+  const known = useProvidersKnown();
   const next = nextParam();
   useEffect(() => {
     if (account) navigate(next, { replace: true });
   }, [account, next]);
-  if (!offered) {
+  if (known && !offered) {
     return (
       <AuthShell title="Sign in" intro="This server doesn’t offer accounts. You can still create and join offices as a guest.">
         <button className="btn primary wide" onClick={() => navigate('/')}>
@@ -131,23 +143,39 @@ function SignInPage() {
   const intro = next === '/confirm-email' ? 'Sign in to confirm your new email address.' : 'Your character, your offices and your settings, on every device.';
   return (
     <AuthShell title="Sign in" intro={intro}>
-      <SignInOptions next={next} />
+      {known ? (
+        <>
+          <SignInOptions next={next} />
+          <Consent signIn />
+        </>
+      ) : (
+        <OptionsLoading />
+      )}
     </AuthShell>
   );
 }
 
 function SignUp() {
   const emailLinks = useStore((s) => s.providers.emailLinks);
+  const known = useProvidersKnown();
   const next = nextParam();
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  if (!known) {
+    return (
+      <AuthShell title="Create your account">
+        <OptionsLoading />
+      </AuthShell>
+    );
+  }
   if (!emailLinks) {
     return (
       <AuthShell title="Create an account" intro="Signing up with an email address isn’t available on this server.">
         <SignInOptions next={next} />
+        <Consent />
       </AuthShell>
     );
   }
@@ -192,6 +220,7 @@ function SignUp() {
         )}
       </form>
       <ProvidersInstead next={next} />
+      <Consent />
       <p className="auth-alt muted small">
         Already have an account? <Link to={withNext('/signin', next)}>Sign in</Link>
       </p>
@@ -281,6 +310,7 @@ function FinishSignUp({ token }: { token: string }) {
             {busy ? 'Creating your account…' : 'Create account'}
           </button>
         </div>
+        <Consent />
       </form>
     </AuthShell>
   );
@@ -288,11 +318,19 @@ function FinishSignUp({ token }: { token: string }) {
 
 function Forgot() {
   const emailLinks = useStore((s) => s.providers.emailLinks);
+  const known = useProvidersKnown();
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  if (!known) {
+    return (
+      <AuthShell title="Forgot your password?">
+        <OptionsLoading />
+      </AuthShell>
+    );
+  }
   if (!emailLinks) {
     return (
       <AuthShell title="Forgot your password?" intro="This server can’t send email, so passwords can’t be reset here. Ask the person who runs it.">
@@ -385,7 +423,7 @@ function ResetPassword({ token }: { token: string | null }) {
   };
 
   return (
-    <AuthShell title="Choose a password" intro="For your Workchop account.">
+    <AuthShell title="Choose a password" intro="For your Homeoffice account.">
       <form onSubmit={submit} noValidate>
         {link.email && <UsernameField email={link.email} />}
         <NewPasswordField value={password} onChange={setPassword} email={link.email} label="New password" />
@@ -477,7 +515,7 @@ function ConfirmEmail({ token: linked }: { token: string | null }) {
   if (result === 'done') return <AuthShell title="Email confirmed" intro="Your email address is confirmed.">{toProfile}</AuthShell>;
   if (result === 'other-account') {
     return (
-      <AuthShell title="Confirm your email" intro="This link is for another Workchop account. Sign in with the account that asked for the change.">
+      <AuthShell title="Confirm your email" intro="This link is for another Homeoffice account. Sign in with the account that asked for the change.">
         <button className="btn primary wide" onClick={switchAccount}>
           Sign in with another account
         </button>
@@ -498,10 +536,10 @@ function ConfirmEmail({ token: linked }: { token: string | null }) {
       intro={
         email ? (
           <>
-            Confirm <strong>{email}</strong> for your Workchop account.
+            Confirm <strong>{email}</strong> for your Homeoffice account.
           </>
         ) : (
-          'Confirm your new email address for your Workchop account.'
+          'Confirm your new email address for your Homeoffice account.'
         )
       }
     >
@@ -606,6 +644,7 @@ function InviteSignUp({ token, invite, onGone }: { token: string; invite: Invite
             </button>
           )}
         </div>
+        {!signIn && <Consent />}
       </form>
     </AuthShell>
   );
@@ -619,6 +658,7 @@ function InviteSignUp({ token, invite, onGone }: { token: string; invite: Invite
 function InvitePage({ token: linked }: { token: string | null }) {
   const account = useStore((s) => s.account);
   const accountId = account?.id ?? null;
+  const known = useProvidersKnown();
   const [token] = useState(() => linked ?? pendingInvite());
   const [invite, setInvite] = useState<InvitePreview | 'expired' | { used: Space[] } | { error: string } | null>(null);
   const [otherAccount, setOtherAccount] = useState(false);
@@ -763,7 +803,7 @@ function InvitePage({ token: linked }: { token: string | null }) {
           </>
         }
       >
-        <SignInOptions next="/invite" />
+        {known ? <SignInOptions next="/invite" /> : <OptionsLoading />}
       </AuthShell>
     );
   }

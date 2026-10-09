@@ -1,6 +1,6 @@
 # Feature specs for parallel work
 
-Workchop's next features are being built in parallel. These specs are for the ones built **outside**
+Homeoffice's next features are being built in parallel. These specs are for the ones built **outside**
 the main cloud session: weather (`weather.md`) and the GitHub integration (`github.md`) on the owner's
 computer, and the current-app indicator (`presence.md`) and coins wallet (`coins.md`) in separate cloud
 sessions. Where there are fact-checked research notes (`research-*.md`), read them; they contain real

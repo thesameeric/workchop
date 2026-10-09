@@ -64,7 +64,7 @@ export function outboxMailer(opts: { log?: boolean } = {}): Outbox {
 
 export interface ResendOptions {
   apiKey: string;
-  /** EMAIL_FROM, e.g. "Workchop <noreply@mail.example.com>". */
+  /** EMAIL_FROM, e.g. "Homeoffice <noreply@mail.example.com>". */
   from: string;
   fetch?: typeof fetch;
   /** Waits between attempts (tests make it instant). */
@@ -184,7 +184,7 @@ export function mailerFromEnv(env: NodeJS.ProcessEnv = process.env, production =
   if (apiKey) {
     const from = env.EMAIL_FROM?.trim() ?? '';
     if (!validSender(from)) {
-      throw new Error(`EMAIL_FROM must be the sender for Resend, like "Workchop <noreply@mail.example.com>", on a domain verified in Resend (${from ? `got "${from}"` : 'it is not set'})`);
+      throw new Error(`EMAIL_FROM must be the sender for Resend, like "Homeoffice <noreply@mail.example.com>", on a domain verified in Resend (${from ? `got "${from}"` : 'it is not set'})`);
     }
     if (!quiet) console.log(`[mail] sending email with Resend, from ${from.slice(from.lastIndexOf('@') + 1).replace(/>$/, '')}`);
     return resendMailer({ apiKey, from });

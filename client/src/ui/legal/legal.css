@@ -1,0 +1,246 @@
+/* The legal pages (/privacy, /terms), in the landing page's look (its .lp tokens, header and footer).
+   One readable column; on wide screens the table of contents sits beside it and follows the reader. */
+
+.legal-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 68ch);
+  grid-template-areas: 'head' 'folded' 'text';
+  justify-content: center;
+  padding-bottom: clamp(64px, 6vw + 32px, 112px);
+}
+
+/* ---------- Title ---------- */
+
+.legal-head {
+  grid-area: head;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: clamp(32px, 4vw + 16px, 72px) 0 32px;
+}
+
+.legal .legal-head h1 {
+  max-width: none;
+  font-size: clamp(2rem, 1.6rem + 1.8vw, 3rem);
+  line-height: 1.1;
+}
+
+.legal-updated {
+  color: var(--lp-muted);
+  font-size: 0.9375rem;
+}
+
+.legal-intro p {
+  margin-top: 4px;
+  font-size: var(--lp-font-lead);
+  line-height: 1.55;
+  color: var(--lp-ink-soft);
+  text-wrap: pretty;
+}
+
+/* ---------- Table of contents ---------- */
+
+.legal-toc {
+  display: none;
+}
+
+.legal-toc-label {
+  margin-bottom: 8px;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.legal-toc ol,
+.legal-toc-folded ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legal-toc ol {
+  border-left: 1px solid var(--lp-line);
+}
+
+.legal-toc a {
+  display: block;
+  margin-left: -1px;
+  padding: 6px 0 6px 14px;
+  border-left: 2px solid transparent;
+  color: var(--lp-muted);
+  font-size: 0.9375rem;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.legal-toc a:hover {
+  color: var(--lp-ink);
+}
+
+.legal-toc a[aria-current='true'] {
+  border-left-color: var(--lp-accent);
+  color: var(--lp-accent-text);
+  font-weight: 600;
+}
+
+/* Narrow screens: folded above the text. */
+.legal-toc-folded {
+  grid-area: folded;
+  margin-bottom: 32px;
+  border: 1px solid var(--lp-line);
+  border-radius: 16px;
+  background: var(--lp-card);
+}
+
+.legal-toc-folded summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 16px;
+  border-radius: 16px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.legal-toc-folded summary::-webkit-details-marker {
+  display: none;
+}
+
+.legal-toc-folded[open] summary .hgi {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .legal-toc-folded summary .hgi {
+    transition: transform 0.15s;
+  }
+}
+
+.legal-toc-folded ol {
+  padding: 0 16px 8px;
+}
+
+.legal-toc-folded li {
+  border-top: 1px solid var(--lp-line);
+}
+
+.legal-toc-folded a {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--lp-ink-soft);
+  text-decoration: none;
+}
+
+.legal-toc-folded a:hover {
+  color: var(--lp-ink);
+}
+
+@media (min-width: 1024px) {
+  .legal-grid {
+    grid-template-columns: 220px minmax(0, 68ch);
+    grid-template-areas: '. head' 'toc text';
+    column-gap: 64px;
+  }
+
+  .legal-toc {
+    grid-area: toc;
+    display: block;
+    position: sticky;
+    top: calc(var(--lp-header-h) + 32px);
+    align-self: start;
+    max-height: calc(100vh - var(--lp-header-h) - 64px);
+    overflow-y: auto;
+  }
+
+  .legal-toc-folded {
+    display: none;
+  }
+}
+
+/* ---------- The text ---------- */
+
+.legal-text {
+  grid-area: text;
+  color: var(--lp-ink-soft);
+  line-height: 1.7;
+}
+
+@media (min-width: 640px) {
+  .legal-text {
+    font-size: 1.0625rem;
+  }
+}
+
+/* With the landing page's scroll padding (the header and 16px), a heading lands 32px under the header. */
+.legal-text section {
+  scroll-margin-top: 16px;
+}
+
+.legal-text section + section {
+  margin-top: 48px;
+}
+
+.legal .legal-text h2 {
+  margin-bottom: 12px;
+  font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.625rem);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+
+.legal .legal-text h3 {
+  margin: 28px 0 6px;
+  font-size: 1.0625rem;
+}
+
+.legal-text h2 + h3 {
+  margin-top: 0;
+}
+
+.legal-text p,
+.legal-text ul {
+  margin: 0 0 14px;
+}
+
+.legal-text ul {
+  padding-left: 1.25em;
+}
+
+.legal-text li + li {
+  margin-top: 6px;
+}
+
+.legal-text li::marker {
+  color: var(--lp-muted);
+}
+
+.legal-text strong {
+  color: var(--lp-ink);
+  font-weight: 650;
+}
+
+.legal-text a,
+.legal-intro a {
+  color: var(--lp-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Print: just the text ---------- */
+
+@media print {
+  .legal .lp-header,
+  .legal .lp-footer,
+  .legal-toc,
+  .legal-toc-folded {
+    display: none;
+  }
+
+  .legal-grid {
+    display: block;
+  }
+}

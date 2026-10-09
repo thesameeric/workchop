@@ -76,7 +76,7 @@ export function StatusSection() {
           />
           <Toggle
             label="Show other apps as “Working”"
-            hint="Apps that aren’t in Workchop’s list. Their names are never sent."
+            hint="Apps that aren’t in Homeoffice’s list. Their names are never sent."
             checked={prefs.others}
             onChange={(v) => flip('others', v)}
           />
@@ -152,7 +152,7 @@ function Install({ token, onDone }: { token: string; onDone: () => void }) {
       </div>
       <Copyable text={os === 'unix' ? unix : win} />
       <p className="muted small">
-        It sends only which app is in front, from Workchop’s list (others as “Working”), never window titles. Afterwards, start it again with{' '}
+        It sends only which app is in front, from Homeoffice’s list (others as “Working”), never window titles. Afterwards, start it again with{' '}
         <code>node ~/workchop-presence.cjs run</code>.
       </p>
       <button type="button" className="btn small" onClick={onDone}>
@@ -193,7 +193,7 @@ export function HelperSection() {
   return (
     <div className="presence-settings">
       <p className="muted small">
-        A small program for your computer that shows which app you’re using, like “In Figma”. Only the app is shared, from Workchop’s list; never window titles or
+        A small program for your computer that shows which app you’re using, like “In Figma”. Only the app is shared, from Homeoffice’s list; never window titles or
         what’s on screen. Turn it off any time in Privacy &amp; status.
       </p>
       {inOffice && <p className="small">{helperText(helper)}</p>}

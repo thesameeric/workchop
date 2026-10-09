@@ -11,18 +11,22 @@
   --bg: #f4f5fb;
   --ink: #1d2030;
   --ink-soft: #444a63;
-  --muted: #6b7086;
+  /* 5.4:1 on --bg, 5.2:1 on --primary-soft. */
+  --muted: #5f6479;
   --line: #e2e4ef;
   --line-strong: #c9cce0;
   --card: #ffffff;
   --card-hover: #fafaff;
   --field: #fbfbfe;
-  --primary: #5b6cff;
-  --primary-hover: #4a5bf0;
+  /* The logo's blue. Buttons and other fills under white text use --primary, a little deeper so the
+     text reads (5.2:1, 6.5:1 on hover; the logo's blue would be 4.2:1). */
+  --brand: #5b6cff;
+  --primary: #4a5bf0;
+  --primary-hover: #3b4bdf;
   --primary-ink: #ffffff;
   --primary-soft: #eef0ff;
-  /* Primary-coloured text (badges); darker than --primary so it reads on light fills. */
-  --primary-text: #4a5bf0;
+  /* Primary-coloured text (links, badges): 5.4:1 on --primary-soft, 5.7:1 on --bg. */
+  --primary-text: #3f4fe0;
   --danger: #e5484d;
   /* Red text on cards (buttons): darker than --danger so it stays readable. */
   --danger-text: #c62a2f;
@@ -87,7 +91,6 @@
   --card: #1a1d29;
   --card-hover: #212534;
   --field: #141722;
-  --primary-hover: #6b7bff;
   --primary-soft: #272d56;
   --primary-text: #a3adff;
   --danger: #f2555a;
@@ -410,7 +413,7 @@ a.btn {
 }
 
 .brand-mark {
-  color: var(--primary);
+  color: var(--brand);
 }
 
 /* ---------- Landing ---------- */
@@ -450,47 +453,9 @@ a.btn {
   align-items: start;
 }
 
-.hero h1 {
-  font-size: clamp(2.2rem, 4.5vw, 3.6rem);
-  line-height: 1.05;
-  letter-spacing: -0.03em;
-  margin-bottom: 18px;
-}
-
-.hero p {
-  font-size: 1.12rem;
-  line-height: 1.6;
-  color: var(--ink-soft);
-  max-width: 34rem;
-}
-
-.features {
-  list-style: none;
-  padding: 0;
-  margin: 26px 0 0;
-  display: grid;
-  gap: 10px;
-  font-weight: 500;
-}
-
-.features li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.features .hgi {
-  color: var(--primary);
-}
-
 .landing-cards {
   display: grid;
   gap: 20px;
-}
-
-/* A line under a card's title. */
-.card .card-intro {
-  margin: -10px 0 16px;
 }
 
 /* New workspace: its type, then a template */
@@ -533,14 +498,6 @@ a.btn {
 .template.active {
   border-color: var(--primary);
   background: var(--primary-soft);
-}
-
-.recent {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.85rem;
 }
 
 .recent-item {
@@ -1567,12 +1524,12 @@ a.btn {
   font-weight: 600;
 }
 
-.world-failed {
+.load-failed {
   padding: 16px;
   text-align: center;
 }
 
-.world-failed p {
+.load-failed p {
   margin: 0 0 12px;
 }
 

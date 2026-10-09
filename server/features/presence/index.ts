@@ -165,7 +165,7 @@ function createPresence(ctx: ServerContext): void {
   const report: express.RequestHandler = async (req, res) => {
     const token = /^Bearer\s+(\S+)$/i.exec(req.get('authorization') ?? '')?.[1];
     if (!isTokenFormat(token)) {
-      res.status(401).json({ error: 'Pair this computer again in Workchop: Settings > Desktop helper.' });
+      res.status(401).json({ error: 'Pair this computer again in Homeoffice: Settings > Desktop helper.' });
       return;
     }
     const hash = hashToken(token);
@@ -179,7 +179,7 @@ function createPresence(ctx: ServerContext): void {
     }
     const owner = await tokens.verify(token, hash);
     if (!owner) {
-      res.status(401).json({ error: 'This computer was removed. Pair it again in Workchop: Settings > Desktop helper.' });
+      res.status(401).json({ error: 'This computer was removed. Pair it again in Homeoffice: Settings > Desktop helper.' });
       return;
     }
     const body = (req.body ?? {}) as Record<string, unknown>;

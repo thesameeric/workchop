@@ -7,9 +7,10 @@ import { media } from '../lib/media';
 import { defaultAnswered, goHome, navigate, withNext } from '../lib/router';
 import { enterOffice, JoinRefused } from '../lib/session';
 import { enteredBefore, forgetGuestToken, getGuestToken, loadDevices, rememberEntered, rememberOffice } from '../lib/storage';
-import { canSignIn, getState, setState, toast, useStore } from '../state/store';
+import { canSignIn, dismissToast, getState, setState, toast, useStore } from '../state/store';
 import { AccountButton, SignInButton, SignInOptions } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
+import { Logo } from './Brand';
 import { CamIcon, CamOffIcon, LockIcon, MicIcon, MicOffIcon, UserEditIcon } from './icons';
 import { lobbyFor } from './lobbies';
 import { useMediaState, VideoView } from './media';
@@ -34,9 +35,28 @@ async function joinStraightIn(officeId: string): Promise<void> {
   const [mic, cam] = await Promise.all([granted('microphone'), granted('camera')]);
   if (!media.audioTrack && !media.camTrack) await media.start(mic && (prefs.micOn ?? true), cam && (prefs.camOn ?? true));
   await enterOffice(officeId);
-  if (!mic && (prefs.micOn ?? true)) {
-    toast('Your mic is off. Press M to talk.', { icon: MicOffIcon, action: { label: 'Unmute', run: () => void media.setMic(true) }, duration: 8000 });
-  }
+  if (!mic && (prefs.micOn ?? true)) micOffToast();
+}
+
+/** Where a dialog fills the screen (Settings) and a toast would cover its top. */
+const PHONE = '(max-width: 720px)';
+const MIC_TOAST_MS = 8000;
+
+/**
+ * Says the mic is off. On a phone, not over a dialog: Settings opens on the way in from a billing
+ * email's link (?billing), maybe just after, and the toast would cover its section tabs.
+ */
+function micOffToast(): void {
+  const phone = () => matchMedia(PHONE).matches;
+  if (phone() && getState().modal !== 'none') return;
+  const text = matchMedia('(pointer: coarse)').matches ? 'Your mic is off. Tap the mic to talk.' : 'Your mic is off. Press M to talk.';
+  const id = toast(text, { icon: MicOffIcon, action: { label: 'Unmute', run: () => void media.setMic(true) }, duration: MIC_TOAST_MS });
+  const stop = useStore.subscribe((s) => {
+    if (s.modal === 'none' || !phone()) return;
+    stop();
+    dismissToast(id);
+  });
+  setTimeout(stop, MIC_TOAST_MS);
 }
 
 export function Lobby() {
@@ -114,7 +134,7 @@ export function Lobby() {
 
   if (unreachable) {
     return (
-      <LobbyMessage title="Can’t reach the server" text="The Workchop server isn’t responding. Check that it’s running, then try again.">
+      <LobbyMessage title="Can’t reach the server" text="The Homeoffice server isn’t responding. Check that it’s running, then try again.">
         <button className="btn primary" disabled={retrying} onClick={retry}>
           {retrying ? 'Trying…' : 'Try again'}
         </button>
@@ -174,7 +194,7 @@ function LobbyHeader({ children }: { children?: ReactNode }) {
   return (
     <header className="lobby-header">
       <button className="brand link" onClick={() => goHome()}>
-        <span className="brand-mark">◆</span> Workchop
+        <Logo />
       </button>
       <div className="lobby-header-end">
         {children}

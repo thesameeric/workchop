@@ -263,7 +263,7 @@ export function GithubPanel() {
         <p>
           <strong>Your GitHub inbox, in the office</strong>
         </p>
-        <p className="muted small">See mentions, review requests and Actions runs while you work. Workchop only asks for your notifications.</p>
+        <p className="muted small">See mentions, review requests and Actions runs while you work. Homeoffice only asks for your notifications.</p>
         <ConnectButton label="Connect GitHub" scope="basic" />
       </Prompt>
     );
@@ -274,7 +274,7 @@ export function GithubPanel() {
         <p>
           <strong>Reconnect GitHub</strong>
         </p>
-        <p className="muted small">GitHub no longer accepts Workchop’s access{status.login ? ` for @${status.login}` : ''}. Connect again to see your notifications.</p>
+        <p className="muted small">GitHub no longer accepts Homeoffice’s access{status.login ? ` for @${status.login}` : ''}. Connect again to see your notifications.</p>
         <ConnectButton label="Reconnect GitHub" scope={status.private ? 'private' : 'basic'} />
       </Prompt>
     );

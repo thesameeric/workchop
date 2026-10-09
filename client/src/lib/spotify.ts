@@ -288,7 +288,7 @@ export class SpotifyListenAlong {
       return;
     }
     const player = new sdk.Player({
-      name: 'Workchop lounge',
+      name: 'Homeoffice lounge',
       volume: 0,
       getOAuthToken: (cb) => {
         this.accessToken().then(cb, () => {});

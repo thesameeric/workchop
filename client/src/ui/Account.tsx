@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { MAX_PASSWORD, normalizeEmail, passwordProblem, type AccountUser, type SignInMethod } from '../../../shared/account';
-import { afterSignIn, errorText, signInUrl, signInWithDev, signInWithPassword, signOut } from '../lib/account';
+import { afterSignIn, errorText, signInUrl, signInWithDev, signInWithPassword, signOut, useProvidersKnown } from '../lib/account';
 import { colorFor, initials } from '../lib/color';
 import { navigate, withNext } from '../lib/router';
 import { canSignIn, useStore } from '../state/store';
@@ -329,7 +329,16 @@ function PasswordSignIn({ next }: { next: string }) {
  */
 export function SignInOptions({ next = location.pathname + location.search }: { next?: string } = {}) {
   const providers = useStore((s) => s.providers);
+  const known = useProvidersKnown();
   const oauth = providers.google || providers.apple || providers.github;
+  // The server hasn't said yet (it may be restarting): it's asked again until it does.
+  if (!known) {
+    return (
+      <p className="muted small" role="status">
+        Loading sign-in options…
+      </p>
+    );
+  }
   return (
     <div className="sign-in">
       {providers.password && <PasswordSignIn next={next} />}

@@ -14,8 +14,8 @@ export interface Station {
 }
 
 export const STATIONS: Station[] = [
-  { id: 'lofi', name: 'Workchop Lo-fi', genre: 'Chill beats' },
-  { id: 'ambient', name: 'Workchop Ambient', genre: 'Calm, spacious pads' },
+  { id: 'lofi', name: 'Homeoffice Lo-fi', genre: 'Chill beats' },
+  { id: 'ambient', name: 'Homeoffice Ambient', genre: 'Calm, spacious pads' },
 ];
 
 export function getStation(id: string | null | undefined): Station | undefined {

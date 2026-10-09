@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Space } from '../../../shared/account';
 import { reactionForKey } from '../../../shared/avatar';
@@ -15,7 +15,9 @@ import { isTyping } from '../world/input';
 import { loadWorldModules } from '../world/extensions';
 import { interact } from '../world/movement';
 import { menuKeys, usePopover } from './Account';
+import { LogoMark } from './Brand';
 import { Dock, inviteAction } from './Dock';
+import { LoadBoundary } from './LoadBoundary';
 import { AddIcon, CheckIcon, ChevronDownIcon, CloseIcon, HelpIcon, HomeIcon, VolumeOffIcon } from './icons';
 import { Modals } from './Modals';
 import { NowPlayingPill } from './MusicPanel';
@@ -27,33 +29,6 @@ import { WorldLabels, ZoneIndicator } from './WorldLabels';
 
 // Features' 3D modules load with the scene, so it appears complete.
 const World = lazy(() => Promise.all([import('../world/World'), loadWorldModules()]).then(([world]) => world));
-
-/** The 3D office didn't load: most likely Workchop was updated and this page's files are gone. */
-class WorldBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch(error: unknown) {
-    console.error('The office failed to load.', error);
-  }
-
-  render() {
-    if (!this.state.failed) return this.props.children;
-    return (
-      <div className="loading world-failed">
-        <div>
-          <p>The office didn’t load. Workchop may have just been updated.</p>
-          <button className="btn primary" onClick={() => location.reload()}>
-            Reload
-          </button>
-        </div>
-      </div>
-    );
-  }
-}
 
 /** The workspace switcher: your other workspaces, all of them (home), and making a new one. */
 function WorkspaceMenu({ onClose }: { onClose: (refocus?: boolean) => void }) {
@@ -137,7 +112,9 @@ function OfficeChip() {
   };
   const title = (
     <>
-      <span className="brand-mark">◆</span>
+      <span className="brand-mark">
+        <LogoMark size={16} />
+      </span>
       <strong>{name}</strong>
     </>
   );
@@ -323,11 +300,11 @@ export function OfficeView() {
   useShortcuts();
   return (
     <div className="office">
-      <WorldBoundary>
+      <LoadBoundary what="The office">
         <Suspense fallback={<div className="loading">Loading the office…</div>}>
           <World />
         </Suspense>
-      </WorldBoundary>
+      </LoadBoundary>
       <WorldLabels />
       <Overlays />
       <TopBar />

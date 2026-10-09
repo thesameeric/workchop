@@ -2,7 +2,7 @@
   "name": "workchop-cloudflare",
   "private": true,
   "type": "module",
-  "description": "Runs Workchop's Docker image on Cloudflare Containers behind a small Worker.",
+  "description": "Runs Homeoffice's Docker image on Cloudflare Containers behind a small Worker.",
   "scripts": {
     "build": "npm --prefix .. run build",
     "dev": "npm run build && wrangler dev",

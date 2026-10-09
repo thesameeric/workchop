@@ -7,7 +7,7 @@ import { compose } from '../../mailTemplates';
 /** 12 November 2026, in Lagos (prices are in naira). */
 export const formatDate = (ms: number) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Africa/Lagos' });
 
-const OWNER = 'You get this email because you own this workspace on Workchop.';
+const OWNER = 'You get this email because you own this workspace on Homeoffice.';
 const seatsText = (n: number) => `${n} ${n === 1 ? 'seat' : 'seats'}`;
 /** What happens when it isn't paid in time: a team of 3 people or fewer goes on the Free plan, anything else pauses. */
 const unpaid = (free: boolean) => (free ? 'it goes on the Free plan' : 'the workspace pauses: then only you and its admins can come in');
@@ -37,7 +37,7 @@ export const billingMail = {
       `${w} is paused`,
       `${w} is paused because its plan isn’t paid. Only its owner and admins can come in until the owner pays.`,
       { label: `Open ${w}`, link },
-      'You get this email because you own or run this workspace on Workchop.',
+      'You get this email because you own or run this workspace on Homeoffice.',
     ),
   actionNeeded: (bankLink: string, w: string, amount: number) =>
     compose(`Confirm the payment for ${w}`, `Your bank wants you to confirm the payment of ${formatMoney(amount)} for ${w}.`, { label: 'Confirm with your bank', link: bankLink }, OWNER),
@@ -72,7 +72,7 @@ export const billingMail = {
   launch: (link: string, w: string, by: number) =>
     compose(
       `Choose a plan for ${w}`,
-      `Workchop now has paid plans. Choose one for ${w} by ${formatDate(by)}, or the workspace pauses: then only you and its admins can come in.`,
+      `Homeoffice now has paid plans. Choose one for ${w} by ${formatDate(by)}, or the workspace pauses: then only you and its admins can come in.`,
       { label: 'Choose a plan', link },
       OWNER,
     ),

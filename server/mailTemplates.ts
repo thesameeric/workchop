@@ -29,17 +29,17 @@ ${button}<p style="margin:0;color:#59636e;font-size:13px">${escapeHtml(outro)}</
 
 export const mailTemplates = {
   signup: (link: string) =>
-    compose('Finish signing up', 'Welcome to Workchop! Finish creating your account with the link below. It works for 24 hours.', { label: 'Finish signing up', link }),
+    compose('Finish signing up', 'Welcome to Homeoffice! Finish creating your account with the link below. It works for 24 hours.', { label: 'Finish signing up', link }),
   accountExists: (link: string) =>
     compose(
       'You already have an account',
-      'Someone, hopefully you, tried to sign up for Workchop with this email address, but it already has an account. Sign in as usual, or set a new password with the link below. It works for 1 hour.',
+      'Someone, hopefully you, tried to sign up for Homeoffice with this email address, but it already has an account. Sign in as usual, or set a new password with the link below. It works for 1 hour.',
       { label: 'Set a password', link },
     ),
   resetPassword: (link: string) =>
-    compose('Reset your password', 'Choose a new password for your Workchop account with the link below. It works for 1 hour.', { label: 'Choose a new password', link }),
+    compose('Reset your password', 'Choose a new password for your Homeoffice account with the link below. It works for 1 hour.', { label: 'Choose a new password', link }),
   setPassword: (link: string) =>
-    compose('Set a password', 'Set a password for your Workchop account with the link below, to sign in with your email address. It works for 1 hour.', {
+    compose('Set a password', 'Set a password for your Homeoffice account with the link below, to sign in with your email address. It works for 1 hour.', {
       label: 'Set a password',
       link,
     }),
@@ -47,29 +47,29 @@ export const mailTemplates = {
   confirmEmail: (link: string, account: string) =>
     compose(
       'Confirm your email address',
-      `The Workchop account ${account} asked to use this email address. If that’s your account, open the link below while signed in to it to confirm. It works for 24 hours.`,
+      `The Homeoffice account ${account} asked to use this email address. If that’s your account, open the link below while signed in to it to confirm. It works for 24 hours.`,
       { label: 'Confirm email address', link },
       'If you didn’t ask for this, ignore this email: the address won’t be added to anyone’s account.',
     ),
   emailChanged: (email: string) =>
     compose(
       'Your email address was changed',
-      `The email address of your Workchop account was changed to ${email}, and your other devices were signed out.`,
+      `The email address of your Homeoffice account was changed to ${email}, and your other devices were signed out.`,
       null,
-      'If you didn’t do this, sign in another way (or ask whoever runs your Workchop) and change it back.',
+      'If you didn’t do this, sign in another way (or ask whoever runs your Homeoffice server) and change it back.',
     ),
   /** `by`: who added them; `workspace`: its name. */
   added: (link: string, by: { name: string; email: string }, workspace: string) =>
     compose(
       `${by.name} added you to ${workspace}`,
-      `${by.name} (${by.email}) added you to the Workchop workspace ${workspace}. Open it with the link below.`,
+      `${by.name} (${by.email}) added you to the Homeoffice workspace ${workspace}. Open it with the link below.`,
       { label: `Open ${workspace}`, link },
       'If you don’t know them, you can ignore this email, or leave the workspace from its settings.',
     ),
   invited: (link: string, by: { name: string; email: string }, workspace: string) =>
     compose(
       `${by.name} invited you to ${workspace}`,
-      `${by.name} (${by.email}) invited you to the Workchop workspace ${workspace}. Accept with the link below. It works for 14 days.`,
+      `${by.name} (${by.email}) invited you to the Homeoffice workspace ${workspace}. Accept with the link below. It works for 14 days.`,
       { label: 'Accept the invitation', link },
       'If you don’t know them, you can ignore this email.',
     ),

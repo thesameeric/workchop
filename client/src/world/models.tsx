@@ -8,7 +8,7 @@ import { useStore } from '../state/store';
 import { getEntry } from '../../../shared/catalog';
 import { shade } from '../lib/color';
 import { getItemModel } from './extensions';
-import { sceneLighting } from './layers';
+import { sceneLighting } from './lighting';
 import { Ball, Box, Cyl } from './prims';
 
 // Furniture built from primitives. Every model is centred on its footprint,

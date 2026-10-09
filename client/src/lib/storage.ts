@@ -170,6 +170,20 @@ export function rememberOffice(id: string, name: string): void {
   write('recent', [{ id, name, at: Date.now() }, ...recentOffices().filter((r) => r.id !== id)].slice(0, 8));
 }
 
+/**
+ * Signed out: this browser forgets the workspaces you were in (their names, and what you had open in
+ * each: features/chat's keys), so whoever uses it next doesn't see them.
+ */
+export function forgetVisits(): void {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key === PREFIX + 'recent' || key === PREFIX + 'entered' || key.startsWith(PREFIX + 'chat:')) localStorage.removeItem(key);
+    }
+  } catch {
+    // Nothing kept, then.
+  }
+}
+
 export interface DevicePrefs {
   audioIn?: string;
   videoIn?: string;

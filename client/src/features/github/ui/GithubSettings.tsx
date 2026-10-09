@@ -58,7 +58,7 @@ function Connected({ status }: { status: GithubStatus }) {
       </div>
       {status.needsReconnect && (
         <div className="gh-alert">
-          <p className="small">GitHub no longer accepts Workchop’s access. Connect again to see your notifications.</p>
+          <p className="small">GitHub no longer accepts Homeoffice’s access. Connect again to see your notifications.</p>
           <button className="btn small primary" disabled={connecting} onClick={() => connectGithub(status.private ? 'private' : 'basic')}>
             {connecting ? 'Connecting…' : 'Reconnect GitHub'}
           </button>

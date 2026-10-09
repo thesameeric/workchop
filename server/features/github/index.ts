@@ -95,7 +95,7 @@ export function githubFeature(options: GithubOptions = {}): Feature {
         return;
       }
       if (!ctx.publicOrigin) {
-        console.warn('[github] GitHub notifications need PUBLIC_URL (the address people open Workchop at); they are off');
+        console.warn('[github] GitHub notifications need PUBLIC_URL (the address people open Homeoffice at); they are off');
         off();
         return;
       }

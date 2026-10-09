@@ -32,7 +32,7 @@ export function SetupHints({ clientId }: { clientId?: string }) {
       </li>
       {clientId && (
         <li>
-          Missing an organization? Its owner may need to approve Workchop:{' '}
+          Missing an organization? Its owner may need to approve Homeoffice:{' '}
           <a href={`https://github.com/settings/connections/applications/${encodeURIComponent(clientId)}`} {...EXTERNAL}>
             request access
           </a>
@@ -100,7 +100,7 @@ export function SignInToConnect() {
       <p>
         <strong>Sign in, then connect GitHub here.</strong>
       </p>
-      <p className="muted small">Your GitHub connection is kept with your Workchop account.</p>
+      <p className="muted small">Your GitHub connection is kept with your Homeoffice account.</p>
       <SignInOptions />
     </div>
   );

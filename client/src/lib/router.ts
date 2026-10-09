@@ -28,6 +28,29 @@ function takeToken(name: string): string | null {
   return token;
 }
 
+let features: Promise<void> | undefined;
+let featuresSettled = false;
+
+/**
+ * Loads the features (client/src/features), once: they add the office's panels, the lobbies and pages
+ * of their own. Only what needs them waits for them, so guests on the home page never do.
+ */
+export function loadFeatures(): Promise<void> {
+  features ??= import('../features')
+    .then(() => {})
+    .finally(() => {
+      featuresSettled = true;
+    });
+  return features;
+}
+
+/** Once the features have loaded, a page that waited for them shows (or home, if it's none of theirs). */
+function again(): void {
+  const { phase, page } = getState();
+  // Routed again either way: the page shows when the store changes, which registering it doesn't do.
+  if (phase === 'page' && page) route();
+}
+
 /** Sync the app phase with the URL. */
 export function route(): void {
   const path = location.pathname.replace(/(.)\/$/, '$1');
@@ -47,9 +70,11 @@ export function route(): void {
     setState((s) => ({ phase: 'auth', officeId: null, authPage, linkToken: token ?? (s.phase === 'auth' && s.authPage === authPage ? s.linkToken : null) }));
   } else if (path === '/profile' || path === '/welcome') {
     setState({ phase: path === '/profile' ? 'profile' : 'welcome', officeId: null });
-  } else if (pageFor(path)) {
-    // A feature's own page (ui/pages.ts).
+  } else if (pageFor(path) || (path !== '/' && !featuresSettled)) {
+    // A feature's own page (ui/pages.ts). Before the features have loaded any other address may be
+    // one: nothing shows until they have.
     setState({ phase: 'page', officeId: null, page: path });
+    if (!pageFor(path)) void loadFeatures().then(again, again);
   } else {
     setState({ phase: 'landing', officeId: null });
   }
@@ -125,6 +150,40 @@ export function withNext(path: string, next: string): string {
 
 export function officeUrl(id: string): string {
   return `${location.origin}/o/${id}`;
+}
+
+const SITE = 'Homeoffice';
+const AUTH_TITLES: Record<AuthPage, string> = {
+  signin: 'Sign in',
+  signup: 'Create account',
+  forgot: 'Forgot password',
+  reset: 'Choose a password',
+  'confirm-email': 'Confirm your email',
+  invite: 'Join a workspace',
+};
+/** Features' pages (ui/pages.ts), by path. */
+const PAGE_TITLES: Record<string, string> = { '/billing/return': 'Payment', '/privacy': 'Privacy Policy', '/terms': 'Terms of Service' };
+
+type TitleState = Pick<ReturnType<typeof getState>, 'phase' | 'authPage' | 'linkToken' | 'page' | 'account'>;
+
+/**
+ * The browser tab's title: what's showing (a workspace by its name, once known; null when there's no
+ * such workspace), then Homeoffice. Null for guests on the home page, which keeps its own from
+ * index.html (as search results show it).
+ */
+export function pageTitle({ phase, authPage, linkToken, page, account }: TitleState, officeName?: string | null): string | null {
+  if (phase === 'landing' && !account) return null;
+  const what = {
+    landing: 'Your workspaces',
+    lobby: officeName === null ? 'Office not found' : officeName,
+    office: officeName ?? undefined,
+    // The emailed sign-up link's page.
+    auth: authPage === 'signup' && linkToken ? 'Finish signing up' : AUTH_TITLES[authPage],
+    profile: 'Profile',
+    welcome: 'Welcome',
+    page: page ? PAGE_TITLES[page] : undefined,
+  }[phase];
+  return what ? `${what} · ${SITE}` : SITE;
 }
 
 /** Home, to stay: in this tab the home page no longer goes on to your default workspace. */

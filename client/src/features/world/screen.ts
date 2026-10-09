@@ -1,4 +1,5 @@
 import { appInfo as appDef, HEADS_DOWN, OTHER_APP } from '../../../../shared/apps';
+import { LOGO_PATH } from '../../ui/Brand';
 import { HUGEICONS, type HugeiconName } from '../../ui/hugeicons';
 
 // What a desk monitor shows while someone sits at it: the app they're in (PlayerState.app, set by
@@ -46,14 +47,18 @@ export function drawBoot(ctx: CanvasRenderingContext2D, w: number, h: number): v
   glow.addColorStop(1, 'rgba(91, 108, 255, 0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, w, h);
+  const s = h * 0.34;
+  ctx.save();
+  ctx.translate(w / 2 - s / 2, h * 0.44 - s / 2);
+  ctx.scale(s / 24, s / 24);
   ctx.fillStyle = '#ffffff';
+  ctx.fill(new Path2D(LOGO_PATH), 'evenodd');
+  ctx.restore();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `700 ${Math.round(h * 0.3)}px ${FONT}`;
-  ctx.fillText('◆', w / 2, h * 0.44);
   ctx.font = `600 ${Math.round(h * 0.09)}px ${FONT}`;
   ctx.fillStyle = 'rgba(255,255,255,0.8)';
-  ctx.fillText('Workchop', w / 2, h * 0.72);
+  ctx.fillText('Homeoffice', w / 2, h * 0.72);
 }
 
 export interface ScreenContent {

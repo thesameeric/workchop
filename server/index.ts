@@ -89,7 +89,7 @@ function originOf(publicUrl: string | null): string | null {
   } catch {
     // Reported below.
   }
-  throw new Error(`PUBLIC_URL must be the address people open Workchop at, like https://office.example.com (got "${publicUrl}")`);
+  throw new Error(`PUBLIC_URL must be the address people open Homeoffice at, like https://office.example.com (got "${publicUrl}")`);
 }
 
 export async function startServer(opts: ServerOptions = {}) {
@@ -116,7 +116,7 @@ export async function startServer(opts: ServerOptions = {}) {
   await store.init();
   if (!opts.quiet) console.log(`[workchop] storing data in ${db.description}`);
   if (!publicOrigin && !opts.quiet) {
-    console.warn('[workchop] PUBLIC_URL is not set: sign-in and GitHub are off, and requests from other sites are let through. Set it to the address people open Workchop at.');
+    console.warn('[workchop] PUBLIC_URL is not set: sign-in and GitHub are off, and requests from other sites are let through. Set it to the address people open Homeoffice at.');
   }
 
   // Someone an invitation just made a member who is in that office as a guest is a member at once.
@@ -347,7 +347,7 @@ export async function startServer(opts: ServerOptions = {}) {
   } else {
     // In development the page is served by Vite; point lost visitors there.
     app.get(/.*/, (_req, res) => {
-      res.type('text').send('This is the Workchop API server. Open the app at the "Local:" address that npm run dev printed (usually http://localhost:5173).');
+      res.type('text').send('This is the Homeoffice API server. Open the app at the "Local:" address that npm run dev printed (usually http://localhost:5173).');
     });
   }
 
