@@ -1,5 +1,6 @@
 import type { Feature } from '../features';
 import { feature as audio } from './audio';
+import { feature as billing } from './billing';
 import { feature as chat } from './chat';
 import { feature as coins } from './coins';
 import { feature as github } from './github';
@@ -17,7 +18,7 @@ import { feature as world } from './world';
  * adds them, for development. Off, they have no tables, routes, socket handlers or timers.
  */
 export function serverFeatures(env: NodeJS.ProcessEnv = process.env): Feature[] {
-  return [chat, world, audio, presence, support, ...(coinsOn(env) ? [coins] : []), weather, github];
+  return [chat, world, audio, presence, support, billing, ...(coinsOn(env) ? [coins] : []), weather, github];
 }
 
 /** The features left out by a setting (their tables stay in a database that had them on). */

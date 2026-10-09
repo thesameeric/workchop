@@ -12,6 +12,7 @@ import {
   setPendingInvite,
   takeSignUpNext,
 } from '../lib/storage';
+import { finePointer } from '../lib/touch';
 import { canSignIn, getState, toast, useStore } from '../state/store';
 import { Link, NewPasswordField, ProviderButtons, SignInOptions, UserAvatar } from './Account';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
@@ -106,7 +107,7 @@ function EmailField({ value, onChange }: { value: string; onChange: (value: stri
   return (
     <div className="field">
       <label htmlFor={id}>Email</label>
-      <input id={id} type="email" value={value} onChange={(e) => onChange(e.target.value)} placeholder="you@example.com" maxLength={254} autoComplete="email" autoFocus />
+      <input id={id} type="email" value={value} onChange={(e) => onChange(e.target.value)} placeholder="you@example.com" maxLength={254} autoComplete="email" autoFocus={finePointer()} />
     </div>
   );
 }

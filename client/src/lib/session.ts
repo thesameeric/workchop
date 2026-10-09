@@ -376,6 +376,14 @@ export class OfficeSession {
         toast(`You were in ${name} a while without a question. Come back in when you have one.`);
         return;
       }
+      // Its plan lapsed: back to the lobby, which says it's closed. Only members are told why.
+      if (reason === 'locked') {
+        const { role } = getState();
+        const member = !!role && role !== 'guest';
+        backToLobby();
+        toast(member ? `${name} is paused until its owner pays for it.` : `${name} isn’t open right now.`, 'error');
+        return;
+      }
       leaveOffice();
       toast(reason === 'guests-off' ? `Guests can no longer come into ${name}.` : `You were removed from ${name}.`, 'error');
     });

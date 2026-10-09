@@ -10,7 +10,8 @@ const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt
 
 const IGNORE = 'If you didn’t ask for this, you can ignore this email.';
 
-function compose(subject: string, intro: string, action: { label: string; link: string } | null, outro = IGNORE): MailContent {
+/** A message with an optional button (`action`) and a closing line; features build their own emails with it. */
+export function compose(subject: string, intro: string, action: { label: string; link: string } | null, outro = IGNORE): MailContent {
   const text = action ? `${intro}\n\n${action.label}: ${action.link}\n\n${outro}\n` : `${intro}\n\n${outro}\n`;
   const button = action
     ? `<p style="margin:0 0 20px"><a href="${escapeHtml(action.link)}" style="display:inline-block;padding:10px 18px;border-radius:8px;background:#4f46e5;color:#ffffff;text-decoration:none;font-weight:600">${escapeHtml(action.label)}</a></p>

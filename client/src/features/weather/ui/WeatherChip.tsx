@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { getTimes } from 'suncalc';
 import { conditionOf, type WeatherReport } from '../../../../../shared/weather';
 import { ago } from '../../../lib/time';
+import { finePointer } from '../../../lib/touch';
 import { usePopover } from '../../../ui/Account';
 import { CloudyIcon, DropletIcon, FogIcon, PinIcon, SunCloudIcon, SunriseIcon, SunsetIcon, WindIcon, type IconComponent } from '../../../ui/icons';
 import { clockAt, describe, formatPrecipitation, formatTemp, formatVisibility, formatWind } from '../format';
@@ -159,7 +160,7 @@ function WeatherPopover({
         <>
           <h3>{hasPlace ? 'Change location' : 'Your local weather'}</h3>
           {!hasPlace && <p className="muted small">Choose a city or use your device’s location.</p>}
-          <LocationPicker autoFocus={changing} onDone={() => setChanging(false)} />
+          <LocationPicker autoFocus={changing && finePointer()} onDone={() => setChanging(false)} />
           {hasPlace && (
             <button type="button" className="btn small" onClick={() => setChanging(false)}>
               Back

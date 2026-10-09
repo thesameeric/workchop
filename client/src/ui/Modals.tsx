@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { sanitizeName } from '../../../shared/avatar';
 import { signOut } from '../lib/account';
 import { getSession } from '../lib/session';
-import { getState, setState, useStore } from '../state/store';
+import { setState, useStore } from '../state/store';
 import { AvatarEditor, AvatarPreview } from './AvatarEditor';
 import { CloseIcon } from './icons';
 import { ProfileSections } from './Profile';
@@ -64,14 +64,33 @@ function AvatarModal() {
 
 function SettingsModal() {
   const sections = useSettingsSections();
-  const [id, setId] = useState(() => getState().settingsSection);
+  const wanted = useStore((s) => s.settingsSection);
+  const [id, setId] = useState(wanted);
+  // Sent to a section while open (Workspace's "Add seats" opens Billing).
+  useEffect(() => {
+    if (wanted) setId(wanted);
+  }, [wanted]);
   const section = sections.find((s) => s.id === id) ?? sections[0];
+  // Sent to another section by a button in the last one, focus went with that button: on to the new
+  // section's title, so keyboards and screen readers carry on from there.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const shown = useRef(section?.id);
+  useEffect(() => {
+    if (section?.id === shown.current) return;
+    shown.current = section?.id;
+    if (document.activeElement === document.body) heading.current?.focus();
+  }, [section?.id]);
+  // Picking a section yourself: a later request for any section switches again.
+  const pick = (next: string) => {
+    setId(next);
+    setState({ settingsSection: null });
+  };
   return (
     <Modal title="Settings" onClose={close} className="settings">
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           {sections.map((s) => (
-            <button key={s.id} className={s === section ? 'active' : ''} aria-current={s === section} onClick={() => setId(s.id)}>
+            <button key={s.id} className={s === section ? 'active' : ''} aria-current={s === section} onClick={() => pick(s.id)}>
               <s.icon size={18} />
               {s.title}
             </button>
@@ -79,7 +98,9 @@ function SettingsModal() {
         </nav>
         {section && (
           <section className="settings-body" aria-label={section.title}>
-            <h3>{section.title}</h3>
+            <h3 ref={heading} tabIndex={-1}>
+              {section.title}
+            </h3>
             <section.Component />
           </section>
         )}

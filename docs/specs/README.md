@@ -17,7 +17,7 @@ where the hooks below allow it, to keep merges easy.
 - Plug into the foundation instead of editing shared central files (APIs below). Server code goes in
   `server/features/<name>/`, registered in `server/features/index.ts`; socket events are declared in
   `shared/<name>.ts` by augmenting the event maps; client code goes in `client/src/features/<name>/`
-  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features: chat 100 and 101, world 200, support 700–799; see support.md).
+  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features: chat 100 and 101, world 200, support 700–799 (see support.md), billing 800–899).
 - Icons: only Hugeicons. Add names (from `scripts/hugeicons/icons.css`) to
   `client/src/ui/icon-names.json`, export components in `client/src/ui/icons.tsx`, run `npm run icons`
   (needs `pip install fonttools brotli`). It's fine if another branch also adds icons; the merge
@@ -52,11 +52,32 @@ where the hooks below allow it, to keep merges easy.
   (after a Profile change; their players in open offices are already updated), `realtime`,
   `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy), `socketIp(socket)` (the same
   for a connection; guests get a new socket each time they reconnect), `quiet` (true in tests:
-  skip "it works" log lines) and `onClose(fn)` (runs when the server closes, before the database: stop
-  timers there). `uploads.remove(ids)` deletes stored files; `uploads.addCheck((socketId, officeId,
+  skip "it works" log lines), `onClose(fn)` (runs when the server closes, before the database: stop
+  timers there), `mailer` (send email; `mailer.kind === 'off'` sends nothing, as in production
+  without Resend, so show anything important in the app too), `keepRawBody(path)` (JSON requests to
+  `/api<path>` keep their bytes in `req.rawBody`, type `WithRawBody` from server/features.ts, to check
+  a webhook's signature) and `workspaces.setPolicy(policy)` (one feature only, billing; see below). `uploads.remove(ids)` deletes stored files; `uploads.addCheck((socketId, officeId,
   bytes) => why | null)` refuses an upload (403) before its body is read. Files not attached to a
   chat message within a day are deleted by chat's sweep. Socket ids are visible to everyone in an
   office, so an HTTP route that takes X-Workchop-Socket should also limit by `clientIp`.
+- Workspace policy (`WorkspacePolicy` in server/workspaces.ts, set with `ctx.workspaces.setPolicy`):
+  who may come into an office and how many people it may have. `access(officeId, kind)` →
+  `{ locked, guestCap, staffCap }` is asked for everyone coming in but the owner (and the owner key of an
+  office nobody owns): `locked` refuses everyone but the owner and admins (AccessDenied `'locked'`, on
+  GET /api/offices/:id and on joins; billing locks a paused workspace and a support workspace not paid
+  yet), `guestCap` caps guests at once (default MAX_GUESTS_PER_ROOM, 90; support customers stay at the
+  default), and `staffCap` caps admins coming into a locked office (people at once, LOCKED_STAFF_CAP
+  for billing; the owner always gets in). `seatLimit(tx, officeId)` → a number, null (no limit)
+  or `'locked'` is asked inside `Workspaces.add()`'s transaction after `lockSeats(tx, officeId)`: seats
+  are counted before and after (`usedSeats(q, officeId)`: memberships plus open invitations; guests
+  and customers never count), so turning an invitation into a membership always works, and adding
+  someone past the limit answers 402 `{code: 'seats-full'}` (403 `{code: 'locked'}` when locked).
+  `notes(offices)` adds `billing` ('locked' | 'past-due' | 'unpaid') to GET /api/me/spaces cards, and
+  `ownerChanged(officeId, from, to)` runs after an ownership transfer (not awaited; failures logged).
+  Take `lockSeats` for any change to an office's seats or plan. Without a policy nothing is counted
+  or locked. With one, invitations that expired no longer hold a seat, so they can't be resent (404):
+  the address is added again instead; without one they can, as before. An admin made a member while
+  the office is locked is taken out at once (`lockChanged`).
 - RealtimeApi (ctx.realtime): `onSocket(s => s.socket.on(...))`, `onJoin(s => ...)`,
   `onLeave((s, {officeId, player}) => ...)` (may be async; failures are logged), `emitToOffice`,
   `emitToUser`, `playersOfUser`, `players(officeId)` (who is in the office now), `updatePlayer`
@@ -73,8 +94,11 @@ where the hooks below allow it, to keep merges easy.
   (after an office:op), `setRole(officeId, userId, role | null)`
   (after a member's role changed: `office:role` to them, or with null `office:removed` and out of the
   office), `removeGuests(officeId)` and `accessChanged(officeId, guests)` (after the guest link
-  changed: `office:role` to everyone, guests out when it's off). The workspace routes call these; features
-  rarely need to.
+  changed: `office:role` to everyone, guests out when it's off), and `lockChanged(officeId, locked,
+  staffCap?)` (after the workspace policy locked or unlocked the office: when locked, everyone but the
+  owner and admins is taken out with `office:removed` 'locked', then the admins who came in last
+  until `staffCap` people are left; never the owner or the owner key's holder). The workspace routes
+  call these; features rarely need to.
 - SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (the
   person's role in the office: 'owner' | 'admin' | 'member' | 'guest', null before joining),
   `isOwner()` (the owner, or the owner-key holder of an office nobody has claimed), `mayEdit()`
@@ -108,17 +132,22 @@ where the hooks below allow it, to keep merges easy.
 - Panels: `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?,
   badgeTone?: 'alert'|'neutral', shortcut? })` from client/src/ui/panels.tsx (Support 5 for staff in
   support workspaces, chat 10, music 20, people 30, coins' wallet 35 when on, My desk 40, GitHub 45;
-  customers' chat panel is the support feature's, under the same id `chat`; build is dock:false; `inMore` puts the
-  button in the dock's More menu on phones, and its alert badge shows on the More button). Store
+  customers' chat panel is the support feature's, under the same id `chat`; build is dock:false). On
+  phone-sized screens the dock shows at most two panel buttons, the first by order that aren't
+  `inMore` or `hideOnMobile`; the rest (always the `inMore` ones) go in its More menu, and their alert
+  badges show on the More button. Store
   `panel` is a string id; open with `setPanel(id)`. Returns a function that removes the panel (for
   features shown only on some servers or to some people). `shortcut` only names a key in the tooltip
   (chat: Enter); don't reuse the office's keys (WASD/arrows, Shift, E, M, V, H, B, Enter, Esc, 1–9, 0,
   and R, Del, Ctrl+D in build mode).
 - Settings sections: `registerSettingsSection({ id, title, icon, order, Component })` from
-  client/src/ui/settings.tsx (Workspace 5, Appearance 10, Audio & video 20, Privacy & status 30, Desktop helper
+  client/src/ui/settings.tsx (Workspace 5, Billing 6, Appearance 10, Audio & video 20, Privacy & status 30, Desktop helper
   35, Weather 40, Integrations 45).
+- Pages: `registerPage({ path, Component })` from client/src/ui/pages.ts, a page of the feature's own
+  at a path outside the offices (billing's /billing/return), registered when the module loads. The
+  router shows it in the store's `'page'` phase (`page` is its path), with nothing else around it.
 - Top bar: `registerTopBarItem({ id, order, Component })` from client/src/ui/topbar.ts (after the
-  music; weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
+  music; billing 5, weather 10). People panel: `registerPersonDetail({ id, order, Component })` from
   client/src/ui/PeoplePanel.tsx, a line under each other person's name (`Component` gets `{ player }`;
   weather 10), and `registerPersonAction({ id, order, Component })` from client/src/ui/personActions.ts,
   a button next to them (coins 10, when on). All render null when there's nothing to show.
@@ -160,5 +189,6 @@ where the hooks below allow it, to keep merges easy.
   (server-set only via realtime.updatePlayer) and customer?: boolean (server-set: true on join for
   customers, the guests of support workspaces, who carry no userId; false in a player:updated when
   one is made a member; see isCustomer in shared/workspace.ts). office:removed reasons: 'removed',
-  'guests-off', 'idle' (a customer without an open ticket for CUSTOMER_IDLE_MS). OfficeItem.data is ItemData; catalog entries may define
+  'guests-off', 'idle' (a customer without an open ticket for CUSTOMER_IDLE_MS), 'locked' (the
+  workspace was paused for not being paid; see shared/billing.ts). OfficeItem.data is ItemData; catalog entries may define
   sanitizeData(raw) used by sanitizeItem; build moves keep data for an unchanged type.

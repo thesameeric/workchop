@@ -60,6 +60,13 @@ interface Env {
   S3_REGION?: string;
   /** Delete chat conversations quiet for this many days (default: keep them). */
   CHAT_RETENTION_DAYS?: string;
+  /** Paystack's secret key: turns billing (paid plans) on. */
+  PAYSTACK_SECRET_KEY?: string;
+  /** At least 32 random characters: the daily cron shows it to run billing's renewals (BILLING_INTERNAL_TOKEN). */
+  BILLING_INTERNAL_TOKEN?: string;
+  /** Kobo per seat: Team a month, Support a year (empty: the defaults). */
+  BILLING_TEAM_SEAT_PRICE?: string;
+  BILLING_SUPPORT_SEAT_PRICE?: string;
 }
 
 const PASSED_TO_SERVER = [
@@ -96,6 +103,10 @@ const PASSED_TO_SERVER = [
   'S3_SECRET_ACCESS_KEY',
   'S3_REGION',
   'CHAT_RETENTION_DAYS',
+  'PAYSTACK_SECRET_KEY',
+  'BILLING_INTERNAL_TOKEN',
+  'BILLING_TEAM_SEAT_PRICE',
+  'BILLING_SUPPORT_SEAT_PRICE',
 ] as const;
 
 /** The port the server listens on inside the container (the Dockerfile's PORT). */
@@ -121,6 +132,13 @@ const HELPER_RETRY_S = 60;
  * if reaching this object counted as activity, helpers couldn't keep the container running.
  */
 const HELPER_RETRY_RUNNING_S = IDLE_MS / 1000 + 60;
+/** The header with BILLING_INTERNAL_TOKEN on the cron's tick; never passed on from a visitor. */
+const INTERNAL_HEADER = 'x-workchop-internal';
+/** How long the tick may take (renewals are charged one after another). */
+const TICK_MS = 5 * 60 * 1000;
+
+/** Paths only this Worker may call on the server (billing's tick): 404 to the public (the server's routes ignore case). */
+const isInternal = (pathname: string) => /^\/(api\/)?internal\//i.test(pathname);
 
 /** A short fingerprint of the server's settings, to notice when secrets change. */
 async function fingerprint(env: Record<string, string>): Promise<string> {
@@ -162,14 +180,8 @@ export class WorkchopServer extends DurableObject<Env> {
       const wait = container.running ? HELPER_RETRY_RUNNING_S : HELPER_RETRY_S;
       return new Response(null, { status: 204, headers: { 'retry-after': String(wait) } });
     }
-    // The container stops when idle (or when Cloudflare moves it): start a new one when needed.
-    if (!container.running) this.ready = null;
-    this.ready ??= this.start().catch((err) => {
-      this.ready = null;
-      throw err;
-    });
     try {
-      await this.ready;
+      await this.started();
     } catch (err) {
       console.error('[workchop] the server did not start:', err);
       return unavailable('Workchop is starting up. Please try again in a moment.');
@@ -177,6 +189,7 @@ export class WorkchopServer extends DurableObject<Env> {
 
     const forwarded = new Request(new URL(url.pathname + url.search, `http://container:${PORT}`), request);
     forwarded.headers.delete('host');
+    forwarded.headers.delete(INTERNAL_HEADER);
     try {
       // Returned as is, so WebSocket upgrades pass straight through to the server.
       return await container.getTcpPort(PORT).fetch(forwarded);
@@ -185,6 +198,36 @@ export class WorkchopServer extends DurableObject<Env> {
       console.error('[workchop] request to the server failed:', err);
       return unavailable('Workchop is restarting. Please try again in a moment.');
     }
+  }
+
+  /** Starts the container when it isn't running (it stops when idle, or when Cloudflare moves it). */
+  private started(): Promise<void> {
+    if (!this.ctx.container!.running) this.ready = null;
+    this.ready ??= this.start().catch((err) => {
+      this.ready = null;
+      throw err;
+    });
+    return this.ready;
+  }
+
+  /**
+   * Billing's daily run (renewals, retries, locks, reminders), from the cron: starts the server if
+   * it's asleep and calls its internal tick directly, never through the public path. The container
+   * then stops by itself once idle.
+   */
+  async billingTick(): Promise<void> {
+    const container = this.ctx.container;
+    const token = this.env.BILLING_INTERNAL_TOKEN;
+    if (!container || !token || (!this.env.DATABASE_URL && this.env.EPHEMERAL_STORAGE !== 'true')) return;
+    await this.started();
+    const res = await container.getTcpPort(PORT).fetch('http://container/api/internal/billing/tick', {
+      method: 'POST',
+      headers: { [INTERNAL_HEADER]: token },
+      signal: AbortSignal.timeout(TICK_MS),
+    });
+    const summary = await res.text();
+    if (!res.ok) throw new Error(`the billing tick answered ${res.status}`);
+    console.log(`[workchop] billing tick: ${summary}`);
   }
 
   private async start(): Promise<void> {
@@ -256,10 +299,21 @@ export class WorkchopServer extends DurableObject<Env> {
   }
 }
 
+// Workchop keeps live rooms in memory, so everyone must reach the same server.
+function server(env: Env) {
+  const hint = env.LOCATION_HINT?.trim() as DurableObjectLocationHint | undefined;
+  return env.WORKCHOP.getByName('workchop', hint ? { locationHint: hint } : undefined);
+}
+
 export default {
-  fetch(request, env): Promise<Response> {
-    // Workchop keeps live rooms in memory, so everyone must reach the same server.
-    const hint = env.LOCATION_HINT?.trim() as DurableObjectLocationHint | undefined;
-    return env.WORKCHOP.getByName('workchop', hint ? { locationHint: hint } : undefined).fetch(withGeo(request, request.cf));
+  async fetch(request, env): Promise<Response> {
+    if (isInternal(new URL(request.url).pathname)) {
+      return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    return server(env).fetch(withGeo(request, request.cf));
+  },
+  // Daily (wrangler.jsonc's triggers.crons), only with billing on.
+  async scheduled(_controller, env, ctx) {
+    if (env.PAYSTACK_SECRET_KEY && env.BILLING_INTERNAL_TOKEN) ctx.waitUntil(server(env).billingTick());
   },
 } satisfies ExportedHandler<Env>;

@@ -4,7 +4,7 @@ import type { AccessDenied, OfficeInfo, Role } from '../../../shared/workspace';
 import { saveCharacter, signOut } from '../lib/account';
 import { fetchOfficeInfo, type OfficeLookup } from '../lib/api';
 import { media } from '../lib/media';
-import { defaultRefused, goHome, navigate, withNext } from '../lib/router';
+import { defaultAnswered, goHome, navigate, withNext } from '../lib/router';
 import { enterOffice, JoinRefused } from '../lib/session';
 import { enteredBefore, forgetGuestToken, getGuestToken, loadDevices, rememberEntered, rememberOffice } from '../lib/storage';
 import { canSignIn, getState, setState, toast, useStore } from '../state/store';
@@ -64,7 +64,7 @@ export function Lobby() {
         // A guest link that no longer works is forgotten.
         if (l && 'denied' in l && l.denied === 'link') forgetGuestToken(officeId);
         // Your default workspace turned you away: home instead.
-        if ((l === null || 'denied' in l) && defaultRefused(officeId)) return;
+        if (defaultAnswered(officeId, l === null || 'denied' in l)) return;
         setLookup(l);
         setUnreachable(false);
       })
@@ -184,7 +184,8 @@ function LobbyHeader({ children }: { children?: ReactNode }) {
   );
 }
 
-function LobbyMessage({ title, text, locked, children }: { title: string; text: ReactNode; locked?: boolean; children?: ReactNode }) {
+/** A page with a message and what to do (also a feature page's, like billing's return page). */
+export function LobbyMessage({ title, text, locked, children }: { title: string; text: ReactNode; locked?: boolean; children?: ReactNode }) {
   return (
     <div className="lobby">
       <LobbyHeader />
@@ -208,11 +209,26 @@ function LobbyMessage({ title, text, locked, children }: { title: string; text: 
 function AccessDeniedPage({ reason }: { reason: AccessDenied }) {
   const account = useStore((s) => s.account);
   const signIn = useStore(canSignIn);
+  const officeId = useStore((s) => s.officeId);
   const home = (
     <button className="btn wide" onClick={() => goHome()}>
       Back home
     </button>
   );
+  // Its plan lapsed (shared/billing.ts): only the owner and admins can come in. Only members are told
+  // why; someone with its guest (or customer) link is a visitor, signed in or not.
+  if (reason === 'locked') {
+    const member = !!account && !(officeId && getGuestToken(officeId));
+    return (
+      <LobbyMessage
+        title={member ? 'Paused' : 'Closed for now'}
+        text={member ? 'This workspace is paused until its owner pays for it.' : 'This workspace isn’t open right now. Please try again later.'}
+        locked
+      >
+        {home}
+      </LobbyMessage>
+    );
+  }
   if (account && reason === 'members-only') {
     return (
       <LobbyMessage

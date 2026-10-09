@@ -66,7 +66,13 @@ export interface Space {
   /** Their last visit; null when they haven't been there yet. */
   lastVisitAt: number | null;
   online: number;
+  /** A billing problem to show on its card (see shared/billing.ts); absent when there is none. */
+  billing?: SpaceBilling;
 }
+
+/** 'locked': only the owner and admins can come in; 'past-due': a payment is overdue (owner and admins
+ * only); 'unpaid': a support workspace that hasn't been paid for yet (owner and admins only). */
+export type SpaceBilling = 'locked' | 'past-due' | 'unpaid';
 
 export const MAX_USER_NAME = 32;
 export const MIN_PASSWORD = 10;

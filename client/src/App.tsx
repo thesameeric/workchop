@@ -6,6 +6,7 @@ import { AuthPage } from './ui/AuthPage';
 import { Landing } from './ui/Landing';
 import { Lobby } from './ui/Lobby';
 import { OfficeView } from './ui/OfficeView';
+import { pageFor } from './ui/pages';
 import { ProfilePage } from './ui/Profile';
 import { Toasts } from './ui/Toasts';
 import { Welcome } from './ui/Welcome';
@@ -13,7 +14,9 @@ import { Welcome } from './ui/Welcome';
 function Page() {
   const phase = useStore((s) => s.phase);
   const officeId = useStore((s) => s.officeId);
+  const page = useStore((s) => (s.phase === 'page' && s.page ? pageFor(s.page) : undefined));
   if (phase === 'office') return <OfficeView />;
+  if (page) return <page.Component key={page.path} />;
   // Another office's lobby starts afresh.
   if (phase === 'lobby') return <Lobby key={officeId} />;
   if (phase === 'auth') return <AuthPage />;

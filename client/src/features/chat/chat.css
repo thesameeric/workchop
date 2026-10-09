@@ -1543,6 +1543,7 @@ button.rail-section {
   flex-direction: column;
   gap: 1px;
   max-height: min(320px, 45vh);
+  max-height: min(320px, 45dvh);
   margin: 0 -6px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -1761,13 +1762,13 @@ button.rail-section {
 @media (max-width: 720px) {
   /* Solid, so nothing behind it shows through its small text. */
   .side-panel.chat {
-    height: min(78vh, calc(100dvh - 96px));
+    height: min(78vh, calc(100dvh - 96px - env(safe-area-inset-bottom)));
     background: var(--glass-solid);
   }
 
   /* In a call it ends below the video tiles. */
   .office:has(> .video-strip) .side-panel.chat {
-    height: min(78vh, calc(100dvh - 236px));
+    height: min(78vh, calc(100dvh - 236px - env(safe-area-inset-bottom)));
   }
 
   .msg {
@@ -1778,13 +1779,14 @@ button.rail-section {
     right: 8px;
   }
 
+  /* Clear of the phone's home indicator. */
   .lightbox {
-    padding: 64px 8px 16px;
+    padding: 64px 8px calc(16px + env(safe-area-inset-bottom));
   }
 
   .lightbox-nav {
     top: auto;
-    bottom: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
     transform: none;
   }
 }

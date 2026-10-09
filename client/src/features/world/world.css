@@ -497,9 +497,10 @@
     left: 8px;
     right: 8px;
     top: auto;
-    bottom: 76px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
     width: auto;
     max-height: 62vh;
+    max-height: 62dvh;
     transform: none !important;
     visibility: visible !important;
     z-index: 29;

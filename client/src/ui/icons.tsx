@@ -159,3 +159,6 @@ export const PawIcon = icon('paw-print');
 export const SparklesIcon = icon('sparkles');
 export const StickyNoteIcon = icon('sticky-note-02');
 export const DeskIcon = icon('desk');
+// Billing
+export const CreditCardIcon = icon('credit-card');
+export const PrintIcon = icon('printer');

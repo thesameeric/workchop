@@ -1,4 +1,5 @@
 import { getState, setState, type AuthPage } from '../state/store';
+import { pageFor } from '../ui/pages';
 import { closeOffice } from './session';
 import { choseHome, chooseHome, setGuestToken } from './storage';
 
@@ -46,6 +47,9 @@ export function route(): void {
     setState((s) => ({ phase: 'auth', officeId: null, authPage, linkToken: token ?? (s.phase === 'auth' && s.authPage === authPage ? s.linkToken : null) }));
   } else if (path === '/profile' || path === '/welcome') {
     setState({ phase: path === '/profile' ? 'profile' : 'welcome', officeId: null });
+  } else if (pageFor(path)) {
+    // A feature's own page (ui/pages.ts).
+    setState({ phase: 'page', officeId: null, page: path });
   } else {
     setState({ phase: 'landing', officeId: null });
   }
@@ -76,12 +80,15 @@ export function openDefault(spaceId: string | undefined): boolean {
   return true;
 }
 
-/** The default workspace turned you away (403/404): back home, and no more trying in this tab. */
-export function defaultRefused(officeId: string): boolean {
+/**
+ * The default workspace's first lookup answered: when it turned you away (403/404), back home, and no
+ * more trying in this tab; answers whether it did. Later refusals there (say, once it's paused) show.
+ */
+export function defaultAnswered(officeId: string, refused: boolean): boolean {
   if (defaultId !== officeId) return false;
   defaultId = null;
-  goHome('/', { replace: true });
-  return true;
+  if (refused) goHome('/', { replace: true });
+  return refused;
 }
 
 /** Goes to a page of the app (a path, with a query if any); `replace` leaves no history entry behind. */

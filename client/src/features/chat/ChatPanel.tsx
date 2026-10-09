@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { MAX_CHANNEL_NAME, MAX_TOPIC, type ChatChannel, type ConvKey } from '../../../../shared/chat';
 import { plainText } from '../../../../shared/chatText';
+import { finePointer } from '../../lib/touch';
 import { canSignIn, useStore } from '../../state/store';
 import { usePopover } from '../../ui/Account';
 import {
@@ -462,7 +463,7 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
             <HashIcon size={16} />
             <input
               value={name}
-              autoFocus={canRename}
+              autoFocus={canRename && finePointer()}
               disabled={!canRename}
               maxLength={MAX_CHANNEL_NAME}
               placeholder="e.g. design"
@@ -481,7 +482,7 @@ function ChannelForm({ channel, onClose }: { channel: ChatChannel | null; onClos
         </label>
         <label className="field">
           <span>Topic (optional)</span>
-          <input value={topic} autoFocus={!canRename} maxLength={MAX_TOPIC} placeholder="What’s it about?" onChange={(e) => setTopic(e.target.value)} />
+          <input value={topic} autoFocus={!canRename && finePointer()} maxLength={MAX_TOPIC} placeholder="What’s it about?" onChange={(e) => setTopic(e.target.value)} />
         </label>
         {channel && !canRename && (
           <p className="muted small">{channel.isDefault ? '#general keeps its name.' : 'Only the owner and admins can rename channels.'}</p>
@@ -524,7 +525,7 @@ function NewMessage({ onClose }: { onClose: () => void }) {
         <h3>New message</h3>
         <input
           value={query}
-          autoFocus
+          autoFocus={finePointer()}
           placeholder="Find someone"
           aria-label="Find someone"
           onChange={(e) => setQuery(e.target.value)}
