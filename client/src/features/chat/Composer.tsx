@@ -3,6 +3,7 @@ import { MAX_ATTACHMENTS, MAX_MESSAGE, type ChatAttachment, type ChatMention, ty
 import { labelsToTokens, type MentionPick } from '../../../../shared/chatText';
 import type { UploadedFile } from '../../../../shared/uploads';
 import { getSession } from '../../lib/session';
+import { finePointer } from '../../lib/touch';
 import { toast, useStore } from '../../state/store';
 import { AtIcon, AttachIcon, CloseIcon, RotateIcon, SendIcon } from '../../ui/icons';
 import { Avatar, fileIcon, formatBytes } from './parts';
@@ -332,7 +333,8 @@ export function Composer({
     });
     if (!added.length) return;
     setFiles((cur) => [...cur, ...added]);
-    input.current?.focus();
+    // Ready to add a few words, except on touch screens (where that pops up the keyboard).
+    if (finePointer()) input.current?.focus();
   };
 
   const dropFile = (key: string) => {
@@ -354,7 +356,7 @@ export function Composer({
 
   // Ready to type when it opens, except on touch screens (where that pops up the keyboard).
   useEffect(() => {
-    if (matchMedia('(pointer: fine)').matches) input.current?.focus();
+    if (finePointer()) input.current?.focus();
   }, [draftKey]);
 
   const uploading = files.some((f) => f.status === 'uploading' || f.status === 'waiting');

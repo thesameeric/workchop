@@ -16,6 +16,7 @@ import { may } from '../../../../shared/workspace';
 import { colorFor, initials } from '../../lib/color';
 import { backToLobby } from '../../lib/session';
 import { ago } from '../../lib/time';
+import { finePointer } from '../../lib/touch';
 import { canBuild, canSignIn, setPanel, toast, useStore } from '../../state/store';
 import {
   CloseIcon,
@@ -221,7 +222,7 @@ function BoardForm({ board, data, onDone }: { board: OfficeItem; data: BoardData
     <>
       <CardHead icon={<EditIcon size={20} />} title="Edit board" subtitle="Everyone here sees it" />
       <form className="board-form" onSubmit={save}>
-        <input value={title} maxLength={MAX_BOARD_TITLE} placeholder="Title" aria-label="Title" autoFocus onChange={(e) => setTitle(e.target.value)} />
+        <input value={title} maxLength={MAX_BOARD_TITLE} placeholder="Title" aria-label="Title" autoFocus={finePointer()} onChange={(e) => setTitle(e.target.value)} />
         <textarea value={text} maxLength={MAX_BOARD_TEXT} rows={7} placeholder="What it says" aria-label="Text" onChange={(e) => setText(e.target.value)} />
         <div className="note-form-row">
           <span className={`note-count${text.length > MAX_BOARD_TEXT - 50 ? ' near' : ''}`}>{MAX_BOARD_TEXT - text.length}</span>

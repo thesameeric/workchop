@@ -14,27 +14,36 @@ export class ApiError extends Error {
   status: number;
   /** What kind of refusal, for the client to word: 'expired' (an emailed link), 'taken', 'mail-off'… */
   code: string | null;
-  constructor(message: string, status: number, code: string | null) {
+  /** A page to go on to, when the refusal comes with one (billing's 'action-needed': the bank's). */
+  url: string | null;
+  constructor(message: string, status: number, code: string | null, url: string | null = null) {
     super(message);
     this.status = status;
     this.code = code;
+    this.url = url;
   }
 }
 
 async function json<T>(res: Response): Promise<T> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const { error, code } = body as { error?: unknown; code?: unknown };
-    throw new ApiError(typeof error === 'string' ? error : `Request failed (${res.status})`, res.status, typeof code === 'string' ? code : null);
+    const { error, code, url } = body as { error?: unknown; code?: unknown; url?: unknown };
+    const str = (v: unknown) => (typeof v === 'string' ? v : null);
+    throw new ApiError(str(error) ?? `Request failed (${res.status})`, res.status, str(code), str(url));
   }
   return body as T;
 }
 
 /** A JSON request (POST unless `method` says otherwise). */
-async function send<T>(url: string, body?: unknown, method = 'POST'): Promise<T> {
+export async function send<T>(url: string, body?: unknown, method = 'POST'): Promise<T> {
   const init: RequestInit = { method, signal: AbortSignal.timeout(SERVER_TIMEOUT_MS) };
   if (body !== undefined) Object.assign(init, { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return json(await fetch(url, init));
+}
+
+/** A GET of the server's latest answer (never a cached one). */
+export async function load<T>(url: string): Promise<T> {
+  return json(await fetch(url, { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS), cache: 'no-store' }));
 }
 
 export interface ClientConfig {

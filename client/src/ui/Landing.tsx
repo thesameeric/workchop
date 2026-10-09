@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccountUser, Space } from '../../../shared/account';
+import type { AccountUser, Space, SpaceBilling } from '../../../shared/account';
+import { formatMoney } from '../../../shared/billing';
 import { TEMPLATES, type TemplateId } from '../../../shared/templates';
 import type { MemberRole, OfficeKind } from '../../../shared/workspace';
+import { startCheckout } from '../features/billing/api';
+import { SeatPicker } from '../features/billing/SeatPicker';
+import { pricesOf, useBilling } from '../features/billing/state';
 import { errorText } from '../lib/account';
 import { claimOffices, createOffice, fetchSpaces } from '../lib/api';
 import { colorFor, initials } from '../lib/color';
-import { defaultPending, navigate, officeIdFromPath, openDefault } from '../lib/router';
+import { defaultPending, navigate, officeIdFromPath, openDefault, withNext } from '../lib/router';
 import { forgetOwnerKeys, ownerKeys, recentOffices, setGuestToken } from '../lib/storage';
 import { ago } from '../lib/time';
+import { finePointer } from '../lib/touch';
 import { canSignIn, toast, useStore } from '../state/store';
 import { AccountButton, SignInOptions } from './Account';
 import { BuildingIcon, HammerIcon, HeadphonesIcon, LockIcon, SupportIcon, UserEditIcon, type IconComponent } from './icons';
@@ -31,6 +36,9 @@ function parseOfficeInput(raw: string): { id: string; guest: string | null } | n
 
 const ROLE_LABELS: Record<MemberRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' };
 
+/** A workspace's billing problem (shared/billing.ts), on its card. */
+const BILLING_BADGES: Record<SpaceBilling, string> = { locked: 'Paused', 'past-due': 'Payment due', unpaid: 'Not paid' };
+
 /** The kinds of workspace; one without templates yet shows as coming soon. */
 const KINDS: { id: OfficeKind; label: string; description: string; Icon: IconComponent }[] = [
   { id: 'team', label: 'Team', description: 'An office for your team to work together.', Icon: BuildingIcon },
@@ -50,6 +58,7 @@ function SpaceCard({ space }: { space: Space }) {
           <strong>{name}</strong>
           <span className={`badge${space.role === 'member' ? ' neutral' : ''}`}>{ROLE_LABELS[space.role]}</span>
           {space.kind === 'support' && <span className="badge neutral">Support</span>}
+          {space.billing && <span className={`badge billing-badge ${space.billing}`}>{BILLING_BADGES[space.billing]}</span>}
         </span>
         <span className="space-meta">
           <span className={`presence${live ? ' live' : ''}`}>
@@ -196,21 +205,27 @@ function Home({ account }: { account: AccountUser }) {
   );
 }
 
-/** A new workspace: its type, then a name and a template. */
+/** A new workspace: its type, then a name and a template (and, for a paid help desk, its seats). */
 function CreateWorkspace() {
   const [kind, setKind] = useState<OfficeKind>('team');
   const templates = TEMPLATES.filter((t) => t.kind === kind);
   const [name, setName] = useState('');
   const [template, setTemplate] = useState<TemplateId>(templates[0].id);
+  const [seats, setSeats] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const prices = useBilling(pricesOf);
+  const verified = useStore((s) => !!s.account?.emailVerified);
+  // On a server that charges, a help desk is paid for before it opens: on to Paystack once made.
+  const paid = !!prices && kind === 'support';
 
-  // "Create workspace" from inside an office brings you here.
+  // "Create workspace" from inside an office brings you here (ready to type, where that brings up no
+  // keyboard over it).
   useEffect(() => {
     if (location.hash !== '#create') return;
     history.replaceState(history.state, '', location.pathname + location.search);
-    nameRef.current?.focus();
+    if (finePointer()) nameRef.current?.focus();
     nameRef.current?.scrollIntoView({ block: 'center' });
   }, []);
 
@@ -225,12 +240,21 @@ function CreateWorkspace() {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    let id: string;
     try {
-      const { id } = await createOffice(name.trim() || placeholder, kind, template);
-      navigate(`/o/${id}`);
+      id = (await createOffice(name.trim() || placeholder, kind, template)).id;
     } catch (err) {
       setError(errorText(err));
       setBusy(false);
+      return;
+    }
+    if (!paid) return navigate(`/o/${id}`);
+    try {
+      location.assign((await startCheckout(id, seats)).url);
+    } catch (err) {
+      // It's made, unpaid: its owner can pay from Settings > Billing there.
+      navigate(`/o/${id}?billing`);
+      toast(errorText(err), 'error');
     }
   };
 
@@ -254,6 +278,11 @@ function CreateWorkspace() {
             );
           })}
         </div>
+        {prices && kind === 'team' && (
+          <p className="muted small create-price">
+            Free for up to {prices.freeSeats} people. More than that: {formatMoney(prices.prices.team)} a month for each person.
+          </p>
+        )}
       </div>
       <label className="field">
         <span>Name</span>
@@ -270,8 +299,28 @@ function CreateWorkspace() {
           ))}
         </div>
       </div>
-      <button className="btn primary wide" disabled={busy}>
-        {busy ? 'Creating…' : 'Create workspace'}
+      {paid && (
+        <div className="field">
+          <span>Seats</span>
+          <SeatPicker value={seats} min={1} onChange={setSeats} />
+          <p className="muted small create-price">
+            {formatMoney(Math.round(prices.prices.support / 12))} per seat a month, billed yearly: {formatMoney(prices.prices.support)} × {seats} ={' '}
+            <strong>{formatMoney(prices.prices.support * seats)}</strong>
+          </p>
+          <p className="muted small create-price">A seat is for each of your staff, you included. Customers don’t need one.</p>
+        </div>
+      )}
+      {paid && !verified && (
+        <p className="muted small create-price">
+          Confirm your email address in your{' '}
+          <button type="button" className="link-btn" onClick={() => navigate(withNext('/profile', '/'))}>
+            profile
+          </button>{' '}
+          to pay for a help desk.
+        </p>
+      )}
+      <button className="btn primary wide" disabled={busy || (paid && !verified)}>
+        {busy ? 'Creating…' : paid ? 'Continue to payment' : 'Create workspace'}
       </button>
       {error && (
         <p className="form-error" role="alert">

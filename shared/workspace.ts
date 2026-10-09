@@ -33,13 +33,15 @@ export interface OfficeInfo {
 export const isCustomer = (role: Role | null | undefined, kind: OfficeKind | null | undefined) => role === 'guest' && kind === 'support';
 
 /** Why GET /api/offices/:id (403 `{ error, reason }`) or a join refused you. */
-export type AccessDenied = 'sign-in' | 'members-only' | 'link';
+/** 'locked': the workspace isn't paid for (see shared/billing.ts); only its owner and admins may come in. */
+export type AccessDenied = 'sign-in' | 'members-only' | 'link' | 'locked';
 
 /**
  * Why you were taken out of an office ('office:removed'): removed from its members (or, as a
- * customer, by staff), guests turned off, or (customers) there a long while without an open ticket.
+ * customer, by staff), guests turned off, (customers) there a long while without an open ticket, or
+ * the workspace was locked because it isn't paid for.
  */
-export type RemovedReason = 'removed' | 'guests-off' | 'idle';
+export type RemovedReason = 'removed' | 'guests-off' | 'idle' | 'locked';
 
 export interface Member {
   userId: string;
@@ -81,7 +83,9 @@ export type Action =
   | 'remove-admin'
   | 'transfer'
   | 'guest-link'
-  | 'build';
+  | 'build'
+  | 'billing'
+  | 'see-billing';
 
 /**
  * Whether `role` may do `action`. `build` also depends on the office: members build when its build
@@ -100,7 +104,10 @@ export function may(role: Role | null, action: Action, office?: { buildPolicy: '
     case 'change-role':
     case 'remove-admin':
     case 'transfer':
+    case 'billing':
       return role === 'owner';
+    case 'see-billing':
+      return role === 'owner' || role === 'admin';
     case 'build':
       if (role === 'owner' || role === 'admin') return true;
       if (!office || office.buildPolicy !== 'everyone') return false;

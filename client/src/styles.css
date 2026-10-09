@@ -24,6 +24,8 @@
   /* Primary-coloured text (badges); darker than --primary so it reads on light fills. */
   --primary-text: #4a5bf0;
   --danger: #e5484d;
+  /* Red text on cards (buttons): darker than --danger so it stays readable. */
+  --danger-text: #c62a2f;
   --ok: #3ddc84;
   --busy: #e5484d;
   --away: #f5a524;
@@ -53,7 +55,7 @@
   --backdrop: rgba(10, 12, 25, 0.5);
   --neutral-soft: #eceef5;
   /* Good news (a verified email, a fine password). */
-  --ok-text: #1b8a4b;
+  --ok-text: #13733c;
   --ok-soft: #e3f8ec;
   /* Sign-in buttons, as Google's and Apple's guidelines ask (light page: Google white, Apple black);
      GitHub's in its own dark grey. */
@@ -89,6 +91,7 @@
   --primary-soft: #272d56;
   --primary-text: #a3adff;
   --danger: #f2555a;
+  --danger-text: #f2555a;
   --glass: rgba(20, 22, 33, 0.84);
   --glass-solid: #171a26;
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
@@ -143,9 +146,24 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
+}
+
+/* iOS Safari zooms into a field under 16px when it's focused, and doesn't zoom back out. */
+@media (max-width: 720px), (pointer: coarse) {
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* No double-tap zoom (taps answer at once); pinch zoom still works. */
+html {
+  touch-action: manipulation;
 }
 
 h1,
@@ -239,7 +257,7 @@ a.btn {
 }
 
 .btn.danger {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .btn.small {
@@ -1577,10 +1595,11 @@ a.btn {
   color: var(--glass-muted);
 }
 
+/* Clear of a phone's notch in landscape (env() is 0 elsewhere). */
 .topbar {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: calc(12px + env(safe-area-inset-top));
+  left: calc(12px + env(safe-area-inset-left));
   z-index: 20;
   pointer-events: none;
   display: flex;
@@ -1743,7 +1762,7 @@ a.btn {
 .focus-indicator {
   position: absolute;
   left: 50%;
-  bottom: 86px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 23;
   display: flex;
@@ -1774,7 +1793,7 @@ a.btn {
 }
 
 .office:has(.focus-indicator) .hint {
-  bottom: 134px;
+  bottom: calc(134px + env(safe-area-inset-bottom));
 }
 
 /* Out of the way while the reactions menu is open (it covers them), and where an open side panel would. */
@@ -1806,7 +1825,7 @@ body:has(.emote-menu) .hint {
 
 @media (min-width: 721px) and (max-width: 1040px) {
   .office:has(> .side-panel) .hint {
-    bottom: 86px;
+    bottom: calc(86px + env(safe-area-inset-bottom));
   }
 }
 
@@ -1815,31 +1834,31 @@ body:has(.emote-menu) .hint {
 @media (min-width: 721px) and (max-width: 1040px) {
   .office:has(> .hint) :is(.help, .help-toggle),
   .office:not(:has(> .side-panel)):has(> .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 134px;
+    bottom: calc(134px + env(safe-area-inset-bottom));
   }
 
   .office:not(:has(> .side-panel)):has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 182px;
+    bottom: calc(182px + env(safe-area-inset-bottom));
   }
 }
 
 @media (min-width: 1041px) and (max-width: 1130px) {
   .office:has(> .hint, > .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 134px;
+    bottom: calc(134px + env(safe-area-inset-bottom));
   }
 
   .office:has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 182px;
+    bottom: calc(182px + env(safe-area-inset-bottom));
   }
 }
 
 @media (min-width: 1131px) {
   .office:has(> .side-panel):has(> .hint, > .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 134px;
+    bottom: calc(134px + env(safe-area-inset-bottom));
   }
 
   .office:has(> .side-panel):has(> .hint):has(> .focus-indicator) :is(.help, .help-toggle) {
-    bottom: 182px;
+    bottom: calc(182px + env(safe-area-inset-bottom));
   }
 }
 
@@ -2108,7 +2127,7 @@ body:has(.emote-menu) .hint {
 .self-view {
   position: absolute;
   right: 16px;
-  bottom: 92px;
+  bottom: calc(92px + env(safe-area-inset-bottom));
   width: 200px;
   aspect-ratio: 16 / 10;
   z-index: 15;
@@ -2166,11 +2185,12 @@ body:has(.emote-menu) .hint {
   font-weight: 600;
 }
 
-/* Dock */
+/* Dock. It and everything stacked above it keep clear of a phone's home indicator (env() is 0
+   elsewhere). */
 .dock {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 30;
   display: flex;
@@ -2405,7 +2425,7 @@ body:has(.emote-menu) .hint {
   position: absolute;
   top: 12px;
   right: 12px;
-  bottom: 84px;
+  bottom: calc(84px + env(safe-area-inset-bottom));
   width: var(--panel-w);
   z-index: 28;
   display: flex;
@@ -2696,7 +2716,7 @@ body:has(.emote-menu) .hint {
 .hint {
   position: absolute;
   left: 50%;
-  bottom: 86px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 22;
   width: max-content;
@@ -2712,7 +2732,7 @@ body:has(.emote-menu) .hint {
 .help {
   position: absolute;
   left: 12px;
-  bottom: 84px;
+  bottom: calc(84px + env(safe-area-inset-bottom));
   z-index: 21;
   max-width: 330px;
   padding: 12px 36px 12px 14px;
@@ -2732,7 +2752,7 @@ body:has(.emote-menu) .hint {
 .help-toggle {
   position: absolute;
   left: 12px;
-  bottom: 84px;
+  bottom: calc(84px + env(safe-area-inset-bottom));
   z-index: 21;
   width: 32px;
   height: 32px;
@@ -2764,10 +2784,10 @@ body:has(.emote-menu) .hint {
   }
 }
 
-/* Outside an office: centred at the bottom. */
+/* Outside an office: centred at the bottom, above the phone's home indicator. */
 .toasts.page {
   top: auto;
-  bottom: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
   left: 50%;
   transform: translateX(-50%);
   align-items: center;
@@ -2836,21 +2856,27 @@ body:has(.emote-menu) .hint {
   font-weight: 700;
 }
 
-/* Modals */
+/* Modals. The backdrop scrolls and the modal is centred with auto margins, so its top (the title) and
+   bottom (the buttons) stay reachable however short the screen is, e.g. with a phone's keyboard up. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 90;
-  display: grid;
-  place-items: center;
-  padding: 20px;
+  display: flex;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
   background: var(--backdrop);
 }
 
 .modal {
   width: min(460px, 100%);
+  margin: auto;
   max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px 22px;
   border-radius: 18px;
   background: var(--card);
@@ -2884,6 +2910,11 @@ body:has(.emote-menu) .hint {
   background: var(--primary);
   color: var(--primary-ink);
   border-color: var(--primary);
+}
+
+/* Dialogs are light cards even in the office, where buttons are otherwise on dark glass. */
+.modal .btn.danger {
+  color: var(--danger-text);
 }
 
 .modal .btn:hover:not(:disabled) {
@@ -3365,8 +3396,19 @@ body:has(.emote-menu) .hint {
     max-width: calc(100vw - 16px);
   }
 
+  /* As tall as the screen allows, so it doesn't jump between sections: its title, the section tabs and
+     Done stay put while the section scrolls. */
+  .modal.settings {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 40px);
+    height: calc(100dvh - 40px);
+  }
+
   .settings-layout {
+    flex: 1;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 14px;
     min-height: 0;
   }
@@ -3380,17 +3422,26 @@ body:has(.emote-menu) .hint {
     flex: none;
   }
 
+  /* With room for the fields' focus rings, which it would clip. */
+  .settings-body {
+    margin: 0 -4px;
+    padding: 0 4px 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .side-panel {
     left: 8px;
     right: 8px;
     width: auto;
     top: auto;
     height: 55vh;
-    bottom: 76px;
+    height: 55dvh;
+    bottom: calc(76px + env(safe-area-inset-bottom));
   }
 
   .dock {
-    bottom: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
     gap: 4px;
     padding: 5px;
     overflow-x: auto;
@@ -3429,18 +3480,18 @@ body:has(.emote-menu) .hint {
 
   .self-view {
     width: 130px;
-    bottom: 76px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
     right: 8px;
   }
 
   .hint {
-    bottom: 72px;
+    bottom: calc(72px + env(safe-area-inset-bottom));
   }
 }
 
 @media (max-width: 720px) {
   .focus-indicator {
-    bottom: 72px;
+    bottom: calc(72px + env(safe-area-inset-bottom));
   }
 
   .office:has(.side-panel) .hint {
@@ -3448,7 +3499,23 @@ body:has(.emote-menu) .hint {
   }
 
   .office:has(.focus-indicator) .hint {
-    bottom: 120px;
+    bottom: calc(120px + env(safe-area-inset-bottom));
+  }
+}
+
+/* The smallest phones (320px): smaller dock buttons, so the dock fits without scrolling. */
+@media (max-width: 359px) {
+  .dock-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .me-btn {
+    padding: 1px;
+  }
+
+  .dock-group + .dock-group {
+    padding-left: 4px;
   }
 }
 

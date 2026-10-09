@@ -493,12 +493,12 @@ button.sc-top {
 
 @media (max-width: 720px) {
   .side-panel.support {
-    height: min(78vh, calc(100dvh - 96px));
+    height: min(78vh, calc(100dvh - 96px - env(safe-area-inset-bottom)));
     background: var(--glass-solid);
   }
 
   .office:has(> .video-strip) .side-panel.support {
-    height: min(78vh, calc(100dvh - 236px));
+    height: min(78vh, calc(100dvh - 236px - env(safe-area-inset-bottom)));
   }
 }
 
@@ -1001,7 +1001,7 @@ button.sc-top {
   position: fixed;
   left: 8px;
   right: 8px;
-  bottom: 76px;
+  bottom: calc(76px + env(safe-area-inset-bottom));
   z-index: 29;
   width: auto;
 }

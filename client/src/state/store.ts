@@ -6,7 +6,8 @@ import { may, type GuestAccess, type OfficeKind, type Role } from '../../../shar
 import { loadProfile } from '../lib/storage';
 import type { IconComponent } from '../ui/icons';
 
-export type Phase = 'landing' | 'lobby' | 'office' | 'auth' | 'profile' | 'welcome';
+/** 'page': a feature's own page (ui/pages.ts), at `page`. */
+export type Phase = 'landing' | 'lobby' | 'office' | 'auth' | 'profile' | 'welcome' | 'page';
 /** The page shown in the 'auth' phase (its path: /signin, /signup…, /invite). */
 export type AuthPage = 'signin' | 'signup' | 'forgot' | 'reset' | 'confirm-email' | 'invite';
 /** The open side panel: 'none', or the id of a panel in ui/panels.tsx ('chat', 'people', 'build', 'music'…). */
@@ -44,6 +45,8 @@ interface State {
   phase: Phase;
   officeId: string | null;
   authPage: AuthPage;
+  /** The path of the page shown in the 'page' phase. */
+  page: string | null;
   /** The token from an emailed link (`/reset#t=…`) or a guest link (`/o/<id>#guest=…`), taken out of the address. */
   linkToken: string | null;
   connection: 'online' | 'reconnecting';
@@ -152,6 +155,7 @@ export const useStore = create<State>()(() => ({
   phase: 'landing',
   officeId: null,
   authPage: 'signin',
+  page: null,
   linkToken: null,
   connection: 'online',
   account: null,

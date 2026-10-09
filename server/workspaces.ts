@@ -1,5 +1,5 @@
 import express from 'express';
-import { MAX_PASSWORD, normalizeEmail, passwordProblem, sanitizeUserName, type AccountUser, type Space } from '../shared/account';
+import { MAX_PASSWORD, normalizeEmail, passwordProblem, sanitizeUserName, type AccountUser, type Space, type SpaceBilling } from '../shared/account';
 import { sanitizeAvatar, sanitizeName } from '../shared/avatar';
 import { isValidId } from '../shared/office';
 import { TEMPLATES } from '../shared/templates';
@@ -38,11 +38,56 @@ const DENIED: Record<AccessDenied, string> = {
   'sign-in': 'Sign in to come in.',
   'members-only': 'Only members can come in.',
   link: 'This guest link no longer works.',
+  locked: 'This workspace is paused. Only its owner and admins can come in.',
 };
 
-export type Admission = { role: Role; isOwner: boolean } | { denied: AccessDenied };
+/**
+ * Someone let in: `guestCap`, guests in the office at once (default MAX_GUESTS_PER_ROOM); `staffCap`,
+ * people in it at once, for an admin coming into a locked office (the owner always gets in).
+ */
+export type Admission = { role: Role; isOwner: boolean; guestCap?: number | null; staffCap?: number | null } | { denied: AccessDenied };
 
 export const deniedMessage = (reason: AccessDenied) => DENIED[reason];
+
+/** Seats in use: memberships (owner, admins and members) plus invitations still open. Guests and customers never count. */
+export async function usedSeats(q: Tx, officeId: string): Promise<number> {
+  const res = await q.query<{ used: number }>(
+    `SELECT (SELECT count(*) FROM memberships WHERE office_id = $1)::int
+          + (SELECT count(*) FROM office_invites WHERE office_id = $1 AND expires_at > now())::int AS used`,
+    [officeId],
+  );
+  return res.rows[0].used;
+}
+
+/** Serialises changes to an office's seats (people added, seats bought) until the transaction ends. */
+export const lockSeats = (tx: Tx, officeId: string) => tx.query("SELECT pg_advisory_xact_lock(hashtext('seats:' || $1))", [officeId]);
+
+/** How many people an office may have: a number of seats, null for no limit, or 'locked' (nobody can be added). */
+export type SeatLimit = number | null | 'locked';
+
+export interface OfficeAccess {
+  /** Only the owner and admins may come in; anyone else is refused with 'locked'. */
+  locked: boolean;
+  /** Guests at once (not support customers, who stay at the default); null: MAX_GUESTS_PER_ROOM. */
+  guestCap: number | null;
+  /** While locked: people at once (the owner always gets in); null: no limit. */
+  staffCap: number | null;
+}
+
+/**
+ * Who may come into an office and how many people it may have, set by a feature (billing). Without
+ * one, offices are open to whoever their roles and guest link let in, with no seat limit.
+ */
+export interface WorkspacePolicy {
+  /** Asked for everyone coming in but the owner (and the owner key of an office nobody owns). */
+  access(officeId: string, kind: OfficeKind): Promise<OfficeAccess>;
+  /** Asked inside add()'s transaction, after lockSeats(). */
+  seatLimit(tx: Tx, officeId: string): Promise<SeatLimit>;
+  /** Notes for the workspace cards in GET /api/me/spaces (only offices that have one). */
+  notes(offices: { id: string; kind: OfficeKind; role: MemberRole }[]): Promise<Map<string, SpaceBilling>>;
+  /** After the owner made someone else the owner. */
+  ownerChanged(officeId: string, from: string, to: string): Promise<void>;
+}
 
 /** Guests may come in: an open office (never a support one), or the guest link's token. */
 export function welcomesGuests(stored: StoredOffice, guest: unknown): boolean {
@@ -108,10 +153,24 @@ const toInvite = (r: InviteRow, emailed: boolean): Invite => ({
 
 class NotMember extends Error {}
 class InviteGone extends Error {}
+class SeatsFull extends Error {}
 
 /** Memberships, invitations and who may come into an office. */
 export class Workspaces {
+  private policy: WorkspacePolicy | null = null;
+
   constructor(private readonly db: Db) {}
+
+  /** Sets the policy for who may come in and how many people offices may have (once). */
+  setPolicy(policy: WorkspacePolicy): void {
+    if (this.policy) throw new Error('A workspace policy is set already');
+    this.policy = policy;
+  }
+
+  /** The policy's say on who may be in the office now; null without a policy. */
+  async access(officeId: string, kind: OfficeKind): Promise<OfficeAccess | null> {
+    return this.policy ? this.policy.access(officeId, kind) : null;
+  }
 
   async role(userId: string, officeId: string): Promise<MemberRole | null> {
     const res = await this.db.query<{ role: MemberRole }>('SELECT role FROM memberships WHERE user_id = $1 AND office_id = $2', [userId, officeId]);
@@ -163,8 +222,17 @@ export class Workspaces {
   /** What someone would be in the office, without coming in (GET /api/offices/:id). */
   async check(stored: StoredOffice, userId: string | null, guest: unknown): Promise<{ role: Role } | { denied: AccessDenied }> {
     const role = userId ? await this.role(userId, stored.office.id) : null;
-    if (role) return { role };
-    return welcomesGuests(stored, guest) ? { role: 'guest' } : refusal(guest, userId);
+    const found = role ? { role } : welcomesGuests(stored, guest) ? { role: 'guest' as const } : refusal(guest, userId);
+    if ('denied' in found || !this.policy || found.role === 'owner' || found.role === 'admin') return found;
+    return (await this.policy.access(stored.office.id, stored.kind)).locked ? { denied: 'locked' } : found;
+  }
+
+  /** The policy's say on letting someone in (the owner always comes in). */
+  private async limited(stored: StoredOffice, admitted: { role: Role; isOwner: boolean }): Promise<Admission> {
+    if (!this.policy || admitted.isOwner) return admitted;
+    const access = await this.policy.access(stored.office.id, stored.kind);
+    if (access.locked) return admitted.role === 'admin' ? { ...admitted, staffCap: access.staffCap } : { denied: 'locked' };
+    return admitted.role === 'guest' ? { ...admitted, guestCap: access.guestCap } : admitted;
   }
 
   /**
@@ -176,22 +244,22 @@ export class Workspaces {
     const id = stored.office.id;
     const keyHolder = sameSecret(opts.ownerKey, stored.ownerKey);
     if (userId && keyHolder) await this.claim(userId, id);
-    if (userId) {
-      const visit = await this.db.query<{ role: MemberRole }>(
-        'UPDATE memberships SET last_visit_at = now() WHERE user_id = $1 AND office_id = $2 RETURNING role',
-        [userId, id],
-      );
-      const role = visit.rows[0]?.role;
-      if (role) return { role, isOwner: role === 'owner' };
+    const role = userId ? await this.role(userId, id) : null;
+    if (role) {
+      const admitted = await this.limited(stored, { role, isOwner: role === 'owner' });
+      // Only a visit that happens counts (the latest one is their default office).
+      if (!('denied' in admitted)) await this.db.query('UPDATE memberships SET last_visit_at = now() WHERE user_id = $1 AND office_id = $2', [userId, id]);
+      return admitted;
     }
     if (!welcomesGuests(stored, opts.guest)) return refusal(opts.guest, userId);
     // The owner key keeps its rights in an office nobody has claimed yet.
-    return { role: 'guest', isOwner: keyHolder && !(await this.owned(id)) };
+    return this.limited(stored, { role: 'guest', isOwner: keyHolder && !(await this.owned(id)) });
   }
 
   /**
    * The offices this person belongs to: the ones they've been to, most recently visited first (the
-   * first is their default), then the ones they were added to and haven't visited, newest first.
+   * first is their default), then the ones they were added to and haven't visited, newest first, with
+   * the policy's notes (billing).
    */
   async spaces(userId: string): Promise<Omit<Space, 'online'>[]> {
     const res = await this.db.query<{ id: string; name: string | null; kind: OfficeKind; role: MemberRole; last_visit_at: Date | string | null }>(
@@ -200,7 +268,10 @@ export class Workspaces {
        WHERE m.user_id = $1 ORDER BY m.last_visit_at DESC NULLS LAST, m.joined_at DESC, m.office_id LIMIT 200`,
       [userId],
     );
-    return res.rows.map((r) => ({ id: r.id, name: r.name ?? '', kind: r.kind, role: r.role, lastVisitAt: r.last_visit_at === null ? null : ms(r.last_visit_at) }));
+    const spaces = res.rows.map((r) => ({ id: r.id, name: r.name ?? '', kind: r.kind, role: r.role, lastVisitAt: r.last_visit_at === null ? null : ms(r.last_visit_at) }));
+    const notes = this.policy && spaces.length ? await this.policy.notes(spaces) : null;
+    // The key only where there is something to show.
+    return notes ? spaces.map((s) => (notes.has(s.id) ? { ...s, billing: notes.get(s.id) } : s)) : spaces;
   }
 
   async members(officeId: string, withEmail: boolean): Promise<Member[]> {
@@ -230,47 +301,75 @@ export class Workspaces {
 
   /**
    * Adds whoever has verified `email` to the office at once, or else invites the address (the
-   * token goes in the emailed link). 'member' or 'invited' when they already are.
+   * token goes in the emailed link). 'member' or 'invited' when they already are; with a policy,
+   * 'full' when that would take a seat the office doesn't have, and 'locked' when it is locked.
    */
   async add(
     officeId: string,
     email: string,
     role: 'admin' | 'member',
     by: string,
-  ): Promise<{ member: Member } | { invite: InviteRow; token: string } | 'member' | 'invited'> {
-    return this.db.transaction(async (tx) => {
-      const owner = await tx.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND email_verified_at IS NOT NULL', [email]);
-      const userId = owner.rows[0]?.id;
-      if (userId) {
-        const added = await tx.query('INSERT INTO memberships (user_id, office_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, office_id) DO NOTHING', [
-          userId,
-          officeId,
-          role,
-        ]);
-        if (!added.rowCount) return 'member';
-        await tx.query('DELETE FROM office_invites WHERE office_id = $1 AND email = $2', [officeId, email]);
-        return { member: (await this.member(officeId, userId, tx))! };
-      }
-      // An expired invitation (not yet cleaned up) gives way to a new one.
-      await tx.query('DELETE FROM office_invites WHERE office_id = $1 AND email = $2 AND expires_at <= now()', [officeId, email]);
-      const token = newToken();
-      const invite = await tx.query<InviteRow>(
-        `INSERT INTO office_invites (id, office_id, email, role, invited_by, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now() + interval '${INVITE_DAYS} days')
-         ON CONFLICT (office_id, email) DO NOTHING
-         RETURNING id, email, role, (SELECT name FROM users WHERE id = $5) AS invited_by, created_at, expires_at`,
-        [randomId(16), officeId, email, role, by, hashToken(token)],
-      );
-      return invite.rows[0] ? { invite: invite.rows[0], token } : 'invited';
-    });
+  ): Promise<{ member: Member } | { invite: InviteRow; token: string } | 'member' | 'invited' | 'full' | 'locked'> {
+    const policy = this.policy;
+    try {
+      return await this.db.transaction(async (tx) => {
+        let limit: SeatLimit = null;
+        let before = 0;
+        if (policy) {
+          await lockSeats(tx, officeId);
+          limit = await policy.seatLimit(tx, officeId);
+          if (limit === 'locked') return 'locked';
+          before = await usedSeats(tx, officeId);
+        }
+        const added = await this.insert(tx, officeId, email, role, by);
+        // Counted before and after: an invitation (which holds a seat already) turning into a membership takes none.
+        if (limit !== null && typeof added === 'object') {
+          const after = await usedSeats(tx, officeId);
+          if (after > before && after > limit) throw new SeatsFull();
+        }
+        return added;
+      });
+    } catch (err) {
+      if (err instanceof SeatsFull) return 'full';
+      throw err;
+    }
   }
 
-  /** A fresh token for an invitation (the old link stops working) and another 14 days. */
+  private async insert(tx: Tx, officeId: string, email: string, role: 'admin' | 'member', by: string) {
+    const owner = await tx.query<{ id: string }>('SELECT id FROM users WHERE email = $1 AND email_verified_at IS NOT NULL', [email]);
+    const userId = owner.rows[0]?.id;
+    if (userId) {
+      const added = await tx.query('INSERT INTO memberships (user_id, office_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, office_id) DO NOTHING', [
+        userId,
+        officeId,
+        role,
+      ]);
+      if (!added.rowCount) return 'member' as const;
+      await tx.query('DELETE FROM office_invites WHERE office_id = $1 AND email = $2', [officeId, email]);
+      return { member: (await this.member(officeId, userId, tx))! };
+    }
+    // An expired invitation (not yet cleaned up) gives way to a new one.
+    await tx.query('DELETE FROM office_invites WHERE office_id = $1 AND email = $2 AND expires_at <= now()', [officeId, email]);
+    const token = newToken();
+    const invite = await tx.query<InviteRow>(
+      `INSERT INTO office_invites (id, office_id, email, role, invited_by, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now() + interval '${INVITE_DAYS} days')
+       ON CONFLICT (office_id, email) DO NOTHING
+       RETURNING id, email, role, (SELECT name FROM users WHERE id = $5) AS invited_by, created_at, expires_at`,
+      [randomId(16), officeId, email, role, by, hashToken(token)],
+    );
+    return invite.rows[0] ? { invite: invite.rows[0], token } : ('invited' as const);
+  }
+
+  /**
+   * A fresh token for an invitation (the old link stops working) and another 14 days. With a policy,
+   * an expired one no longer holds a seat, so it isn't renewed: the address is added again instead.
+   */
   async renewInvite(officeId: string, inviteId: string): Promise<{ invite: InviteRow; token: string } | null> {
     const token = newToken();
     const res = await this.db.query<InviteRow>(
       `UPDATE office_invites i SET token_hash = $3, expires_at = now() + interval '${INVITE_DAYS} days'
-       WHERE i.id = $1 AND i.office_id = $2 RETURNING ${INVITE_COLUMNS}`,
+       WHERE i.id = $1 AND i.office_id = $2${this.policy ? ' AND i.expires_at > now()' : ''} RETURNING ${INVITE_COLUMNS}`,
       [inviteId, officeId, hashToken(token)],
     );
     return res.rows[0] ? { invite: res.rows[0], token } : null;
@@ -340,6 +439,7 @@ export class Workspaces {
         const promoted = demoted.rowCount ? await tx.query("UPDATE memberships SET role = 'owner' WHERE office_id = $1 AND user_id = $2", [officeId, to]) : null;
         if (!promoted?.rowCount) throw new NotMember();
       });
+      this.policy?.ownerChanged(officeId, from, to).catch((err) => console.error('[workspaces] a new owner was not handled:', err));
       return true;
     } catch (err) {
       if (err instanceof NotMember) return false;
@@ -557,6 +657,16 @@ export function workspaceRoutes(deps: WorkspaceDeps): express.Router {
     }
     if (!mayAdd(res, m.user.id, m.id)) return;
     const added = await workspaces.add(m.id, email, role, m.user.id);
+    if (added === 'full') {
+      const error = m.role === 'owner' ? 'All your seats are taken. Add seats in Billing.' : 'All seats are taken. Ask the owner to add seats.';
+      res.status(402).json({ error, code: 'seats-full' });
+      return;
+    }
+    if (added === 'locked') {
+      const error = m.role === 'owner' ? 'This workspace is paused. Pay in Billing to add people.' : 'This workspace is paused until its owner pays for it.';
+      res.status(403).json({ error, code: 'locked' });
+      return;
+    }
     if (added === 'member') {
       res.status(409).json({ error: 'They’re already a member.', code: 'member' });
       return;
@@ -594,6 +704,11 @@ export function workspaceRoutes(deps: WorkspaceDeps): express.Router {
     }
     if (!(await workspaces.changeRole(m.id, target, role))) return notFound(res, 'They’re not a member.');
     realtime.setRole(m.id, target, role);
+    // A member can't stay in a paused workspace.
+    if (role === 'member') {
+      const access = await workspaces.access(m.id, m.stored.kind);
+      if (access?.locked) realtime.lockChanged(m.id, true, access.staffCap);
+    }
     res.json({ member: await workspaces.member(m.id, target) });
   });
 

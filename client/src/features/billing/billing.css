@@ -1,0 +1,359 @@
+/* Billing: Settings > Billing, the top-bar banner (dark glass, like the rest of the HUD), the seat
+   picker (also on the home page), home's prices and badges, the Workspace section's seats, and printed
+   receipts. This file loads before styles.css, so rules that override its classes are more specific
+   than theirs. Fields keep the 16px phones get (styles.css). */
+
+:root {
+  /* Amber text and fills for "payment due"; the HUD uses --away itself. Red ones for "paused", darker
+     than --danger so the small badge text reads on its fill. */
+  --billing-warn: #9a5800;
+  --billing-warn-soft: #fdf0d9;
+  --billing-bad: #b42328;
+  --billing-bad-soft: #fde7e8;
+}
+
+:root[data-theme='dark'] {
+  --billing-warn: #f5b94e;
+  --billing-warn-soft: #3a2d14;
+  --billing-bad: #ff8a8f;
+  --billing-bad-soft: #3d1c20;
+}
+
+/* ---------- Settings > Billing ---------- */
+
+.billing {
+  display: grid;
+  gap: 18px;
+}
+
+.billing p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.billing-plan {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+}
+
+.billing-plan-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.billing-pill,
+.space-title .badge.billing-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--billing-warn-soft);
+  color: var(--billing-warn);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.billing-pill.ok {
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+.billing-pill.bad,
+.space-title .badge.billing-badge.locked {
+  background: var(--billing-bad-soft);
+  color: var(--billing-bad);
+}
+
+.billing-pill.neutral {
+  background: var(--neutral-soft);
+  color: var(--ink-soft);
+}
+
+.billing-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--away) 50%, transparent);
+  background: color-mix(in srgb, var(--away) 14%, var(--card));
+  font-size: 0.9rem;
+}
+
+.billing-notice > .hgi {
+  flex: none;
+  margin-top: 1px;
+  color: var(--away);
+}
+
+.billing-notice.locked {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--billing-bad-soft);
+}
+
+.billing-notice.locked > .hgi {
+  color: var(--danger);
+}
+
+.billing-block {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.billing-block h4 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.billing-actions,
+.billing-seats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.billing-actions {
+  gap: 8px;
+}
+
+.billing-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.billing-history {
+  justify-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A long status ("Paid twice · refund needs attention") wraps instead of squeezing what it was for. */
+.billing-history li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(50%) 30px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.billing-history li:last-child {
+  border-bottom: 0;
+}
+
+.billing-history-what,
+.billing-history-amount {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.billing-history-what > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-history-amount {
+  align-items: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Seat picker ---------- */
+
+.seat-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seat-picker input[type='number'] {
+  width: 76px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--ink);
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.seat-picker input[type='number']:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.seat-picker input::-webkit-inner-spin-button,
+.seat-picker input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.seat-picker .icon-btn {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  opacity: 1;
+}
+
+.seat-picker .icon-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.seat-picker .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------- Home and the Workspace section ---------- */
+
+/* A workspace card with a billing badge too: the badges wrap rather than squeeze the name away. */
+.space-title:has(> .billing-badge) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.create-price {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.ws-seats {
+  margin: 8px 0 0;
+}
+
+.ws-add-seats {
+  margin-top: 8px;
+}
+
+/* ---------- The top-bar banner ---------- */
+
+.billing-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Clear of the video strip on wide screens, which starts 300px in (the top bar starts at 12px). */
+  max-width: min(288px, calc(100vw - 24px));
+  margin-top: 8px;
+  padding: 5px 5px 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--away) 55%, transparent);
+  border-radius: 18px;
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--glass-shadow);
+  color: var(--glass-ink);
+  font-size: 0.82rem;
+  text-align: left;
+  pointer-events: auto;
+}
+
+.billing-banner:hover {
+  background: var(--glass-solid);
+}
+
+.billing-banner:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.billing-banner > .hgi {
+  flex: none;
+  color: var(--away);
+}
+
+.billing-banner > span {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.billing-banner > strong {
+  flex: none;
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--away);
+  color: #1d2030;
+}
+
+.billing-banner.locked {
+  border-color: color-mix(in srgb, var(--glass-danger) 55%, transparent);
+}
+
+.billing-banner.locked > .hgi {
+  color: var(--glass-danger);
+}
+
+/* Narrower screens put the top bar's rows below the video strip: the whole width is free. */
+@media (max-width: 960px) {
+  .billing-banner {
+    max-width: calc(100vw - 24px);
+  }
+}
+
+/* ---------- Printed receipts ---------- */
+
+.billing-receipt {
+  display: none;
+}
+
+@media print {
+  body.billing-printing > :not(.billing-receipt) {
+    display: none !important;
+  }
+
+  body.billing-printing {
+    background: #fff;
+  }
+
+  .billing-receipt {
+    display: block;
+    padding: 24px;
+    color: #000;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .billing-receipt-brand {
+    margin: 0;
+    font-weight: 800;
+  }
+
+  .billing-receipt h1 {
+    margin: 8px 0 20px;
+    font-size: 24px;
+  }
+
+  .billing-receipt dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 6px 24px;
+    margin: 0;
+  }
+
+  .billing-receipt dt {
+    color: #555;
+  }
+
+  .billing-receipt dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}

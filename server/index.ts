@@ -14,7 +14,7 @@ import { sameSecret } from './auth/sessions';
 import { openDb, type DatabaseSsl, type Db } from './db';
 import { importLegacyOffices } from './db/legacy';
 import { collectMigrations, migrate } from './db/migrations';
-import { registerFeatures, type Feature, type ServerContext } from './features';
+import { registerFeatures, type Feature, type ServerContext, type WithRawBody } from './features';
 import { dormantFeatures, serverFeatures } from './features/index';
 import { addressKey, windowLimiter } from './limits';
 import { mailerFromEnv, type Mailer } from './mail';
@@ -209,7 +209,17 @@ export async function startServer(opts: ServerOptions = {}) {
 
   // Before express.json, which would otherwise swallow uploads sent as application/json.
   app.post('/api/offices/:id/uploads', uploads.upload);
-  app.use(express.json({ limit: '64kb' }));
+  // Paths (under /api) whose JSON bodies features need as sent, to check a signature (keepRawBody).
+  const rawBodyPaths = new Set<string>();
+  app.use(
+    express.json({
+      limit: '64kb',
+      verify: (req, _res, buf) => {
+        const path = (req.url ?? '').split('?')[0];
+        if (path.startsWith('/api/') && rawBodyPaths.has(path.slice(4))) (req as WithRawBody).rawBody = Buffer.from(buf);
+      },
+    }),
+  );
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -305,6 +315,9 @@ export async function startServer(opts: ServerOptions = {}) {
     socketIp,
     quiet: !!opts.quiet,
     onClose: (fn) => void closers.push(fn),
+    mailer,
+    keepRawBody: (path) => void rawBodyPaths.add(path),
+    workspaces: { setPolicy: (policy) => workspaces.setPolicy(policy) },
   };
   try {
     await registerFeatures(features, ctx);

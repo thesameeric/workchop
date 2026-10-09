@@ -25,7 +25,10 @@ import { type LinkChanges, type LinkRule, Room } from './room';
 import { deniedMessage, refusal, welcomesGuests, type Admission, type Workspaces } from './workspaces';
 
 export const MAX_PLAYERS_PER_ROOM = 100;
-/** Guests take at most this many of an office's places, so its members can always come in. */
+/**
+ * Guests take at most this many of an office's places, so its members can always come in (fewer when
+ * the workspace policy says so: billing's Free plan).
+ */
 export const MAX_GUESTS_PER_ROOM = 90;
 const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
 /** What customers (guests of a support workspace) are called until they open a ticket. */
@@ -138,6 +141,13 @@ export interface RealtimeApi {
    * takes the guests out when it was turned off.
    */
   accessChanged(officeId: string, guests: GuestAccess): void;
+  /**
+   * After the office was locked (only its owner and admins may be in it, at most `staffCap` at once
+   * when given) or unlocked, or someone in a locked office became a member: when locked, takes
+   * everyone else out of it (office:removed 'locked'), then the admins who came in last until
+   * `staffCap` people are left (never the owner).
+   */
+  lockChanged(officeId: string, locked: boolean, staffCap?: number | null): void;
 }
 
 /** Token bucket: `rate` actions per second with bursts up to `burst`. */
@@ -281,6 +291,22 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         const role = contexts.get(id)?.role();
         if (role) controls.get(id)?.setRole(role, guests);
       }
+    },
+    lockChanged(officeId, locked, staffCap = null) {
+      admissions++;
+      const room = rooms.get(officeId);
+      if (!locked || !room) return;
+      // In the order they came in.
+      const admins: string[] = [];
+      for (const id of [...room.players.keys()]) {
+        const ctx = contexts.get(id);
+        const role = ctx?.role();
+        if (role === 'owner' || ctx?.isOwner()) continue;
+        if (role === 'admin') admins.push(id);
+        else controls.get(id)?.remove('locked');
+      }
+      if (staffCap === null) return;
+      while (admins.length && room.players.size > staffCap) controls.get(admins.pop()!)?.remove('locked');
     },
   };
 
@@ -445,7 +471,11 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       // Checked before recording the visit too; this catches people who arrived in the meantime.
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
-      if (joinedAs === 'guest' && (r?.guests.size ?? 0) >= MAX_GUESTS_PER_ROOM) return ack({ ok: false, error: 'This office is full.' });
+      if (joinedAs === 'guest' && (r?.guests.size ?? 0) >= (admitted.guestCap ?? MAX_GUESTS_PER_ROOM)) return ack({ ok: false, error: 'This office is full.' });
+      // A locked office lets in only a few of its admins at once (and its owner, always).
+      if (typeof admitted.staffCap === 'number' && (r?.players.size ?? 0) >= admitted.staffCap) {
+        return ack({ ok: false, error: `This workspace is paused, and only ${admitted.staffCap} people can be in it at once. Try again later.` });
+      }
       for (const check of joinChecks) {
         let why: string | null = null;
         try {

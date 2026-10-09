@@ -3,12 +3,18 @@ import type { IncomingHttpHeaders } from 'node:http';
 import type { AccountUser } from '../shared/account';
 import type { Db } from './db';
 import type { Migration } from './db/migrations';
+import type { Mailer } from './mail';
 import type { OfficeStore } from './officeStore';
 import type { IO, RealtimeApi } from './realtime';
 import type { Uploads } from './uploads';
+import type { WorkspacePolicy } from './workspaces';
 
 export type { Migration } from './db/migrations';
 export type { RealtimeApi, SocketContext, SocketUser } from './realtime';
+export type { OfficeAccess, SeatLimit, WorkspacePolicy } from './workspaces';
+
+/** A request to a path registered with keepRawBody(): its body's bytes, as received. */
+export type WithRawBody = express.Request & { rawBody?: Buffer };
 
 /** What a feature gets to hook into. */
 export interface ServerContext {
@@ -48,6 +54,17 @@ export interface ServerContext {
   quiet: boolean;
   /** Runs `fn` when the server closes, before the database does (to stop timers, say). */
   onClose(fn: () => void | Promise<void>): void;
+  /** Sends email (check `kind`: 'off' sends nothing, as in production without RESEND_API_KEY). */
+  mailer: Mailer;
+  /** JSON requests to /api<path> (exactly) keep their body's bytes in req.rawBody (WithRawBody), to check a signature. */
+  keepRawBody(path: string): void;
+  workspaces: {
+    /**
+     * Sets who may come into offices and how many people they may have (see WorkspacePolicy in
+     * server/workspaces.ts). One feature only: a second call throws.
+     */
+    setPolicy(policy: WorkspacePolicy): void;
+  };
 }
 
 /**

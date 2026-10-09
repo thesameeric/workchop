@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { normalizeEmail } from '../../../shared/account';
 import { may, type Invite, type Member, type MemberRole, type MembersAnswer } from '../../../shared/workspace';
+import { plural } from '../features/billing/format';
+import { openBilling, refreshBilling, transferNote, useBilling } from '../features/billing/state';
 import { errorText } from '../lib/account';
 import {
   addMember,
+  ApiError,
   changeRole,
   fetchMembers,
   removeMember,
@@ -16,6 +19,7 @@ import {
 } from '../lib/api';
 import { getSession, leaveOffice } from '../lib/session';
 import { ago } from '../lib/time';
+import { finePointer } from '../lib/touch';
 import { getState, setState, toast, useStore } from '../state/store';
 import { UserAvatar } from './Account';
 import { AlertIcon, CloseIcon, CopyIcon, LeaveIcon, MailIcon, OwnerIcon, RefreshIcon, RemoveUserIcon, ResendIcon, WorkspaceIcon } from './icons';
@@ -49,12 +53,13 @@ function AddPeople({ officeId, onAdded }: { officeId: string; onAdded: () => voi
   const [email, setEmail] = useState('');
   const [as, setAs] = useState<'member' | 'admin'>('member');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // `billing`: every seat of its plan is taken, or it's paused (the owner sees Billing about it).
+  const [result, setResult] = useState<{ ok: boolean; text: string; billing?: 'seats-full' | 'locked' } | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  // Opened with "Invite people": ready to type.
+  // Opened with "Invite people": ready to type (where that brings up no keyboard over it).
   useEffect(() => {
-    if (getState().settingsSection === 'workspace') input.current?.focus();
+    if (getState().settingsSection === 'workspace' && finePointer()) input.current?.focus();
   }, []);
 
   const submit = async (e: FormEvent) => {
@@ -71,7 +76,10 @@ function AddPeople({ officeId, onAdded }: { officeId: string; onAdded: () => voi
       else setResult({ ok: true, text: `${address} is invited. Ask them to sign up with that address.` });
       onAdded();
     } catch (err) {
-      setResult({ ok: false, text: errorText(err) });
+      const billing = err instanceof ApiError && (err.code === 'seats-full' || err.code === 'locked') ? err.code : undefined;
+      setResult({ ok: false, text: errorText(err), billing });
+      // Others may have added people meanwhile: Billing starts from the seats in use now.
+      if (billing) void refreshBilling();
     } finally {
       setBusy(false);
     }
@@ -113,6 +121,11 @@ function AddPeople({ officeId, onAdded }: { officeId: string; onAdded: () => voi
           {result.text}
         </p>
       )}
+      {result?.billing && may(role, 'billing') && (
+        <button type="button" className="btn small ws-add-seats" onClick={() => openBilling(result.billing === 'seats-full')}>
+          {result.billing === 'seats-full' ? 'Add seats' : 'See billing'}
+        </button>
+      )}
     </form>
   );
 }
@@ -129,7 +142,8 @@ function MemberRow({ member, officeId, onChange }: { member: Member; officeId: s
   };
   const removable = !self && member.role !== 'owner' && may(role, member.role === 'admin' ? 'remove-admin' : 'remove-member');
   const transfer = () => {
-    if (confirm(`Make ${member.name} the owner? You’ll become an admin.`)) void run(() => transferOwnership(officeId, member.userId));
+    const plan = transferNote(member.name);
+    if (confirm(`Make ${member.name} the owner? You’ll become an admin.${plan ? `\n\n${plan}` : ''}`)) void run(() => transferOwnership(officeId, member.userId));
   };
   const remove = () => {
     if (confirm(`Remove ${member.name} from this workspace?`)) void run(() => removeMember(officeId, member.userId));
@@ -248,6 +262,17 @@ const LINK_TEXT = {
   },
 };
 
+/** How many of the plan's seats are taken (members and open invitations), when it has a limit. */
+function SeatsUsed({ used }: { used: number }) {
+  const seats = useBilling((s) => s.view?.seats ?? null);
+  if (seats === null) return null;
+  return (
+    <p className="muted small ws-seats">
+      {used} of {plural(seats, 'seat')} used. Open invitations hold one too.
+    </p>
+  );
+}
+
 /** Turns the guest link on and off, copies it and makes a new one. */
 function GuestLinkSettings({ officeId, access, onChange }: { officeId: string; access: GuestLink; onChange: (access: GuestLink) => void }) {
   const text = LINK_TEXT[useStore((s) => s.kind)];
@@ -339,7 +364,11 @@ function WorkspaceSection() {
   const [data, setData] = useState<MembersAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-  const reload = useCallback(() => setVersion((v) => v + 1), []);
+  // After a change here: the members, and the plan's seats in use (Billing's seat pickers start from them).
+  const reload = useCallback(() => {
+    setVersion((v) => v + 1);
+    void refreshBilling();
+  }, []);
 
   // Again when your role or the access changes (here or by someone else).
   useEffect(() => {
@@ -371,7 +400,12 @@ function WorkspaceSection() {
       {access?.guests === 'open' && <OpenOffice officeId={officeId} onChange={setAccess} />}
       {/* A support workspace's customer link is what it's for: first. */}
       {kind === 'support' && link}
-      {may(role, 'add-member') && <AddPeople officeId={officeId} onAdded={reload} />}
+      {may(role, 'add-member') && (
+        <div>
+          <AddPeople officeId={officeId} onAdded={reload} />
+          <SeatsUsed used={data.members.length + (data.invites?.length ?? 0)} />
+        </div>
+      )}
       <section className="ws-section">
         <h4>Members · {data.members.length}</h4>
         <ul className="ws-list">

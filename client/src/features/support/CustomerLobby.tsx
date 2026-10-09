@@ -3,6 +3,7 @@ import { normalizeEmail } from '../../../../shared/account';
 import { randomAvatar } from '../../../../shared/avatar';
 import { MAX_CUSTOMER_EMAIL, MAX_CUSTOMER_NAME, MAX_FIRST_MESSAGE } from '../../../../shared/support';
 import type { OfficeInfo } from '../../../../shared/workspace';
+import { finePointer } from '../../lib/touch';
 import { AvatarPreview } from '../../ui/AvatarEditor';
 import { ShuffleIcon, SupportIcon } from '../../ui/icons';
 import { DeviceCheck, useJoin } from '../../ui/Lobby';
@@ -16,13 +17,18 @@ export function questionProblem(q: Question): string | null {
   return null;
 }
 
-/** The name, email and question fields (the lobby's, and the office's "Another question?"). */
+/**
+ * The name, email and question fields (the lobby's, and the office's "Another question?"). With
+ * `autoFocus`, the name (or the question, when the name is known) takes the focus, except on touch
+ * screens, where that pops up the keyboard.
+ */
 export function QuestionFields({ q, onChange, autoFocus }: { q: Question; onChange: (q: Question) => void; autoFocus?: boolean }) {
+  const focus = !!autoFocus && finePointer();
   return (
     <>
       <label className="field">
         <span>Your name</span>
-        <input value={q.name} onChange={(e) => onChange({ ...q, name: e.target.value })} maxLength={MAX_CUSTOMER_NAME} autoComplete="name" autoFocus={autoFocus && !q.name} />
+        <input value={q.name} onChange={(e) => onChange({ ...q, name: e.target.value })} maxLength={MAX_CUSTOMER_NAME} autoComplete="name" autoFocus={focus && !q.name} />
       </label>
       <label className="field">
         <span>
@@ -38,7 +44,7 @@ export function QuestionFields({ q, onChange, autoFocus }: { q: Question; onChan
           maxLength={MAX_FIRST_MESSAGE}
           rows={4}
           placeholder="A few words about what you need"
-          autoFocus={autoFocus && !!q.name}
+          autoFocus={focus && !!q.name}
         />
       </label>
     </>

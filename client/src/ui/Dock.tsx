@@ -47,6 +47,9 @@ function useNarrow(): boolean {
   return useSyncExternalStore(onNarrowChange, () => window.matchMedia(NARROW).matches);
 }
 
+/** On narrow screens, the most panel buttons the dock shows (the first, by order); the rest go in More. */
+const NARROW_PANELS = 2;
+
 /** Most phone browsers can't share the screen. */
 const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia;
 
@@ -390,6 +393,8 @@ export function Dock() {
   const closeEmotes = useCallback(() => setEmoteAnchor(null), []);
   const buildAllowed = useStore(canBuild);
   const invite = inviteAction(useStore((s) => s.role));
+  const onPhone = panels.filter((p) => !p.hideOnMobile);
+  const inDock = onPhone.filter((p) => !p.inMore).slice(0, NARROW_PANELS);
 
   return (
     <nav className="dock" aria-label="Controls">
@@ -437,12 +442,10 @@ export function Dock() {
       </div>
       {narrow ? (
         <div className="dock-group">
-          {panels
-            .filter((p) => !p.inMore && !p.hideOnMobile)
-            .map((p) => (
-              <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
-            ))}
-          <MoreButton panels={panels.filter((p) => p.inMore && !p.hideOnMobile)} />
+          {inDock.map((p) => (
+            <PanelButton key={panelKey(p)} panel={p} open={panel === p.id} />
+          ))}
+          <MoreButton panels={onPhone.filter((p) => !inDock.includes(p))} />
         </div>
       ) : (
         <div className="dock-group">

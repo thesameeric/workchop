@@ -45,16 +45,24 @@
     // them in Postgres (uses up a small free database quickly). Empty: s3 when S3_BUCKET is set, else db.
     "UPLOADS_STORAGE": "",
     // Delete chat conversations nobody has written in for this many days, e.g. "365". Empty: keep them.
-    "CHAT_RETENTION_DAYS": ""
+    "CHAT_RETENTION_DAYS": "",
+    // Billing prices in kobo per seat: Team a month (default 750000, ₦7,500), Support a year
+    // (default 18000000, ₦180,000). Empty: the defaults. Billing is on only with PAYSTACK_SECRET_KEY.
+    "BILLING_TEAM_SEAT_PRICE": "",
+    "BILLING_SUPPORT_SEAT_PRICE": ""
   },
+  // Billing's daily run (renewals, retries, locks, reminders) at 07:00 in Lagos. It does nothing
+  // without the PAYSTACK_SECRET_KEY and BILLING_INTERNAL_TOKEN secrets.
+  "triggers": { "crons": ["0 6 * * *"] },
   // Secrets, set with `npx wrangler secret put NAME`: DATABASE_URL (required), DATABASE_SSL,
   // SPOTIFY_CLIENT_ID, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_KEY_API_TOKEN, optionally
   // ICE_SERVERS or TURN_URL/TURN_USERNAME/TURN_CREDENTIAL, for email sign-up and password resets
   // RESEND_API_KEY (then also set EMAIL_FROM, or the server won't start), for sign-in GOOGLE_CLIENT_ID,
   // GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID and APPLE_PRIVATE_KEY, for
   // GitHub sign-in GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (and for notifications TOKEN_ENCRYPTION_KEY), for
-  // uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, and for weather
-  // in commercial use OPEN_METEO_API_KEY (the free API is non-commercial only).
+  // uploads in R2 S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, for weather
+  // in commercial use OPEN_METEO_API_KEY (the free API is non-commercial only), and for billing
+  // PAYSTACK_SECRET_KEY and BILLING_INTERNAL_TOKEN (at least 32 random characters: openssl rand -hex 32).
   // Other settings aren't secret; add them to "vars" above (or set them the same way): EMAIL_FROM
   // (the sender on a domain verified in Resend, e.g. "Workchop <noreply@mail.example.com>"), WEATHER
   // ("off" turns the weather off), CLOUDFLARE_TURN_TTL, UPLOAD_MAX_BYTES, UPLOADS_QUOTA_MB and S3_REGION.
