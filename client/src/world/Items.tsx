@@ -8,7 +8,7 @@ import { itemFootprint } from '../../../shared/geometry';
 import type { OfficeItem } from '../../../shared/types';
 import { local } from '../lib/positions';
 import { canBuild, getState, setState, useStore } from '../state/store';
-import { getItemInteraction, useItemDecor } from './extensions';
+import { offeredInteraction, useItemDecor } from './extensions';
 import { ItemModel } from './models';
 import { walkTo } from './movement';
 import { OpacityContext } from './prims';
@@ -36,7 +36,7 @@ function onItemPointerDown(e: ThreeEvent<PointerEvent>, item: OfficeItem) {
 
 function onItemClick(e: ThreeEvent<MouseEvent>, item: OfficeItem) {
   if (getState().mode !== 'play' || e.delta > 5) return;
-  const interaction = getItemInteraction(item.type);
+  const interaction = offeredInteraction(item.type, getState());
   if (interaction) {
     e.stopPropagation();
     interaction.onClick(item);
@@ -101,7 +101,7 @@ export const ItemView = memo(function ItemView({
 }) {
   const building = useStore((s) => s.mode === 'build');
   const entry = getEntry(item.type);
-  const interaction = getItemInteraction(item.type);
+  const interaction = useStore((s) => offeredInteraction(item.type, s));
   const decor = useItemDecor().filter((d) => d.types.includes(item.type));
   const sittable = !!entry?.seats || !!entry?.music || !!interaction;
   const hoverable = interactive && (building || sittable);

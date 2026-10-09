@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Server } from 'socket.io';
 import type { AccountUser } from '../shared/account';
 import type { PlayerPatch } from '../shared/types';
+import { isCustomer } from '../shared/workspace';
 import { Accounts } from './accounts';
 import { authOptionsFromEnv, createAuth, type AuthOptions } from './auth';
 import { sameSecret } from './auth/sessions';
@@ -152,8 +153,9 @@ export async function startServer(opts: ServerOptions = {}) {
     onLogout: (tokenHash) => io.in(sessionRoom(tokenHash)).disconnectSockets(true),
     onUserUpdated: (user) => {
       io.to(userRoom(user.id)).emit('account:updated', user);
-      // Their name and character in the offices they're in right now.
+      // Their name and character in the offices they're in right now (customers stay anonymous).
       for (const { officeId, player } of realtime.playersOfUser(user.id)) {
+        if (isCustomer(realtime.contextOf(player.id)?.role(), store.peek(officeId)?.kind)) continue;
         const patch: PlayerPatch = {};
         if (player.name !== user.name) patch.name = user.name;
         const avatar = user.profile.avatar;

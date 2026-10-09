@@ -6,7 +6,7 @@ import { getSession } from '../../lib/session';
 import { toast, useStore } from '../../state/store';
 import { AtIcon, AttachIcon, CloseIcon, RotateIcon, SendIcon } from '../../ui/icons';
 import { Avatar, fileIcon, formatBytes } from './parts';
-import { isLive, loadPeople, send, useChat } from './state';
+import { isLive, loadPeople, send, useChat, viewOf } from './state';
 
 /** The composer on screen, for files dropped on the panel and for focusing it. */
 export const composerHandle: { current: { addFiles: (files: File[]) => void; focus: () => void } | null } = { current: null };
@@ -51,7 +51,7 @@ function useSuggestions(conv: ConvKey, query: string | null): Suggestion[] {
     } else {
       add({ key: 'here', name: 'here', token: '<!here>', hint: 'Everyone online' });
       for (const p of Object.values(players).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (p.userId && p.userId === myUserId) continue;
+        if ((p.userId && p.userId === myUserId) || p.customer) continue;
         add({ key: p.id, name: p.name, token: p.userId ? `<@u:${p.userId}>` : `<@p:${p.id}>`, hint: p.userId ? 'Online' : 'Guest, online' });
       }
       for (const p of people) if (p.userId !== myUserId) add({ key: p.userId, name: p.name, token: `<@u:${p.userId}>`, hint: 'Away' });
@@ -88,7 +88,8 @@ export function MentionInput({
 }) {
   const [query, setQuery] = useState<string | null>(null);
   const [active, setActive] = useState(0);
-  const mentionable = !isLive(conv);
+  // Not in live conversations, nor in features' own (a support ticket has its two people).
+  const mentionable = !isLive(conv) && !viewOf(conv);
   const suggestions = useSuggestions(conv, mentionable ? query : null);
   const open = suggestions.length > 0;
 
@@ -476,7 +477,7 @@ export function Composer({
           <button type="button" className="icon-btn" title="Attach files" onClick={() => fileInput.current?.click()} disabled={files.length >= MAX_ATTACHMENTS}>
             <AttachIcon size={18} />
           </button>
-          {!isLive(conv) && (
+          {!isLive(conv) && !viewOf(conv) && (
             <button
               type="button"
               className="icon-btn"

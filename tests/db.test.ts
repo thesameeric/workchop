@@ -7,6 +7,8 @@ import { jsonb } from '../server/db';
 import { importLegacyOffices } from '../server/db/legacy';
 import { collectMigrations, coreMigrations, migrate, type Migration } from '../server/db/migrations';
 import { openPGlite } from '../server/db/pglite';
+import { migrations as chatMigrations } from '../server/features/chat/migrations';
+import { migrations as supportMigrations } from '../server/features/support/migrations';
 import { createTestDb, freshDb, resetTestDb, TEST_DATABASE_URL } from './helpers/db';
 
 const dirs: string[] = [];
@@ -177,6 +179,71 @@ describe(`migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe(`support migrations on ${TEST_DATABASE_URL ? 'Postgres' : 'PGlite'}`, () => {
+  it('let chat messages belong to a feature’s conversation, and only to one conversation', { timeout: 60_000 }, async () => {
+    const db = await freshDb();
+    const chat = (ids: number[]) => collectMigrations([{ name: 'chat', migrations: chatMigrations.filter((m) => ids.includes(m.id)) }]);
+    await migrate(db, chat([100]));
+    await db.query('INSERT INTO offices (id, owner_key, data) VALUES ($1, $2, $3::jsonb)', ['o1', 'key', JSON.stringify(createFromTemplate('blank', 'o1', 'o1'))]);
+    const { rows } = await db.query<{ id: string }>("INSERT INTO chat_channels (office_id, name) VALUES ('o1', 'random') RETURNING id");
+    const message = (channel: string | null, dm: string | null, conv?: string | null) =>
+      conv === undefined
+        ? db.query("INSERT INTO chat_messages (office_id, channel_id, dm_key, author_name, text) VALUES ('o1', $1, $2, 'Ann', 'hi')", [channel, dm])
+        : db.query("INSERT INTO chat_messages (office_id, channel_id, dm_key, conv_key, author_name, text) VALUES ('o1', $1, $2, $3, 'Ann', 'hi')", [channel, dm, conv]);
+    await message(rows[0].id, null);
+    await message(null, 'a:b');
+
+    expect(await migrate(db, chat([100, 101]))).toEqual(['101 chat_conversations']);
+    await message(null, null, 't:abc');
+    expect((await db.query('SELECT channel_id IS NOT NULL AS c, dm_key, conv_key FROM chat_messages ORDER BY created_at')).rows).toEqual([
+      { c: true, dm_key: null, conv_key: null },
+      { c: false, dm_key: 'a:b', conv_key: null },
+      { c: false, dm_key: null, conv_key: 't:abc' },
+    ]);
+    await expect(message(null, null, null)).rejects.toThrow(/chat_messages_one_conv/);
+    await expect(message(rows[0].id, null, 't:abc')).rejects.toThrow(/chat_messages_one_conv/);
+    await expect(message(null, 'a:b', 't:abc')).rejects.toThrow(/chat_messages_one_conv/);
+  });
+
+  it('keep one open ticket per customer, one customer per agent and desk, numbered per workspace', { timeout: 60_000 }, async () => {
+    const db = await freshDb();
+    expect(await migrate(db, collectMigrations([{ name: 'support', migrations: supportMigrations }]))).toContain('700 support_tickets');
+    for (const id of ['o1', 'o2']) await db.query('INSERT INTO offices (id, owner_key, data, kind) VALUES ($1, $2, $3::jsonb, $4)', [id, 'key', JSON.stringify(createFromTemplate('blank', id, id)), 'support']);
+    for (const id of ['mia', 'max']) await db.query('INSERT INTO users (id, name) VALUES ($1, $1)', [id]);
+    let n = 0;
+    const ticket = (office: string, number: number, key: string, status: string, agent: string | null = null, desk: string | null = null, rating: number | null = null) =>
+      db.query(
+        `INSERT INTO support_tickets (id, office_id, number, status, customer_name, customer_key, customer_address, first_message, assignee_user_id, desk_item_id, rating)
+         VALUES ($1, $2, $3, $4, 'Ann', $5, 'somewhere', 'Help', $6, $7, $8)`,
+        [`t${++n}`, office, number, status, key, agent, desk, rating],
+      );
+    await ticket('o1', 1, 'k1', 'waiting');
+    await expect(ticket('o1', 2, 'k1', 'active', 'mia', 'd1')).rejects.toThrow(/support_tickets_customer_idx/);
+    // Closed ones don't count, and other workspaces are separate.
+    await ticket('o1', 2, 'k1', 'resolved', 'mia', 'd1', 5);
+    await ticket('o2', 1, 'k1', 'waiting');
+    await expect(ticket('o1', 1, 'k9', 'waiting')).rejects.toThrow(/support_tickets_office_id_number_key/);
+    await ticket('o1', 3, 'k2', 'active', 'mia', 'd1');
+    await expect(ticket('o1', 4, 'k3', 'active', 'mia', 'd2')).rejects.toThrow(/support_tickets_agent_idx/);
+    await expect(ticket('o1', 4, 'k3', 'active', 'max', 'd1')).rejects.toThrow(/support_tickets_desk_idx/);
+    await ticket('o2', 2, 'k3', 'active', 'mia', 'd1');
+    await expect(ticket('o1', 5, 'k4', 'pending')).rejects.toThrow(/support_tickets_status_check/);
+    await expect(ticket('o1', 5, 'k4', 'resolved', null, null, 6)).rejects.toThrow(/support_tickets_rating_check/);
+    // Accounts and workspaces that go take their part with them.
+    await db.query("DELETE FROM users WHERE id = 'mia'");
+    expect((await db.query("SELECT 1 FROM support_tickets WHERE assignee_user_id IS NULL AND status = 'active'")).rowCount).toBe(2);
+    // Each workspace's numbers count on in support_counters, which goes with it.
+    await db.query("INSERT INTO support_counters (office_id, last_number) VALUES ('o1', 3), ('o2', 2)");
+    await expect(db.query("INSERT INTO support_counters (office_id, last_number) VALUES ('o1', 4)")).rejects.toThrow(/support_counters_pkey/);
+    await db.query("DELETE FROM offices WHERE id = 'o1'");
+    expect((await db.query('SELECT office_id FROM support_counters')).rows).toEqual([{ office_id: 'o2' }]);
+    expect((await db.query('SELECT office_id, number FROM support_tickets ORDER BY number')).rows).toEqual([
+      { office_id: 'o2', number: 1 },
+      { office_id: 'o2', number: 2 },
+    ]);
   });
 });
 

@@ -18,10 +18,15 @@ import {
   type ChatMessage,
 } from '../../../shared/chat';
 import type { PlayerState } from '../../../shared/types';
+import { isCustomer } from '../../../shared/workspace';
 import type { Feature, ServerContext } from '../../features';
 import { randomId } from '../../officeStore';
+import { roomName } from '../../realtime';
+import { conversationOf as registered, type ConvAccess, type Conversation } from './conversations';
 import { migrations } from './migrations';
 import { ChatError, ChatStore, isUniqueViolation, parentPreview, toChannel, toMessage, type ChannelRow, type MessageRow } from './store';
+
+export { registerConversation, type ConvAccess, type Conversation } from './conversations';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v);
@@ -36,7 +41,7 @@ const HOUR = 60 * 60 * 1000;
 export interface ChatOptions {
   /** Delete conversations quiet for this many days (null keeps everything). Default: CHAT_RETENTION_DAYS. */
   retentionDays?: number | null;
-  /** How often old conversations are looked for, at most (default hourly, checked when someone joins). */
+  /** How often old conversations and unattached files are looked for, at most (default hourly, checked when someone joins). */
   sweepEveryMs?: number;
 }
 
@@ -60,10 +65,11 @@ function answer<T extends object>(ack: unknown, work: () => Promise<T>): void {
   );
 }
 
-/** Where a message goes: a channel or saved direct message, or live (to people present now). */
+/** Where a message goes: a channel, saved direct message or feature's conversation, or live (to people present now). */
 type Target =
   | { kind: 'channel'; channel: ChannelRow; conv: string }
   | { kind: 'dm'; dmKey: string; users: [string, string]; conv: string }
+  | { kind: 'conv'; conv: string; owner: Conversation; access: ConvAccess }
   | { kind: 'nearby' }
   | { kind: 'live'; to: PlayerState };
 
@@ -92,27 +98,69 @@ export function chatFeature(opts: ChatOptions = {}): Feature {
 
 export const feature = chatFeature();
 
+/** Mention tokens in text that doesn't go through mention checks, as plain text. */
+const unmention = (text: string) => text.replace(MENTION_TOKEN, (token) => (token === '<!here>' ? '@here' : '@unknown'));
+
+/**
+ * Saves a message in a feature's conversation on someone's behalf (a ticket's first message) and
+ * sends it to the conversation's audience.
+ */
+export async function postToConversation(
+  ctx: Pick<ServerContext, 'db' | 'io'>,
+  m: { officeId: string; key: string; userId: string | null; playerId: string; name: string; text: string },
+): Promise<ChatMessage> {
+  const owner = registered(ctx, m.key);
+  if (!owner) throw new Error(`No feature owns the conversation ${m.key}`);
+  const { message } = await new ChatStore(ctx.db).insert({
+    officeId: m.officeId,
+    channelId: null,
+    dmKey: null,
+    convKey: m.key,
+    parentId: null,
+    inChannel: false,
+    userId: m.userId,
+    playerId: m.playerId,
+    name: m.name,
+    text: unmention(cleanMessageText(m.text)),
+    attachments: [],
+    mentions: [],
+    mentionUsers: [],
+    conv: m.key,
+  });
+  const msg = toMessage(message);
+  const ids = owner.audience(m.officeId, m.key);
+  if (ids.length) ctx.io.to(ids).emit('chat:message', msg);
+  return msg;
+}
+
+/** Deletes features' conversations, with their files. */
+export async function deleteConversations(ctx: Pick<ServerContext, 'db' | 'uploads'>, officeId: string, keys: string[]): Promise<void> {
+  await ctx.uploads.remove(await new ChatStore(ctx.db).deleteConversations(officeId, keys));
+}
+
 function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEveryMs: number): void {
   const store = new ChatStore(ctx.db);
   const { realtime, io } = ctx;
+  const conversationOf = (key: unknown) => registered(ctx, key);
 
-  if (retentionDays) {
-    let lastSweep = 0;
-    const sweep = async () => {
-      lastSweep = Date.now();
-      try {
-        const { threads, uploads } = await store.sweep(retentionDays);
-        await ctx.uploads.remove(uploads);
-        if (threads) console.log(`[chat] deleted ${threads} messages (with their threads) quiet for over ${retentionDays} days`);
-      } catch (err) {
-        console.error('[chat] could not delete old messages:', err);
-      }
-    };
-    // No timers to stop: it runs when people come in, at most every sweepEveryMs.
-    realtime.onJoin(() => {
-      if (Date.now() - lastSweep >= sweepEveryMs) void sweep();
-    });
-  }
+  let lastSweep = 0;
+  const sweep = async () => {
+    lastSweep = Date.now();
+    try {
+      // Files are uploaded to be attached: ones still unattached after a day go.
+      await ctx.uploads.remove(await store.unattached());
+      if (!retentionDays) return;
+      const { threads, uploads } = await store.sweep(retentionDays);
+      await ctx.uploads.remove(uploads);
+      if (threads) console.log(`[chat] deleted ${threads} messages (with their threads) quiet for over ${retentionDays} days`);
+    } catch (err) {
+      console.error('[chat] could not delete old messages and files:', err);
+    }
+  };
+  // No timers to stop: it runs when people come in, at most every sweepEveryMs.
+  realtime.onJoin(() => {
+    if (Date.now() - lastSweep >= sweepEveryMs) void sweep();
+  });
 
   /** This person's connections in the office. */
   const socketsOf = (officeId: string, userId: string) =>
@@ -121,22 +169,34 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       .filter((p) => p.officeId === officeId)
       .map((p) => p.player.id);
 
-  /** Sends a saved message to those who can see it: the office for channels, the two people for direct messages. */
-  const deliver = (officeId: string, row: MessageRow, event: 'chat:message' | 'chat:updated' | 'chat:deleted', msg: ChatMessage = toMessage(row)) => {
-    if (row.channel_id) realtime.emitToOffice(officeId, event, msg);
-    else if (row.dm_key) {
-      const ids = row.dm_key.split(':').flatMap((u) => socketsOf(officeId, u));
-      if (ids.length) io.to(ids).emit(event, msg);
-    }
+  /** Customers (guests of support workspaces) only chat in their tickets. */
+  const isCustomerPlayer = (officeId: string, playerId: string) => isCustomer(realtime.contextOf(playerId)?.role(), ctx.store.peek(officeId)?.kind);
+  /** Everyone in the office who sees its channels: all but customers. */
+  const channelAudience = (officeId: string) => {
+    const customers = ctx.store.peek(officeId)?.kind === 'support' ? realtime.players(officeId).filter((p) => isCustomerPlayer(officeId, p.id)) : [];
+    return io.to(roomName(officeId)).except(customers.map((p) => p.id));
   };
 
-  /** Tells mentioned people (not the author) about a channel message. */
+  /**
+   * Sends a saved message to those who can see it: the office for channels, the two people for
+   * direct messages, a feature's audience for its conversations.
+   */
+  const deliver = (officeId: string, row: MessageRow, event: 'chat:message' | 'chat:updated' | 'chat:deleted', msg: ChatMessage = toMessage(row)) => {
+    let ids: string[] = [];
+    if (row.channel_id) return void channelAudience(officeId).emit(event, msg);
+    if (row.dm_key) ids = row.dm_key.split(':').flatMap((u) => socketsOf(officeId, u));
+    else if (row.conv_key) ids = conversationOf(row.conv_key)?.audience(officeId, row.conv_key) ?? [];
+    if (ids.length) io.to(ids).emit(event, msg);
+  };
+
+  /** Tells mentioned people (not the author, nor customers) about a channel message. */
   const notify = (h: Here, row: MessageRow, who: { users: string[]; players: string[]; here: boolean }) => {
     const author = row.author_user_id;
     const targets = new Set<string>();
     for (const u of who.users) if (u !== author) socketsOf(h.officeId, u).forEach((id) => targets.add(id));
     for (const p of who.players) if (p !== row.author_player_id) targets.add(p);
     if (who.here) for (const p of h.players.values()) if (p.id !== row.author_player_id && (!author || p.userId !== author)) targets.add(p.id);
+    for (const id of targets) if (isCustomerPlayer(h.officeId, id)) targets.delete(id);
     if (targets.size) io.to([...targets]).emit('chat:mention', { conv: `c:${row.channel_id}`, message: toMessage(row) });
   };
 
@@ -166,19 +226,38 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
     const limit = (ok: boolean, why = 'You’re doing that too quickly. Please wait a moment.') => {
       if (!ok) throw new ChatError(why);
     };
-    const isMine = (row: MessageRow) => (row.author_user_id ? row.author_user_id === s.user?.id : row.author_player_id === s.socket.id);
+    /** Customers (guests of support workspaces) only chat in their tickets. */
+    const customer = () => {
+      const room = s.room();
+      return !!room && isCustomer(s.role(), ctx.store.peek(room.officeId)?.kind);
+    };
+    /**
+     * Your own message: by your account, this connection, or (`guestOwner`) in a feature's
+     * conversation whose guest messages are yours.
+     */
+    const isMine = (row: MessageRow, guestOwner = false) =>
+      row.author_user_id ? row.author_user_id === s.user?.id : row.author_player_id === s.socket.id || guestOwner;
+    const ownsGuestMessages = (row: MessageRow) => !!row.conv_key && !!conversationOf(row.conv_key)?.ownsGuestMessage(s, row.conv_key);
     /** Renaming and archiving channels and deleting others' messages: the owner and admins. */
     const mayModerate = () => s.isOwner() || s.role() === 'admin';
     const moderators = (what: string) => new ChatError(`Only the owner and admins can ${what}.`);
-    const mayView = (row: MessageRow, officeId: string) =>
-      row.office_id === officeId && (!!row.channel_id || (!!s.user && !!row.dm_key?.split(':').includes(s.user.id)));
+    /** What this person may do with a message's conversation: null when they can't see it. */
+    const accessTo = async (row: MessageRow, officeId: string): Promise<ConvAccess | null> => {
+      if (row.office_id !== officeId) return null;
+      if (row.conv_key) return (await conversationOf(row.conv_key)?.access(s, row.conv_key, officeId)) ?? null;
+      if (customer()) return null;
+      return row.channel_id || (s.user && row.dm_key?.split(':').includes(s.user.id)) ? { write: true } : null;
+    };
     /** The conversation a message is in, as this person names it. */
-    const convOf = (row: MessageRow) => (row.channel_id ? `c:${row.channel_id}` : `d:${dmPartner(row.dm_key ?? '', s.user?.id ?? '')}`);
-    const savedConv = (row: MessageRow) => (row.channel_id ? `c:${row.channel_id}` : `dm:${row.dm_key}`);
+    const convOf = (row: MessageRow) => row.conv_key ?? (row.channel_id ? `c:${row.channel_id}` : `d:${dmPartner(row.dm_key ?? '', s.user?.id ?? '')}`);
+    const savedConv = (row: MessageRow) => row.conv_key ?? (row.channel_id ? `c:${row.channel_id}` : `dm:${row.dm_key}`);
 
-    const visible = async (id: unknown, officeId: string) => {
+    const visible = async (id: unknown, officeId: string, write = false) => {
       const row = isUuid(id) ? await store.message(id) : null;
-      if (!row || !mayView(row, officeId)) throw new ChatError('That message no longer exists.');
+      const access = row && (await accessTo(row, officeId));
+      if (!row || !access) throw new ChatError('That message no longer exists.');
+      // Channels and direct messages check what may be changed themselves.
+      if (write && !access.write) throw new ChatError(access.why);
       return row;
     };
     const cursor = (v: unknown) => {
@@ -188,9 +267,16 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
     };
 
     const target = async (conv: unknown, h: Here): Promise<Target> => {
-      if (conv === 'nearby') return { kind: 'nearby' };
-      const id = typeof conv === 'string' ? conv.slice(2) : '';
       if (typeof conv !== 'string') throw new ChatError('Pick a conversation.');
+      const owner = conversationOf(conv);
+      if (owner) {
+        const access = await owner.access(s, conv, h.officeId);
+        if (!access) throw new ChatError('That conversation doesn’t exist.');
+        return { kind: 'conv', conv, owner, access };
+      }
+      if (customer()) throw new ChatError('That conversation doesn’t exist.');
+      if (conv === 'nearby') return { kind: 'nearby' };
+      const id = conv.slice(2);
       if (conv.startsWith('c:') && isUuid(id)) {
         const channel = await store.channel(h.officeId, id);
         if (channel) return { kind: 'channel', channel, conv: `c:${channel.id}` };
@@ -203,6 +289,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         }
       } else if (conv.startsWith('p:')) {
         const to = h.players.get(id);
+        if (to && isCustomerPlayer(h.officeId, to.id)) throw new ChatError('Visitors chat in their ticket.');
         if (to && to.id !== h.me.id) return { kind: 'live', to };
         throw new ChatError('They’ve left the office.');
       }
@@ -248,7 +335,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           return;
         }
         const guest = t.kind === 'player' ? h.players.get(t.id!) : undefined;
-        if (guest && !guest.userId && scope.kind === 'channel') {
+        if (guest && !guest.userId && scope.kind === 'channel' && !isCustomerPlayer(h.officeId, guest.id)) {
           out.players.push(guest.id);
           out.mentions.push({ kind: 'player', id: guest.id, name: guest.name });
           return;
@@ -285,6 +372,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       answer(ack, async () => {
         const h = here();
         limit(canQuery());
+        if (customer()) return { channels: [], dms: [], counts: {} };
         await store.ensureDefault(h.officeId);
         const channels = (await store.channels(h.officeId)).map(toChannel);
         if (!s.user) return { channels, dms: [], counts: {} };
@@ -313,8 +401,10 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         // Live conversations have no history on the server.
         if (conv === 'nearby' || (typeof conv === 'string' && conv.startsWith('p:'))) return { messages: [], hasMore: false };
         const t = await target(conv, h);
-        if (t.kind !== 'channel' && t.kind !== 'dm') return { messages: [], hasMore: false };
-        const page = await store.history(t.kind === 'channel' ? { channelId: t.channel.id } : { officeId: h.officeId, dmKey: t.dmKey }, before);
+        if (t.kind !== 'channel' && t.kind !== 'dm' && t.kind !== 'conv') return { messages: [], hasMore: false };
+        const where =
+          t.kind === 'channel' ? { channelId: t.channel.id } : t.kind === 'dm' ? { officeId: h.officeId, dmKey: t.dmKey } : { officeId: h.officeId, convKey: t.conv };
+        const page = await store.history(where, before);
         return { messages: page.rows.map(toMessage), hasMore: page.hasMore };
       }),
     );
@@ -353,11 +443,13 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           parent = await visible(req.parentId, h.officeId);
           if (parent.parent_id) throw new ChatError('Reply in the thread of the first message.');
           if (parent.deleted_at) throw new ChatError('That message was deleted.');
-          t = parent.channel_id
-            ? await target(`c:${parent.channel_id}`, h)
-            : { kind: 'dm', dmKey: parent.dm_key!, users: parent.dm_key!.split(':') as [string, string], conv: `dm:${parent.dm_key}` };
+          t =
+            parent.channel_id || parent.conv_key
+              ? await target(parent.conv_key ?? `c:${parent.channel_id}`, h)
+              : { kind: 'dm', dmKey: parent.dm_key!, users: parent.dm_key!.split(':') as [string, string], conv: `dm:${parent.dm_key}` };
         } else t = await target(req.conv, h);
         if (t.kind === 'channel' && t.channel.archived_at) throw new ChatError('This channel is archived.');
+        if (t.kind === 'conv' && !t.access.write) throw new ChatError(t.access.why);
         const attachments = await attachmentsFor(req.attachments, h);
         if (!text && !attachments.length) throw new ChatError('Write a message first.');
 
@@ -368,6 +460,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
             id: randomId(16),
             channelId: null,
             dm: null,
+            conv: null,
             live: t.kind === 'nearby' ? 'nearby' : 'dm',
             parentId: null,
             inChannel: false,
@@ -387,21 +480,24 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           };
           if (nonce) msg.nonce = nonce;
           if (t.kind === 'live') msg.to = t.to.id;
-          io.to(t.kind === 'live' ? [h.me.id, t.to.id] : [h.me.id, ...realtime.linkedPeers(h.officeId, h.me.id)]).emit('chat:message', msg);
+          const nearby = () => realtime.linkedPeers(h.officeId, h.me.id).filter((id) => !isCustomerPlayer(h.officeId, id));
+          io.to(t.kind === 'live' ? [h.me.id, t.to.id] : [h.me.id, ...nearby()]).emit('chat:message', msg);
           return { message: msg };
         }
 
-        const m = await resolveMentions(text, h, t.kind === 'channel' ? { kind: 'channel' } : { kind: 'dm', users: t.users });
+        // Features' conversations have no mentions.
+        const m = await resolveMentions(text, h, t.kind === 'channel' ? { kind: 'channel' } : t.kind === 'dm' ? { kind: 'dm', users: t.users } : { kind: 'live' });
         const { message, parent: updatedParent } = await store.insert({
           officeId: h.officeId,
           channelId: t.kind === 'channel' ? t.channel.id : null,
           dmKey: t.kind === 'dm' ? t.dmKey : null,
           dmUsers: t.kind === 'dm' ? t.users : undefined,
+          convKey: t.kind === 'conv' ? t.conv : null,
           parentId: parent?.id ?? null,
           inChannel: !!parent && req.alsoToChannel === true,
           userId: s.user?.id ?? null,
           playerId: h.me.id,
-          name: h.me.name,
+          name: (t.kind === 'conv' && t.owner.nameOf?.(s, t.conv)) || h.me.name,
           text: m.text,
           attachments,
           mentions: m.mentions,
@@ -422,14 +518,16 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       answer(ack, async () => {
         const h = here();
         limit(canChange());
-        const row = await visible(id, h.officeId);
-        if (!isMine(row)) throw new ChatError('You can only edit your own messages.');
+        const row = await visible(id, h.officeId, true);
+        const guestOwner = ownsGuestMessages(row);
+        if (!isMine(row, guestOwner)) throw new ChatError('You can only edit your own messages.');
         const text = cleanMessageText(rawText);
         if (!text && !row.attachments.length) throw new ChatError('A message can’t be empty. Delete it instead.');
-        const m = await resolveMentions(text, h, row.channel_id ? { kind: 'channel' } : { kind: 'dm', users: row.dm_key!.split(':') }, row.mentions);
+        const scope = row.channel_id ? { kind: 'channel' as const } : row.dm_key ? { kind: 'dm' as const, users: row.dm_key.split(':') } : { kind: 'live' as const };
+        const m = await resolveMentions(text, h, scope, row.mentions);
         const mentionUsers = row.channel_id ? mentionUsersOf(h, m, row.author_user_id) : [];
         const { message, added } = await store.edit(row.id, m.text, m.mentions, mentionUsers, savedConv(row), (fresh) => {
-          if (!isMine(fresh)) throw new ChatError('You can only edit your own messages.');
+          if (!isMine(fresh, guestOwner)) throw new ChatError('You can only edit your own messages.');
         });
         deliver(h.officeId, message, 'chat:updated');
         if (row.channel_id) {
@@ -449,9 +547,10 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
       answer(ack, async () => {
         const h = here();
         limit(canChange());
-        const row = await visible(id, h.officeId);
+        const row = await visible(id, h.officeId, true);
+        const guestOwner = ownsGuestMessages(row);
         // Your own, or in a channel anyone's for moderators.
-        const allowed = (r: MessageRow) => isMine(r) || (!!r.channel_id && mayModerate());
+        const allowed = (r: MessageRow) => isMine(r, guestOwner) || (!!r.channel_id && mayModerate());
         if (!allowed(row)) throw new ChatError('You can only delete your own messages.');
         const { message, parent, uploads } = await store.remove(row.id, (fresh) => {
           if (!allowed(fresh)) throw new ChatError('You can only delete your own messages.');
@@ -468,8 +567,9 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
         const h = here();
         limit(canReact());
         if (!isReactionEmoji(emoji)) throw new ChatError('Pick an emoji.');
-        const row = await visible(id, h.officeId);
-        const who = { id: reactorId(s.user?.id, h.me.id), name: h.me.name };
+        const row = await visible(id, h.officeId, true);
+        const name = (row.conv_key && conversationOf(row.conv_key)?.nameOf?.(s, row.conv_key)) || h.me.name;
+        const who = { id: reactorId(s.user?.id, h.me.id), name };
         const updated = await store.react(row.id, (fresh) => toggleReaction(fresh.reactions, emoji, who));
         deliver(h.officeId, updated, 'chat:updated');
         return {};
@@ -498,6 +598,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
     s.socket.on('channel:create', (req, ack) =>
       answer(ack, async () => {
         const h = here();
+        if (customer()) throw new ChatError('Only staff can create channels here.');
         const name = normalizeChannelName(req?.name);
         const error = channelNameError(name);
         if (error) throw new ChatError(error);
@@ -512,13 +613,13 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           throw err;
         }
         const channel = toChannel(row);
-        realtime.emitToOffice(h.officeId, 'channel:created', channel);
+        channelAudience(h.officeId).emit('channel:created', channel);
         return { channel };
       }),
     );
 
     const managed = async (id: unknown, h: Here) => {
-      const row = isUuid(id) ? await store.channel(h.officeId, id) : null;
+      const row = isUuid(id) && !customer() ? await store.channel(h.officeId, id) : null;
       if (!row) throw new ChatError('That channel doesn’t exist.');
       return row;
     };
@@ -549,7 +650,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           throw err;
         }
         const channel = toChannel(updated);
-        realtime.emitToOffice(h.officeId, 'channel:updated', channel);
+        channelAudience(h.officeId).emit('channel:updated', channel);
         return { channel };
       }),
     );
@@ -570,7 +671,7 @@ function registerChat(ctx: ServerContext, retentionDays: number | null, sweepEve
           throw err;
         }
         const channel = toChannel(updated);
-        realtime.emitToOffice(h.officeId, 'channel:updated', channel);
+        channelAudience(h.officeId).emit('channel:updated', channel);
         return { channel };
       }),
     );

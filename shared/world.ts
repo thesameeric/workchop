@@ -90,6 +90,31 @@ export function setLight(office: Office, itemId: string, on: boolean): WorldChan
   return withData(office, targets.filter((t) => isLightOn(t) !== on).map((t) => ({ item: t, data: { on } })));
 }
 
+export const BOARD_TYPE = 'info-board';
+export const MAX_BOARD_TITLE = 60;
+export const MAX_BOARD_TEXT = 600;
+
+/** What an info board says (FAQ, welcome text). Owners and admins edit it with world:board. */
+export interface BoardData {
+  title: string;
+  text: string;
+}
+
+export function sanitizeBoardData(raw: unknown): BoardData | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const title = typeof r.title === 'string' ? clip(r.title.replace(/\s+/g, ' ').trim(), MAX_BOARD_TITLE) : '';
+  const text = typeof r.text === 'string' ? clip(r.text.replace(/\r\n?/g, '\n').trim(), MAX_BOARD_TEXT) : '';
+  return title || text ? { title, text } : undefined;
+}
+
+/** Changes what an info board says. */
+export function setBoard(office: Office, itemId: string, data: unknown): WorldChange {
+  const item = office.items.find((i) => i.id === itemId);
+  if (!item || item.type !== BOARD_TYPE) return { error: 'That board is gone.' };
+  return withData(office, [{ item, data: sanitizeBoardData(data) }]);
+}
+
 /** The floor's unit cells, grouped by the area they belong to (to draw darkened areas). */
 export function areaCells(zones: Zone[], width: number, depth: number): Map<string, { x: number; z: number }[]> {
   const out = new Map<string, { x: number; z: number }[]>();
@@ -339,6 +364,8 @@ declare module './types' {
     /** Mark one note on your desk (or 'all') as read. */
     'desk:note:read': (id: string, ack: (res: WorldResult) => void) => void;
     'desk:note:delete': (id: string, guestKey: string | null, ack: (res: WorldResult) => void) => void;
+    /** Change what an info board says (owners and admins). */
+    'world:board': (itemId: string, data: BoardData, ack: (res: WorldResult) => void) => void;
   }
   interface ServerToClientEvents {
     /** Note counts and colours by desk owner: all of them (replace) or the ones that changed. */

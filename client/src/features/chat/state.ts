@@ -104,13 +104,43 @@ function request<E extends keyof Events>(event: E, ...args: Args<E>): Promise<An
   return timed.emitWithAck(event, ...args) as Promise<Answer<E>>;
 }
 
+/**
+ * A feature's own saved conversations (support tickets, `t:<id>`), shown outside the chat panel: how
+ * to show one, whether it's on screen right now, whether a new message in it gets a toast, and
+ * whether the messages written in it without an account are yours (a support customer's, in their
+ * own ticket: the server lets them edit those after a reload too).
+ */
+export interface ConvView {
+  open(conv: ConvKey): void;
+  looking(conv: ConvKey): boolean;
+  notify(conv: ConvKey): boolean;
+  guestIsMe(conv: ConvKey): boolean;
+}
+
+const views = new Map<string, ConvView>();
+
+/** Shows the conversations starting with `prefix` (e.g. 't:') with `view`; returns a function that removes it. */
+export function registerConvView(prefix: string, view: ConvView): () => void {
+  views.set(prefix, view);
+  return () => {
+    if (views.get(prefix) === view) views.delete(prefix);
+  };
+}
+
+/** The feature that shows this conversation, if it isn't the chat panel's. */
+export const viewOf = (conv: ConvKey): ConvView | undefined => views.get(conv.slice(0, conv.indexOf(':') + 1));
+
 export const isLive = (conv: ConvKey) => conv === 'nearby' || conv.startsWith('p:');
-export const isSaved = (conv: ConvKey) => conv.startsWith('c:') || conv.startsWith('d:');
+/** Channels and saved direct messages: the chat panel lists them, remembers them and marks them read on the server. */
+const isListed = (conv: ConvKey) => conv.startsWith('c:') || conv.startsWith('d:');
+/** Kept by the server (history, catching up after a reconnect): the listed ones and features' own. */
+export const isSaved = (conv: ConvKey) => isListed(conv) || !!viewOf(conv);
 /** Conversations whose unread messages count on the dock button (not just their mentions). */
 export const isDirect = (conv: ConvKey) => conv.startsWith('d:') || conv.startsWith('p:');
 
 /** The conversation a message belongs to, from this person's side. */
 export function convOf(m: ChatMessage): ConvKey {
+  if (m.conv) return m.conv;
   if (m.channelId) return `c:${m.channelId}`;
   if (m.dm) return `d:${dmPartner(m.dm, myUserId() ?? '')}`;
   if (m.live === 'nearby') return 'nearby';
@@ -118,7 +148,8 @@ export function convOf(m: ChatMessage): ConvKey {
 }
 
 export function isMine(m: ChatMessage): boolean {
-  return m.userId ? m.userId === myUserId() : m.playerId === selfId();
+  if (m.userId) return m.userId === myUserId();
+  return m.playerId === selfId() || (!!m.conv && !!viewOf(m.conv)?.guestIsMe(m.conv));
 }
 
 /** Whether these mentions include you (by name, or @here). */
@@ -128,10 +159,13 @@ export function mentionsMe(mentions: ChatMention[]): boolean {
   return mentions.some((m) => m.kind === 'here' || (m.kind === 'user' && m.id === me) || (m.kind === 'player' && m.id === pid));
 }
 
-/** The chat is open on this conversation (or thread) right now, where you can see it. */
+/** The chat (or the feature showing it) is open on this conversation (or thread) right now, where you can see it. */
 function looking(conv: ConvKey, thread: string | null = null): boolean {
+  if (document.hidden) return false;
+  const view = viewOf(conv);
+  if (view) return !thread && view.looking(conv);
   const s = get();
-  return getState().panel === 'chat' && !document.hidden && s.current === conv && s.thread === thread;
+  return getState().panel === 'chat' && s.current === conv && s.thread === thread;
 }
 
 /** Whether you're looking at where this message shows: its conversation, or its thread. */
@@ -232,8 +266,8 @@ export function markRead(conv: ConvKey): void {
       return { counts };
     });
   }
-  // Guests' read markers stay in this tab.
-  if (!myUserId() || !isSaved(conv) || readTimers.has(conv)) return;
+  // Guests' read markers (and features' conversations') stay in this tab.
+  if (!myUserId() || !isListed(conv) || readTimers.has(conv)) return;
   readTimers.set(
     conv,
     setTimeout(() => {
@@ -295,8 +329,8 @@ export function onMessage(m: ChatMessage): void {
   }
   if (!inConv) return;
   bump(conv, 'unread');
-  // Direct messages get a toast (mentions get theirs from chat:mention).
-  if (isDirect(conv)) {
+  // Direct messages get a toast (mentions get theirs from chat:mention), and so do features' conversations that ask for it.
+  if (isDirect(conv) || viewOf(conv)?.notify(conv)) {
     toast(`${m.name}: ${preview(m)}`, { icon: ChatIcon, action: { label: 'Reply', run: () => openConv(conv, { show: true }) } });
   }
 }
@@ -481,13 +515,18 @@ export async function loadPeople(): Promise<void> {
 
 // ---------- navigation ----------
 
-/** Shows a conversation (and opens the chat panel, with `show`). */
+/** Shows a conversation (and opens the chat panel, with `show`); a feature's own is shown where it shows it. */
 export function openConv(conv: ConvKey, opts: { show?: boolean } = {}): void {
   if (!conv) return;
+  const view = viewOf(conv);
+  if (view) {
+    view.open(conv);
+    return;
+  }
   set({ current: conv, thread: null, editing: null });
   rememberLiveName(conv, getState().players[conv.slice(2)]?.name);
   const officeId = getState().officeId;
-  if (officeId && isSaved(conv)) {
+  if (officeId && isListed(conv)) {
     try {
       localStorage.setItem(lastConvKey(officeId), conv);
     } catch {
@@ -569,6 +608,7 @@ export function send(conv: ConvKey, draft: Draft, opts: { parentId?: string; als
     id: `pending:${request.nonce}`,
     channelId: conv.startsWith('c:') ? conv.slice(2) : null,
     dm: null,
+    conv: viewOf(conv) ? conv : null,
     live: conv === 'nearby' ? 'nearby' : conv.startsWith('p:') ? 'dm' : undefined,
     to: conv.startsWith('p:') ? conv.slice(2) : undefined,
     parentId: opts.parentId ?? null,

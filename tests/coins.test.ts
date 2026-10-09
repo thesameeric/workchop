@@ -29,6 +29,7 @@ import { freshDb, TEST_DATABASE_URL } from './helpers/db';
 import { io as connect } from 'socket.io-client';
 import { DEFAULT_AVATAR } from '../shared/avatar';
 import type { JoinResponse, Status } from '../shared/types';
+import type { MembersAnswer } from '../shared/workspace';
 import { createOffice, disconnectAll, Jar, json, until, type Client } from './helpers/http';
 
 const DB = TEST_DATABASE_URL ? 'Postgres' : 'PGlite';
@@ -306,6 +307,21 @@ describe(`coins in the office on ${DB}`, () => {
     expect(await tip(a.socket, { toUserId: other.user.id, amount: 5 })).toEqual({ ok: false, error: 'They’re not in this office' });
     expect(await tip(a.socket, { toUserId: other.user.id, amount: 501 })).toMatchObject({ ok: false });
     expect((await wallet(ada.jar)).balance).toBe(WELCOME_COINS + DAILY_COINS);
+  });
+
+  it('leaves support workspaces’ customers out of tips', async () => {
+    const ada = await signIn('Ada');
+    const bo = await signIn('Bo');
+    const made = await ada.jar.fetch(`${base}/api/offices`, json({ name: 'Help', kind: 'support', template: 'support' }));
+    const { id } = (await made.json()) as { id: string };
+    const { access } = (await (await ada.jar.fetch(`${base}/api/offices/${id}/members`)).json()) as MembersAnswer;
+    const guest = access!.link!.split('#guest=')[1];
+    const a = await join(id, 'Ada', { jar: ada.jar });
+    // Bo, signed in, comes in as a customer.
+    const b = await join(id, 'Bo', { jar: bo.jar, guest });
+    await until(async () => (await wallet(ada.jar)).balance > 0 && (await wallet(bo.jar)).balance > 0);
+    expect(await tip(a.socket, { toPlayerId: b.id, amount: 5 })).toEqual({ ok: false, error: 'Visitors can’t send or get coins' });
+    expect(await tip(b.socket, { toPlayerId: a.id, amount: 5 })).toEqual({ ok: false, error: 'Visitors can’t send or get coins' });
   });
 
   it('limits tips to 10 a minute and refuses overdrafts', async () => {

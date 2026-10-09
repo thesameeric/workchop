@@ -110,6 +110,17 @@ export const RemoveUserIcon = icon('user-remove-01');
 export const OwnerIcon = icon('crown');
 export const ResendIcon = icon('mail-send-01');
 export const RefreshIcon = icon('refresh');
+// Support
+export const TicketIcon = icon('ticket-01');
+export const HistoryIcon = icon('history');
+export const WaitIcon = icon('hourglass');
+export const WalkIcon = icon('walking');
+export const NextIcon = icon('arrow-right-02');
+export const StarIcon = icon('star');
+export const FishIcon = icon('fish');
+export const CoffeeIcon = icon('coffee-02');
+export const BookIcon = icon('book-open-01');
+export const GamesIcon = icon('game-controller-01');
 // Weather
 export const SunCloudIcon = icon('sun-cloud-02');
 export const MoonCloudIcon = icon('moon-cloud');

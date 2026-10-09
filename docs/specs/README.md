@@ -17,7 +17,7 @@ where the hooks below allow it, to keep merges easy.
 - Plug into the foundation instead of editing shared central files (APIs below). Server code goes in
   `server/features/<name>/`, registered in `server/features/index.ts`; socket events are declared in
   `shared/<name>.ts` by augmenting the event maps; client code goes in `client/src/features/<name>/`
-  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features: chat 100 and 101, world 200, support 700–799).
+  (auto-loaded). Migration id ranges: **presence 300–399, weather 400–499, github 500–599, coins 600–699** (100–299 and 700+ are taken by the other features: chat 100 and 101, world 200, support 700–799; see support.md).
 - Icons: only Hugeicons. Add names (from `scripts/hugeicons/icons.css`) to
   `client/src/ui/icon-names.json`, export components in `client/src/ui/icons.tsx`, run `npm run icons`
   (needs `pip install fonttools brotli`). It's fine if another branch also adds icons; the merge
@@ -53,12 +53,24 @@ where the hooks below allow it, to keep merges easy.
   `clientIp(req)` (the visitor's IP, from CLIENT_IP_HEADER behind a proxy), `socketIp(socket)` (the same
   for a connection; guests get a new socket each time they reconnect), `quiet` (true in tests:
   skip "it works" log lines) and `onClose(fn)` (runs when the server closes, before the database: stop
-  timers there). `uploads.remove(ids)` deletes stored files. Socket ids are visible to everyone in an
+  timers there). `uploads.remove(ids)` deletes stored files; `uploads.addCheck((socketId, officeId,
+  bytes) => why | null)` refuses an upload (403) before its body is read. Files not attached to a
+  chat message within a day are deleted by chat's sweep. Socket ids are visible to everyone in an
   office, so an HTTP route that takes X-Workchop-Socket should also limit by `clientIp`.
 - RealtimeApi (ctx.realtime): `onSocket(s => s.socket.on(...))`, `onJoin(s => ...)`,
   `onLeave((s, {officeId, player}) => ...)` (may be async; failures are logged), `emitToOffice`,
-  `emitToUser`, `playersOfUser`, `updatePlayer` (broadcasts player:updated), `contextOf`, `onlineCount`,
-  `linkedPeers(officeId, playerId)` (who they're in a call with), `setRole(officeId, userId, role | null)`
+  `emitToUser`, `playersOfUser`, `players(officeId)` (who is in the office now), `updatePlayer`
+  (broadcasts player:updated), `contextOf`, `onlineCount`,
+  `linkedPeers(officeId, playerId)` (who they're in a call with), `addLinkRule((officeId) => ((a, b) =>
+  boolean | null) | null)` (set up once per check of an office's calls, so look up what you need
+  there; the pair rule is asked before the usual rules: any false keeps them apart, otherwise any
+  true links them whatever the distance or private areas, otherwise distance and areas decide;
+  support uses it), `relink(officeId, playerIds?)` (re-checks those players' calls, or everyone's,
+  after a rule's answers changed), `addJoinCheck((officeId, s, role) => why | null)` (refuses
+  someone coming in, at the end of a join), `removePlayer(officeId, playerId, reason)`
+  (office:removed), `onRoleChange((s, before) => …)` (after setRole changed someone's role; a
+  customer made a member is already shown as themselves), `onOfficeChange((officeId, office) => …)`
+  (after an office:op), `setRole(officeId, userId, role | null)`
   (after a member's role changed: `office:role` to them, or with null `office:removed` and out of the
   office), `removeGuests(officeId)` and `accessChanged(officeId, guests)` (after the guest link
   changed: `office:role` to everyone, guests out when it's off). The workspace routes call these; features
@@ -66,8 +78,21 @@ where the hooks below allow it, to keep merges easy.
 - SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (the
   person's role in the office: 'owner' | 'admin' | 'member' | 'guest', null before joining),
   `isOwner()` (the owner, or the owner-key holder of an office nobody has claimed), `mayEdit()`
-  (`may(role, 'build', …)`), `limiter(rate, burst)`. Check permissions with `may()` from
+  (`may(role, 'build', …)`), `mayChangeWorld()` (false for customers, i.e. `isCustomer(role, kind)`
+  from shared/workspace.ts: guests of support workspaces; check it before changing what everyone
+  shares, like lights, music or notes), `limiter(rate, burst)`. Check permissions with `may()` from
   shared/workspace.ts; signed in is not the same as a member (signed-in people can be guests).
+- Chat conversations of your own (server/features/chat): `registerConversation(ctx, prefix, { access,
+  audience, ownsGuestMessage, nameOf? })` makes the chat handle keys `<prefix>:<id>` (support: `t:<ticket id>`)
+  like channels: `access(s, key, officeId)` → `{ write: true } | { write: false, why } | null` (null:
+  they can't see it), `audience(officeId, key)` → socket ids that get new, edited and deleted
+  messages, `ownsGuestMessage(s, key)` → whether this connection is the guest who wrote its guest
+  messages (guests are a new socket after a reload), `nameOf(s, key)` → the name they write and react
+  under there (null: their player's). It returns a remover for `ctx.onClose`.
+  `postToConversation(ctx, …)` saves a message on someone's behalf; `deleteConversations(ctx,
+  officeId, keys)` deletes them with their files (the chat's retention sweep leaves them alone).
+  Saved messages carry `conv` (the key). Customers only ever get their own ticket's conversation:
+  no channels, people, direct, live or nearby messages.
 - Catch errors in your own socket.on handlers: an async handler that rejects can still crash the server.
 - Socket events: declare in shared/<feature>.ts with `declare module './types' { interface
   ClientToServerEvents {…}; interface ServerToClientEvents {…}; interface PlayerState {…} }`.
@@ -81,8 +106,9 @@ where the hooks below allow it, to keep merges easy.
 - Put client code in client/src/features/<name>/index.ts(x): files there load automatically at
   startup; nothing else needs editing to register them.
 - Panels: `registerPanel({ id, title, icon, Component, order, dock?, hideOnMobile?, inMore?, useBadge?,
-  badgeTone?: 'alert'|'neutral', shortcut? })` from client/src/ui/panels.tsx (chat 10, music 20,
-  people 30, coins' wallet 35 when on, My desk 40, GitHub 45; build is dock:false; `inMore` puts the
+  badgeTone?: 'alert'|'neutral', shortcut? })` from client/src/ui/panels.tsx (Support 5 for staff in
+  support workspaces, chat 10, music 20, people 30, coins' wallet 35 when on, My desk 40, GitHub 45;
+  customers' chat panel is the support feature's, under the same id `chat`; build is dock:false; `inMore` puts the
   button in the dock's More menu on phones, and its alert badge shows on the More button). Store
   `panel` is a string id; open with `setPanel(id)`. Returns a function that removes the panel (for
   features shown only on some servers or to some people). `shortcut` only names a key in the tooltip
@@ -104,19 +130,35 @@ where the hooks below allow it, to keep merges easy.
   `resetSceneLighting()` on unmount.
 - 3D world (client/src/world/extensions.ts): `registerItemModel(type, Component)`,
   `registerItemDecor({ id, order, types, Component })` (extra parts on items, e.g. desk screens),
-  `registerItemInteraction(types, { onClick, onHover? })`, `registerNearbyAction(id, find)` (what E
+  `registerItemInteraction(types, { onClick, onHover? })` (E doesn't sit people on items that have
+  one: they decide who sits there, like support desks), `registerNearbyAction(id, find)` (what E
   does nearby), and `registerWorldModule(() => import('./scene'))` to load your three.js code with the
   scene rather than with the landing page.
+- Catalog (shared/catalog.ts): `seats: [{ x, z, turn? }]` (`turn` quarter turns added to the item's
+  facing by seatsOf: 2 faces back across it, like a support desk's customer seat) and `kinds?:
+  OfficeKind[]` (Build offers the item only in those workspace types). shared/geometry.ts:
+  `standUpSpot(seat, solid, colliders, bounds)` (where you stand after getting up: forward, or back
+  when there's no room in front) and `inFrontOf(item, gap?)` (a spot to stand and look at an item).
+- Lobbies: `registerLobby({ id, match(info), Component, media? })` from client/src/ui/lobbies.ts: a
+  feature's own lobby for some visitors (support customers) instead of the usual one; the first whose
+  `match(info: OfficeInfo)` is true wins, and `media: { mic, cam }` picks which start on.
+- Chat: `registerConvView(prefix, { open, looking, notify })` from client/src/features/chat/state.ts
+  shows a feature's own saved conversations (like `t:`) outside the chat panel: `open(conv)`,
+  `looking(conv)` (on screen now, so read), `notify(conv)` (a new message gets a toast).
 - Session hooks: `onSession('<unique-id>', (session) => cleanup)` from client/src/lib/session.ts. Runs
   when an office session is created (before connect) or at once if already in one; cleanup on leave /
   re-registration — undo everything (socket.off, unsubscribe). session.socket (typed with augmented
   events), session.officeId, session.selfId(), session.onJoined((rejoin) => …) (returns unsubscribe;
   runs at once if already joined), session.onLeave(fn), session.upload(file, {name?, onProgress?,
-  signal?}) → {id, url, name, contentType, size}.
+  signal?}) → {id, url, name, contentType, size}, session.setFullVolume(playerId | null) (hear that
+  person at full volume wherever they are: a support agent and their customer).
 - Account: getState().account (AccountUser | null); saveAccountSettings({key: value}) merges into
   profile.settings (≤50 keys per account — use few, short keys); saveCharacter(...).
 - Toasts: toast(text, 'error' | { kind, icon, action: {label, run}, duration }) → id; dismissToast(id).
   Toasts are silent and show the same with headphones on.
-- PlayerState already has focus?: boolean (client-set via profile patch) and app?: string | null
-  (server-set only via realtime.updatePlayer). OfficeItem.data is ItemData; catalog entries may define
+- PlayerState already has focus?: boolean (client-set via profile patch), app?: string | null
+  (server-set only via realtime.updatePlayer) and customer?: boolean (server-set: true on join for
+  customers, the guests of support workspaces, who carry no userId; false in a player:updated when
+  one is made a member; see isCustomer in shared/workspace.ts). office:removed reasons: 'removed',
+  'guests-off', 'idle' (a customer without an open ticket for CUSTOMER_IDLE_MS). OfficeItem.data is ItemData; catalog entries may define
   sanitizeData(raw) used by sanitizeItem; build moves keep data for an unchanged type.

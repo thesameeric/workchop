@@ -44,9 +44,9 @@ export type Admission = { role: Role; isOwner: boolean } | { denied: AccessDenie
 
 export const deniedMessage = (reason: AccessDenied) => DENIED[reason];
 
-/** Guests may come in: an open office, or the guest link's token. */
+/** Guests may come in: an open office (never a support one), or the guest link's token. */
 export function welcomesGuests(stored: StoredOffice, guest: unknown): boolean {
-  return stored.guests === 'open' || (stored.guests === 'link' && sameSecret(guest, stored.guestToken));
+  return (stored.guests === 'open' && stored.kind !== 'support') || (stored.guests === 'link' && sameSecret(guest, stored.guestToken));
 }
 
 /**
@@ -458,7 +458,6 @@ export function workspaceRoutes(deps: WorkspaceDeps): express.Router {
     if (wait) return tooMany(res, wait, 'Too many offices created, try again later.');
     const body = bodyOf(req);
     const kind = body.kind ?? 'team';
-    // Support workspaces can be made once there's a template for them.
     const template = TEMPLATES.find((t) => t.kind === kind && (body.template === undefined || t.id === body.template));
     if (!template) {
       res.status(400).json({ error: 'Pick a type and a template.' });
@@ -469,7 +468,8 @@ export function workspaceRoutes(deps: WorkspaceDeps): express.Router {
     const name = sanitizeName(body.name, 48) || 'My Office';
     let stored: StoredOffice;
     try {
-      stored = await store.create(name, template.id, { kind: template.kind, ownerId: user.id });
+      // A support workspace's guest link is its public customer link, on from the start.
+      stored = await store.create(name, template.id, { kind: template.kind, ownerId: user.id, guestToken: template.kind === 'support' ? newToken() : undefined });
     } catch (err) {
       console.error('[store] could not create office:', err);
       res.status(503).json({ error: 'Could not save the new office. Please try again.' });

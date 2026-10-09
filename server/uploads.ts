@@ -228,6 +228,12 @@ const BUFFERED_FILES = 4;
 
 export type Uploads = ReturnType<typeof createUploads>;
 
+/**
+ * A feature's say in an upload, before the file is read: why this connection (a socket id, in the
+ * office) may not upload `bytes` more (403), or null.
+ */
+export type UploadCheck = (socketId: string, officeId: string, bytes: number) => string | null;
+
 /** File uploads for an office (chat attachments and the like), stored in the database, on disk or in S3. */
 export function createUploads(deps: UploadDeps) {
   const { db, options } = deps;
@@ -244,6 +250,7 @@ export function createUploads(deps: UploadDeps) {
   const quotaFull = () => new UploadError(413, `This office has used up its ${Math.round(options.quotaBytes / MB)} MB of file storage.`);
   const mayStart = windowLimiter(PER_VISITOR_FILES, PER_VISITOR_WINDOW);
   const inProgress = new Map<string, number>();
+  const checks: UploadCheck[] = [];
   let buffered = 0;
 
   const readBody = (req: express.Request, res: express.Response) =>
@@ -281,6 +288,10 @@ export function createUploads(deps: UploadDeps) {
       // Without a Content-Length (a chunked body), the file may be as big as allowed.
       const known = Number.isSafeInteger(declared) && declared >= 0;
       const reserved = known ? declared : options.maxBytes;
+      for (const check of checks) {
+        const why = check(socketId!, officeId, reserved);
+        if (why) throw new UploadError(403, why);
+      }
       if ((inProgress.get(ip) ?? 0) >= PER_VISITOR_AT_ONCE) {
         res.set('Retry-After', '5');
         throw new UploadError(429, 'Too many uploads at once. Please wait for the others to finish.');
@@ -434,5 +445,8 @@ export function createUploads(deps: UploadDeps) {
     }
   };
 
-  return { upload, download, remove, store, description: store.description };
+  /** Adds a feature's check of uploads (see UploadCheck). */
+  const addCheck = (check: UploadCheck) => void checks.push(check);
+
+  return { upload, download, remove, addCheck, store, description: store.description };
 }

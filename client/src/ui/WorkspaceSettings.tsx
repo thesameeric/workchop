@@ -230,8 +230,27 @@ function InviteRow({ invite, officeId, onChange }: { invite: Invite; officeId: s
   );
 }
 
+/** What the guest link is called: a support workspace's guests are its customers. */
+const LINK_TEXT = {
+  team: {
+    title: 'Guest link',
+    toggle: 'Let guests in with a link',
+    about: 'Anyone with it comes in without an account. Turning it off takes guests out.',
+    copied: 'Guest link copied',
+    reset: 'Make a new guest link? The old one stops working; guests already inside stay.',
+  },
+  support: {
+    title: 'Customer link',
+    toggle: 'Let customers in with the link',
+    about: 'Anyone with it can come in as a customer, without an account. Turning it off takes customers out.',
+    copied: 'Customer link copied',
+    reset: 'Make a new customer link? The old one stops working; customers already inside stay.',
+  },
+};
+
 /** Turns the guest link on and off, copies it and makes a new one. */
 function GuestLinkSettings({ officeId, access, onChange }: { officeId: string; access: GuestLink; onChange: (access: GuestLink) => void }) {
+  const text = LINK_TEXT[useStore((s) => s.kind)];
   const [busy, setBusy] = useState(false);
   // A server that doesn't know its own address (no PUBLIC_URL) gives it without one: this page's.
   const link = access.link && new URL(access.link, location.origin).href;
@@ -248,27 +267,27 @@ function GuestLinkSettings({ officeId, access, onChange }: { officeId: string; a
     if (!link) return;
     try {
       await navigator.clipboard.writeText(link);
-      toast('Guest link copied');
+      toast(text.copied);
     } catch {
-      prompt('Copy the guest link:', link);
+      prompt(`Copy the ${text.title.toLowerCase()}:`, link);
     }
   };
   const reset = () => {
-    if (confirm('Make a new guest link? The old one stops working; guests already inside stay.')) void run(() => resetGuestLink(officeId));
+    if (confirm(text.reset)) void run(() => resetGuestLink(officeId));
   };
   return (
     <section className="ws-section">
-      <h4>Guest link</h4>
+      <h4>{text.title}</h4>
       <label className="ws-toggle">
         <input type="checkbox" role="switch" checked={access.guests === 'link'} disabled={busy} onChange={(e) => void run(() => setGuestAccess(officeId, e.target.checked ? 'link' : 'off'))} />
         <span>
-          <strong>Let guests in with a link</strong>
-          <span className="muted small">Anyone with it comes in without an account. Turning it off takes guests out.</span>
+          <strong>{text.toggle}</strong>
+          <span className="muted small">{text.about}</span>
         </span>
       </label>
       {link && (
         <div className="ws-link">
-          <input readOnly value={link} aria-label="Guest link" onFocus={(e) => e.target.select()} />
+          <input readOnly value={link} aria-label={text.title} onFocus={(e) => e.target.select()} />
           <button className="icon-btn" onClick={() => void copy()} title="Copy link">
             <CopyIcon size={18} />
           </button>
@@ -316,6 +335,7 @@ function WorkspaceSection() {
   const officeId = useStore((s) => s.officeId);
   const role = useStore((s) => s.role);
   const guests = useStore((s) => s.guests);
+  const kind = useStore((s) => s.kind);
   const [data, setData] = useState<MembersAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -345,9 +365,12 @@ function WorkspaceSection() {
     setState({ guests: access.guests });
   };
   const access = data.access;
+  const link = access && access.guests !== 'open' && <GuestLinkSettings officeId={officeId} access={access} onChange={setAccess} />;
   return (
     <div className="ws">
       {access?.guests === 'open' && <OpenOffice officeId={officeId} onChange={setAccess} />}
+      {/* A support workspace's customer link is what it's for: first. */}
+      {kind === 'support' && link}
       {may(role, 'add-member') && <AddPeople officeId={officeId} onAdded={reload} />}
       <section className="ws-section">
         <h4>Members · {data.members.length}</h4>
@@ -367,7 +390,7 @@ function WorkspaceSection() {
           </ul>
         </section>
       )}
-      {access && access.guests !== 'open' && <GuestLinkSettings officeId={officeId} access={access} onChange={setAccess} />}
+      {kind !== 'support' && link}
     </div>
   );
 }

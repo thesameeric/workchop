@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { DIFFICULTY_LABEL, plantSpecies, type PlantSpecies } from '../../../../shared/plants';
 import type { OfficeItem } from '../../../../shared/types';
-import { deskOf, deskOwner, MAX_NOTE_LENGTH, NOTE_COLORS, type DeskNote } from '../../../../shared/world';
+import {
+  deskOf,
+  deskOwner,
+  MAX_BOARD_TEXT,
+  MAX_BOARD_TITLE,
+  MAX_NOTE_LENGTH,
+  NOTE_COLORS,
+  sanitizeBoardData,
+  type BoardData,
+  type DeskNote,
+} from '../../../../shared/world';
 import { may } from '../../../../shared/workspace';
 import { colorFor, initials } from '../../lib/color';
 import { backToLobby } from '../../lib/session';
@@ -11,7 +21,10 @@ import {
   CloseIcon,
   DeskIcon,
   DropletIcon,
+  EditIcon,
+  FishIcon,
   GaugeIcon,
+  HelpIcon,
   HumidityIcon,
   LeafIcon,
   PawIcon,
@@ -23,12 +36,13 @@ import {
   SunIcon,
   TrashIcon,
 } from '../../ui/icons';
-import { claimDesk, deleteNote, leaveNote, notesILeft, releaseDesk } from './actions';
+import { claimDesk, deleteNote, leaveNote, notesILeft, releaseDesk, writeBoard } from './actions';
+import { FISH } from './fish';
 import { cardAnchor, openCard, useWorld } from './state';
 
 const close = () => openCard(null);
 
-/** The card next to a clicked plant or desk (a sheet at the bottom on phones). */
+/** The card next to a clicked plant, desk, info board or fish tank (a sheet at the bottom on phones). */
 export function WorldCard() {
   const card = useWorld((s) => s.card);
   const item = useStore((s) => (card ? s.office?.items.find((i) => i.id === card.itemId) : undefined));
@@ -50,17 +64,26 @@ export function WorldCard() {
 
   if (!card || !item) return null;
   const species = card.kind === 'plant' ? plantSpecies(item.type) : undefined;
+  const label = species ? species.name : card.kind === 'board' ? 'Info board' : card.kind === 'aquarium' ? 'Fish tank' : 'Desk';
   return (
     <div
       ref={ref}
       key={item.id}
       className={`world-card ${card.kind}-card`}
       role="dialog"
-      aria-label={species ? species.name : 'Desk'}
+      aria-label={label}
       // Hidden until the scene has placed it next to its item.
       style={{ visibility: 'hidden' }}
     >
-      {species ? <PlantCard species={species} /> : <DeskCard desk={item} />}
+      {species ? (
+        <PlantCard species={species} />
+      ) : card.kind === 'board' ? (
+        <BoardCard board={item} />
+      ) : card.kind === 'aquarium' ? (
+        <AquariumCard />
+      ) : (
+        <DeskCard desk={item} />
+      )}
     </div>
   );
 }
@@ -151,6 +174,92 @@ function Meter({ value }: { value: number }) {
         <i key={n} className={n <= value ? 'on' : ''} />
       ))}
     </span>
+  );
+}
+
+/** What an info board says; owners and admins can change it. */
+function BoardCard({ board }: { board: OfficeItem }) {
+  const data = sanitizeBoardData(board.data);
+  // Like the server (world:board): the owner and admins.
+  const mayWrite = useStore((s) => s.isOwner || s.role === 'admin');
+  const [editing, setEditing] = useState(false);
+  if (editing) return <BoardForm board={board} data={data} onDone={() => setEditing(false)} />;
+  return (
+    <>
+      <CardHead icon={<HelpIcon size={20} />} title={data?.title || 'Info board'} />
+      {data?.text ? <p className="wc-text board-text">{data.text}</p> : <p className="wc-text board-empty">Nothing on this board yet.</p>}
+      <div className="wc-actions">
+        {mayWrite && (
+          <button className="btn small" onClick={() => setEditing(true)}>
+            <EditIcon size={15} /> Edit
+          </button>
+        )}
+        <button className="btn small" onClick={close}>
+          Close
+        </button>
+      </div>
+    </>
+  );
+}
+
+function BoardForm({ board, data, onDone }: { board: OfficeItem; data: BoardData | undefined; onDone: () => void }) {
+  const [title, setTitle] = useState(data?.title ?? '');
+  const [text, setText] = useState(data?.text ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await writeBoard(board.id, { title, text });
+    setBusy(false);
+    if (res.ok) onDone();
+    else setError(res.error);
+  };
+  return (
+    <>
+      <CardHead icon={<EditIcon size={20} />} title="Edit board" subtitle="Everyone here sees it" />
+      <form className="board-form" onSubmit={save}>
+        <input value={title} maxLength={MAX_BOARD_TITLE} placeholder="Title" aria-label="Title" autoFocus onChange={(e) => setTitle(e.target.value)} />
+        <textarea value={text} maxLength={MAX_BOARD_TEXT} rows={7} placeholder="What it says" aria-label="Text" onChange={(e) => setText(e.target.value)} />
+        <div className="note-form-row">
+          <span className={`note-count${text.length > MAX_BOARD_TEXT - 50 ? ' near' : ''}`}>{MAX_BOARD_TEXT - text.length}</span>
+          <button type="button" className="btn small" onClick={onDone}>
+            Cancel
+          </button>
+          <button className="btn small primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+      </form>
+    </>
+  );
+}
+
+function AquariumCard() {
+  return (
+    <>
+      <CardHead icon={<FishIcon size={20} />} title="Fish tank" subtitle="Fish from South America" />
+      <ul className="fish-list">
+        {FISH.map((f) => (
+          <li key={f.name}>
+            <i className="fish-dot" style={{ background: f.color }} />
+            <div>
+              <b>{f.name}</b> <i className="fish-latin">{f.scientific}</i>
+              <span className="fish-origin">{f.origin}</span>
+              <span>{f.fact}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="wc-actions">
+        <button className="btn small" onClick={close}>
+          Close
+        </button>
+      </div>
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 import { sanitizeJukeboxData } from './music';
 import type { OfficeItem } from './types';
-import { sanitizeDeskData, sanitizeLightData } from './world';
+import type { OfficeKind } from './workspace';
+import { sanitizeBoardData, sanitizeDeskData, sanitizeLightData } from './world';
 
 export type Category = 'Work' | 'Lounge' | 'Kitchen' | 'Structure' | 'Decor' | 'Plants' | 'Fun';
 export const CATEGORIES: Category[] = ['Work', 'Lounge', 'Kitchen', 'Structure', 'Decor', 'Plants', 'Fun'];
@@ -19,8 +20,13 @@ export interface CatalogEntry {
   solid: boolean;
   /** Collision box size when it differs from the footprint. */
   box?: { w: number; d: number };
-  /** Local seat offsets; a seated person faces the item's forward (+z at rot 0). */
-  seats?: { x: number; z: number }[];
+  /**
+   * Local seat offsets; a seated person faces the item's forward (+z at rot 0), turned by `turn`
+   * quarter turns (2: facing back across the item).
+   */
+  seats?: { x: number; z: number; turn?: number }[];
+  /** The workspace types it's made for (Build offers it only there); every type when left out. */
+  kinds?: OfficeKind[];
   colorable?: boolean;
   defaultColor?: string;
   /** Tall opaque items fade out when they block the view of your character. */
@@ -49,6 +55,10 @@ const entries: CatalogEntry[] = [
   { type: 'tv', label: 'TV screen', icon: '📺', category: 'Work', w: 2, d: 0.5, h: 1.7, solid: true, tall: true },
   { type: 'bookshelf', label: 'Bookshelf', icon: '📚', category: 'Work', w: 2, d: 0.5, h: 2, solid: true, colorable: true, defaultColor: '#a47148', tall: true },
   { type: 'printer', label: 'Printer', icon: '🖨️', category: 'Work', w: 1, d: 0.8, h: 1, solid: true },
+  // Staff sit behind it (seat 0) and customers across it, facing them (seat 1; see shared/support.ts).
+  { type: 'support-desk', label: 'Support desk', icon: '🎧', category: 'Work', kinds: ['support'], w: 2, d: 3, h: 1.3, solid: true, box: { w: 2, d: 0.9 }, seats: [{ x: 0, z: -1 }, { x: 0, z: 1, turn: 2 }], colorable: true, defaultColor: '#f2f2f2' },
+  // Who's being served at which desk; the support feature draws its picture.
+  { type: 'queue-board', label: 'Queue screen', icon: '🔢', category: 'Work', kinds: ['support'], w: 3, d: 0.5, h: 2.4, solid: true, tall: true },
 
   // Lounge
   { type: 'sofa', label: 'Sofa', icon: '🛋️', category: 'Lounge', w: 2, d: 1, h: 0.9, solid: true, seats: [{ x: -0.5, z: -0.05 }, { x: 0.5, z: -0.05 }], colorable: true, defaultColor: '#2a9d8f' },
@@ -79,6 +89,9 @@ const entries: CatalogEntry[] = [
   { type: 'floor-lamp', label: 'Floor lamp', icon: '💡', category: 'Decor', w: 0.5, d: 0.5, h: 1.8, solid: true, colorable: true, defaultColor: '#ffe8a3', sanitizeData: (raw) => sanitizeLightData(raw) },
   { type: 'desk-lamp', label: 'Desk lamp', icon: '🔦', category: 'Decor', w: 0.5, d: 0.5, h: 1.3, solid: false, colorable: true, defaultColor: '#e9c46a', onSurfaces: true, sanitizeData: (raw) => sanitizeLightData(raw) },
   { type: 'art', label: 'Wall art', icon: '🖼️', category: 'Decor', w: 1.5, d: 0.1, h: 2.2, solid: false, colorable: true, defaultColor: '#4cc9f0', snapCenter: true },
+  { type: 'aquarium', label: 'Aquarium', icon: '🐠', category: 'Decor', w: 3, d: 1, h: 1.7, solid: true, tall: true },
+  // A sign with a title and some text (FAQ, welcome); owners and admins change what it says.
+  { type: 'info-board', label: 'Info board', icon: 'ℹ️', category: 'Decor', w: 2, d: 0.5, h: 2.1, solid: true, box: { w: 2, d: 0.3 }, tall: true, colorable: true, defaultColor: '#2a9d8f', sanitizeData: (raw) => sanitizeBoardData(raw) },
 
   // Plants (what each one is: shared/plants.ts). Small ones also stand on desks, tables and shelves.
   { type: 'plant', label: 'Boston fern', icon: '🪴', category: 'Plants', w: 1, d: 1, h: 1.1, solid: true, box: { w: 0.6, d: 0.6 } },
@@ -134,7 +147,7 @@ export function seatsOf(item: OfficeItem): Seat[] {
   if (!entry?.seats) return [];
   return entry.seats.map((s) => {
     const o = rotateLocal(s.x, s.z, item.rot);
-    return { x: item.x + o.x, z: item.z + o.z, ry: (item.rot * Math.PI) / 2 };
+    return { x: item.x + o.x, z: item.z + o.z, ry: (((item.rot + (s.turn ?? 0)) % 4) * Math.PI) / 2 };
   });
 }
 

@@ -75,7 +75,8 @@ describe('REST API', () => {
     const made = await owner.fetch(`${base}/api/offices`, json({ name: 'Two', kind: 'team', template: 'startup' }));
     expect(made.status).toBe(201);
     expect(Object.keys(await made.json())).toEqual(['id']);
-    for (const body of [{ template: 'castle' }, { kind: 'support' }, { kind: 'shop' }, { kind: 'support', template: 'blank' }]) {
+    // Each type has its own templates.
+    for (const body of [{ template: 'castle' }, { kind: 'shop' }, { kind: 'support', template: 'blank' }, { kind: 'team', template: 'support' }]) {
       expect((await owner.fetch(`${base}/api/offices`, json(body))).status).toBe(400);
     }
   });

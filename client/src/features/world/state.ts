@@ -3,9 +3,9 @@ import type { OfficeItem } from '../../../../shared/types';
 import type { StickySummary } from '../../../../shared/world';
 import { local } from '../../lib/positions';
 
-/** The card pinned next to a plant or desk someone clicked. */
+/** The card pinned next to a plant, desk, info board or fish tank someone clicked. */
 export interface Card {
-  kind: 'plant' | 'desk';
+  kind: 'plant' | 'desk' | 'board' | 'aquarium';
   itemId: string;
   /** Walking further away than this closes it. */
   maxDistance: number;
@@ -40,7 +40,7 @@ export function openCard(card: Card | null): void {
   useWorld.setState({ card });
 }
 
-/** Opens the card of a plant or desk (clicking it again closes it). */
+/** Opens an item's card (clicking it again closes it). */
 export function toggleCard(kind: Card['kind'], item: OfficeItem): void {
   if (useWorld.getState().card?.itemId === item.id) return openCard(null);
   openCard({ kind, itemId: item.id, maxDistance: Math.max(8, Math.hypot(item.x - local.x, item.z - local.z) + 3) });

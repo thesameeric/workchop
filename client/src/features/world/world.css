@@ -505,3 +505,103 @@
     z-index: 29;
   }
 }
+
+/* Info boards and fish tanks */
+.board-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-card .board-empty {
+  color: var(--glass-muted);
+}
+
+.board-card .wc-icon,
+.aquarium-card .wc-icon {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+  color: #c3caff;
+}
+
+.aquarium-card .wc-icon {
+  background: color-mix(in srgb, #4cc9f0 24%, transparent);
+  color: #9fe3ff;
+}
+
+.board-form input,
+.board-form textarea {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  background: var(--glass-fill);
+  color: var(--glass-ink);
+  font: inherit;
+  outline: none;
+}
+
+.board-form input {
+  font-weight: 700;
+}
+
+.board-form textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.board-form input::placeholder,
+.board-form textarea::placeholder {
+  color: var(--glass-muted);
+}
+
+.board-form input:focus-visible,
+.board-form textarea:focus-visible {
+  border-color: var(--primary);
+}
+
+.board-form .note-form-row {
+  margin-top: 0;
+}
+
+.fish-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.fish-list li {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--glass-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.fish-list li span {
+  display: block;
+}
+
+.fish-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--glass-line);
+}
+
+.fish-latin,
+.fish-origin {
+  color: var(--glass-muted);
+}
+
+.fish-origin {
+  font-size: 0.74rem;
+}

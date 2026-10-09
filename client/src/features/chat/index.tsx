@@ -1,6 +1,8 @@
+import { isCustomer } from '../../../../shared/workspace';
 import { onSession } from '../../lib/session';
+import { getState, useStore } from '../../state/store';
 import { ChatIcon } from '../../ui/icons';
-import { registerPanel } from '../../ui/panels';
+import { registerPanel, type PanelDef } from '../../ui/panels';
 import { ChatPanel } from './ChatPanel';
 import { clearDrafts } from './Composer';
 import {
@@ -23,7 +25,21 @@ import './chat.css';
 
 // Chat 2.0: channels, direct messages, threads, mentions, reactions and files.
 
-registerPanel({ id: 'chat', title: 'Chat', icon: ChatIcon, Component: ChatPanel, order: 10, shortcut: 'Enter', useBadge });
+const chatPanel: PanelDef = { id: 'chat', title: 'Chat', icon: ChatIcon, Component: ChatPanel, order: 10, shortcut: 'Enter', useBadge };
+
+// Support customers have no channels or direct messages: only their ticket (features/support).
+let removePanel: (() => void) | null = null;
+const syncPanel = () => {
+  const { role, kind } = getState();
+  const show = !isCustomer(role, kind);
+  if (show && !removePanel) removePanel = registerPanel(chatPanel);
+  else if (!show && removePanel) {
+    removePanel();
+    removePanel = null;
+  }
+};
+syncPanel();
+useStore.subscribe(syncPanel);
 
 /** A link to a message (…/o/<office>?msg=<id>), taken out of the address once followed. */
 function takeLinkedMessage(): string | null {

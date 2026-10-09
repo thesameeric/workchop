@@ -50,7 +50,7 @@ interface DmEntry {
 
 const byPresence = (a: DmEntry, b: DmEntry) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name);
 
-/** People to message: everyone in the office now, and (signed in) the office's members who are away. */
+/** People to message: everyone in the office now (but support customers), and (signed in) the office's members who are away. */
 function usePeopleToMessage(): DmEntry[] {
   const people = useChat((s) => s.people);
   const players = useStore((s) => s.players);
@@ -58,7 +58,7 @@ function usePeopleToMessage(): DmEntry[] {
   return useMemo(() => {
     const out = new Map<ConvKey, DmEntry>();
     for (const p of Object.values(players)) {
-      if (p.userId && p.userId === myUserId) continue;
+      if ((p.userId && p.userId === myUserId) || p.customer) continue;
       const conv = convWithPlayer(p.id);
       out.set(conv, { conv, name: p.name, online: true, guest: !p.userId });
     }
@@ -88,7 +88,7 @@ function useDmEntries(): DmEntry[] {
     const out = new Map<ConvKey, DmEntry>();
     for (const d of dms) out.set(`d:${d.userId}`, { conv: `d:${d.userId}`, name: d.name, online: false, guest: false });
     for (const p of Object.values(players)) {
-      if (p.userId && p.userId === myUserId) continue;
+      if ((p.userId && p.userId === myUserId) || p.customer) continue;
       const conv = convWithPlayer(p.id);
       const known = out.get(conv);
       if (known) out.set(conv, { ...known, name: p.name, online: true });

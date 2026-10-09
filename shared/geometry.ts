@@ -1,4 +1,4 @@
-import { getEntry, rotatedSize } from './catalog';
+import { getEntry, rotateLocal, rotatedSize, type Seat } from './catalog';
 import type { Office, OfficeItem, OfficeSettings, Status, Zone } from './types';
 
 export interface AABB {
@@ -108,6 +108,28 @@ export function findFreeSpot(x: number, z: number, colliders: AABB[], bounds: Bo
     if (best) return { x: best.x, z: best.z };
   }
   return { x: bounds.width / 2, z: bounds.depth / 2 };
+}
+
+/**
+ * Where you stand after getting up from a seat. Off a sofa (or anything solid) you step forward, to
+ * the nearest free spot; when there's none in front (a desk), you step back instead. A chair leaves
+ * you where you sat.
+ */
+export function standUpSpot(seat: Seat, solid: boolean, colliders: AABB[], bounds: Bounds): { x: number; z: number } {
+  if (!solid) return isBlocked(seat.x, seat.z, colliders, bounds) ? findFreeSpot(seat.x, seat.z, colliders, bounds) : { x: seat.x, z: seat.z };
+  const fx = Math.sin(seat.ry);
+  const fz = Math.cos(seat.ry);
+  const spot = findFreeSpot(seat.x + fx * 0.8, seat.z + fz * 0.8, colliders, bounds);
+  if ((spot.x - seat.x) * fx + (spot.z - seat.z) * fz > 0.3) return spot;
+  const back = { x: seat.x - fx * 0.8, z: seat.z - fz * 0.8 };
+  return isBlocked(back.x, back.z, colliders, bounds) ? spot : back;
+}
+
+/** A spot `gap` in front of an item (beyond its footprint), where you'd stand to look at it. */
+export function inFrontOf(item: OfficeItem, gap = 1): { x: number; z: number } {
+  const d = getEntry(item.type)?.d ?? 1;
+  const o = rotateLocal(0, d / 2 + gap, item.rot);
+  return { x: item.x + o.x, z: item.z + o.z };
 }
 
 export function zoneAt(zones: Zone[], x: number, z: number): Zone | undefined {

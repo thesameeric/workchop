@@ -41,7 +41,8 @@ function createPresence(ctx: ServerContext): void {
   const refresh = (key: string) => {
     const e = map.get(key);
     for (const { officeId, player } of playersOf(key)) {
-      const app = map.effective(e, player);
+      // Customers' apps stay private (even signed in with the helper running).
+      const app = player.customer ? null : map.effective(e, player);
       if ((player.app ?? null) !== app) ctx.realtime.updatePlayer(officeId, player.id, { app });
       const state = map.state(e, player);
       const json = JSON.stringify(state);

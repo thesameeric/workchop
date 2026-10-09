@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import { createPortal } from 'react-dom';
 import { appInfo } from '../../../shared/apps';
 import { REACTIONS } from '../../../shared/avatar';
-import { may, type Role } from '../../../shared/workspace';
+import { isCustomer, may, type Role } from '../../../shared/workspace';
 import { HeadphonesButton } from '../features/audio/Headphones';
 import { toggleFocus } from '../features/audio/focus';
 import { PresenceDockButton, PresenceIcon, PresenceMenu } from '../features/presence/DockButton';
@@ -127,12 +127,28 @@ function EmoteMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
   );
 }
 
+/** Support customers: no building, no people list and no "Working in…" (they're here for help). */
+const useCustomer = () => useStore((s) => isCustomer(s.role, s.kind));
+
+/** The panels a customer doesn't get (their chat is their ticket, see features/support). */
+const NOT_FOR_CUSTOMERS = new Set(['people']);
+
 /** You: a guest's character, or for signed-in people the account menu (with their profile). */
 function MeButton() {
   const me = useStore((s) => s.me);
   const account = useStore((s) => s.account);
+  const customer = useCustomer();
   const { open, setOpen, close, ref, menuRef, buttonRef } = usePopover();
   const [at, setAt] = useState({ left: 0, bottom: 0 });
+  const face = (
+    <>
+      <span className="person-avatar small" style={{ background: colorFor(me.name) }}>
+        {initials(me.name)}
+        <i className={`status-dot ${me.status}`} />
+      </span>
+      <span className="me-name">{me.name}</span>
+    </>
+  );
   const editCharacter = () => setState({ modal: 'avatar' });
   const toggle = () => {
     // The dock scrolls sideways on phones, which would clip a menu inside it: it goes in a portal.
@@ -140,6 +156,14 @@ function MeButton() {
     setAt({ left: Math.max(8, r.left), bottom: window.innerHeight - r.top + 12 });
     setOpen((v) => !v);
   };
+  // A customer's character was picked for them, and others see them as a visitor number.
+  if (!account && customer) {
+    return (
+      <div className="me-btn static" title="Others see you as a visitor number">
+        {face}
+      </div>
+    );
+  }
   return (
     <div ref={ref}>
       <button
@@ -150,11 +174,7 @@ function MeButton() {
         aria-haspopup={account ? 'menu' : undefined}
         aria-expanded={account ? open : undefined}
       >
-        <span className="person-avatar small" style={{ background: colorFor(me.name) }}>
-          {initials(me.name)}
-          <i className={`status-dot ${me.status}`} />
-        </span>
-        <span className="me-name">{me.name}</span>
+        {face}
       </button>
       {open &&
         account &&
@@ -255,6 +275,7 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
   const [picking, setPicking] = useState(false);
   const focus = useStore((s) => s.focus);
   const invite = inviteAction(useStore((s) => s.role));
+  const customer = useCustomer();
   const screen = useMediaState().screen;
   const app = usePresence((s) => s.self?.app ?? null);
   // Alerts in the menu (say, GitHub's) show on the button, so they aren't missed.
@@ -314,10 +335,12 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
                   {focus ? <HeadphonesOffIcon size={18} /> : <HeadphonesIcon size={18} />}
                   {focus ? 'Take headphones off' : 'Put on headphones'}
                 </button>
-                <button role="menuitem" onClick={() => setPicking(true)}>
-                  <PresenceIcon app={app} size={18} />
-                  {app ? `Working in ${appInfo(app).label}` : 'Working in…'}
-                </button>
+                {!customer && (
+                  <button role="menuitem" onClick={() => setPicking(true)}>
+                    <PresenceIcon app={app} size={18} />
+                    {app ? `Working in ${appInfo(app).label}` : 'Working in…'}
+                  </button>
+                )}
                 {panels.map((p) => (
                   <PanelItem key={panelKey(p)} panel={p} onPick={close} />
                 ))}
@@ -327,10 +350,12 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
                     {screen ? 'Stop sharing' : 'Share your screen'}
                   </button>
                 )}
-                <button role="menuitem" onClick={pick(() => setPanel('build'))}>
-                  <HammerIcon size={18} />
-                  Build mode
-                </button>
+                {!customer && (
+                  <button role="menuitem" onClick={pick(() => setPanel('build'))}>
+                    <HammerIcon size={18} />
+                    Build mode
+                  </button>
+                )}
                 {invite && (
                   <button role="menuitem" onClick={pick(invite.run)}>
                     <invite.icon size={18} />
@@ -357,7 +382,8 @@ function MoreButton({ panels }: { panels: PanelDef[] }) {
 export function Dock() {
   const m = useMediaState();
   const panel = useStore((s) => s.panel);
-  const panels = usePanels().filter((p) => p.dock !== false);
+  const customer = useCustomer();
+  const panels = usePanels().filter((p) => p.dock !== false && !(customer && NOT_FOR_CUSTOMERS.has(p.id)));
   const narrow = useNarrow();
   // The reactions button while its menu is open.
   const [emoteAnchor, setEmoteAnchor] = useState<HTMLElement | null>(null);
@@ -369,7 +395,7 @@ export function Dock() {
     <nav className="dock" aria-label="Controls">
       <div className="dock-group">
         <MeButton />
-        {!narrow && <PresenceDockButton />}
+        {!narrow && !customer && <PresenceDockButton />}
       </div>
       <div className="dock-group center">
         <button className={`dock-btn${m.mic ? '' : ' off'}`} onClick={() => media.setMic(!m.mic)} title={m.mic ? 'Mute (M)' : 'Unmute (M)'}>
@@ -399,7 +425,7 @@ export function Dock() {
           <SmileIcon />
         </button>
         {emoteAnchor && <EmoteMenu anchor={emoteAnchor} onClose={closeEmotes} />}
-        {!narrow && (
+        {!narrow && !customer && (
           <button
             className={`dock-btn${panel === 'build' ? ' on' : ''}`}
             onClick={() => setPanel('build')}

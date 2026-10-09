@@ -11,6 +11,7 @@ import {
   renameDeskOwner,
   sanitizeNoteColor,
   sanitizeNoteText,
+  setBoard,
   setLight,
   VISIBLE_STICKIES,
   whyNoNote,
@@ -25,8 +26,9 @@ import { windowLimiter } from '../limits';
 import { randomId } from '../officeStore';
 
 // World micro-interactions: lamps and light switches anyone can flip, desks members claim,
-// and the notes others leave on them. Lights and claims are item data (saved with the office);
-// notes live in their own table, and only the desk's owner (and each note's author) gets their text.
+// the notes others leave on them, and info boards owners and admins write. Lights, claims and
+// boards are item data (saved with the office); notes live in their own table, and only the desk's
+// owner (and each note's author) gets their text. Customers in support workspaces only look.
 
 interface NoteRow {
   id: string;
@@ -152,6 +154,7 @@ export const feature: Feature = {
       const canClaim = s.limiter(1, 4);
       const canNote = s.limiter(0.2, 3);
       const canRead = s.limiter(5, 20);
+      const canBoard = s.limiter(1, 5);
       const actor = (guestKey: unknown): NoteActor => ({ userId: s.user?.id ?? null, guestKeyHash: s.user ? null : hashKey(guestKey) });
       const reply = <T extends object>(ack: unknown, res: WorldResult<T>) => {
         if (typeof ack === 'function') ack(res);
@@ -159,8 +162,17 @@ export const feature: Feature = {
 
       socket.on('world:light', (itemId, on) => {
         if (typeof itemId !== 'string' || typeof on !== 'boolean' || !canLight()) return;
+        if (!s.mayChangeWorld()) return void socket.emit('notice', 'Only staff can switch the lights here.');
         const error = change(s, (office) => setLight(office, itemId, on));
         if (error) socket.emit('notice', error);
+      });
+
+      socket.on('world:board', (itemId, data, ack) => {
+        if (typeof itemId !== 'string') return reply(ack, { ok: false, error: 'That board is gone.' });
+        if (!s.isOwner() && s.role() !== 'admin') return reply(ack, { ok: false, error: 'Only the owner and admins can edit boards.' });
+        if (!canBoard()) return reply(ack, { ok: false, error: 'One moment…' });
+        const error = change(s, (office) => setBoard(office, itemId, data));
+        reply(ack, error ? { ok: false, error } : { ok: true });
       });
 
       socket.on('desk:claim', (itemId, ack) => {
@@ -188,6 +200,7 @@ export const feature: Feature = {
         const me = s.me();
         const desk = room ? store.peek(room.officeId)?.office.items.find((i) => i.id === itemId) : undefined;
         if (!room || !me || typeof ack !== 'function') return;
+        if (!s.mayChangeWorld()) return ack({ ok: false, error: 'Only staff can leave notes here.' });
         if (!canNote()) return ack({ ok: false, error: 'You’re leaving notes very quickly. Try again in a moment.' });
         const why = whyNoNote(desk, { userId: s.user?.id ?? null });
         if (why) return ack({ ok: false, error: why });

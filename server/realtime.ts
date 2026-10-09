@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
 import type { AccountUser } from '../shared/account';
 import { isEmote, sanitizeAvatar, sanitizeName, sanitizeProfile, sanitizeStatus } from '../shared/avatar';
+import { getEntry } from '../shared/catalog';
 import { buildColliders, findFreeSpot } from '../shared/geometry';
 import { isJukebox, sanitizeSessionUpdate, type MusicLink, type SpotifySession } from '../shared/music';
 import { applyOp, OpError } from '../shared/office';
@@ -16,17 +17,21 @@ import type {
   PlayerState,
   ServerToClientEvents,
 } from '../shared/types';
-import { may, type GuestAccess, type MemberRole, type RemovedReason, type Role } from '../shared/workspace';
+import { isCustomer, may, type GuestAccess, type MemberRole, type RemovedReason, type Role } from '../shared/workspace';
 import type { Accounts } from './accounts';
 import { applyMusicOp, fetchLinkMeta } from './music';
 import type { OfficeStore } from './officeStore';
-import { type LinkChanges, Room } from './room';
+import { type LinkChanges, type LinkRule, Room } from './room';
 import { deniedMessage, refusal, welcomesGuests, type Admission, type Workspaces } from './workspaces';
 
 export const MAX_PLAYERS_PER_ROOM = 100;
 /** Guests take at most this many of an office's places, so its members can always come in. */
 export const MAX_GUESTS_PER_ROOM = 90;
 const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
+/** What customers (guests of a support workspace) are called until they open a ticket. */
+export const CUSTOMER_NAME = 'Visitor';
+
+export type { LinkRule, PairRule } from './room';
 
 /** The signed-in person behind a socket (set from the session cookie when it connects). */
 export interface SocketUser {
@@ -64,6 +69,11 @@ export interface SocketContext {
   isOwner(): boolean;
   /** May change the office (build mode, settings): see may(role, 'build') in shared/workspace.ts. */
   mayEdit(): boolean;
+  /**
+   * May change what everyone shares in the office (lights, music, desk notes): false for customers
+   * (isCustomer in shared/workspace.ts) and before joining.
+   */
+  mayChangeWorld(): boolean;
   /** A token bucket for this socket: `rate` actions per second, bursts up to `burst`. */
   limiter(rate: number, burst: number): () => boolean;
 }
@@ -88,8 +98,34 @@ export interface RealtimeApi {
   /** The connection with this socket id, if it is still connected. */
   contextOf(socketId: string): SocketContext | undefined;
   onlineCount(officeId: string): number;
+  /** Who is in the office right now. */
+  players(officeId: string): PlayerState[];
   /** The players this one is in a call with right now. */
   linkedPeers(officeId: string, playerId: string): string[];
+  /**
+   * Adds a rule for who is in a call with whom. Each time an office's calls are checked, the rule is
+   * asked for that office's pair rule (look up what it needs once, there), which is asked about every
+   * pair before the usual rules: any saying false keeps them apart, otherwise any saying true links
+   * them (whatever the distance or private areas), otherwise distance and areas decide. Call relink()
+   * when its answers change.
+   */
+  addLinkRule(rule: LinkRule): void;
+  /** Checks the calls of these players (or everyone) in the office again, after a link rule's answers changed. */
+  relink(officeId: string, playerIds?: string[]): void;
+  /**
+   * Adds a check for people coming into an office, run at the end of a join (nothing waits after
+   * it): why they may not come in (they're told), or null. A check that throws is logged and ignored.
+   */
+  addJoinCheck(check: (officeId: string, s: SocketContext, role: Role) => string | null): void;
+  /** Takes someone (a player id) out of the office (office:removed with `reason`). */
+  removePlayer(officeId: string, playerId: string, reason: RemovedReason): void;
+  /**
+   * After someone's role in the office they're in changed (setRole), with the role they had. A
+   * customer made a member is already shown as themselves (userId, name, `customer: false`).
+   */
+  onRoleChange(handler: (s: SocketContext, before: Role) => void): void;
+  /** After the office's layout or settings changed (an office:op), with the office as it is now. */
+  onOfficeChange(handler: (officeId: string, office: Office) => void): void;
   /**
    * After a member's role changed: tells them (office:role) wherever they are in that office, or,
    * with null (no longer a member), takes them out of it (office:removed).
@@ -161,6 +197,10 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
   const socketHandlers: ((s: SocketContext) => void)[] = [];
   const joinHandlers: ((s: SocketContext) => void)[] = [];
   const leaveHandlers: ((s: SocketContext, left: { officeId: string; player: PlayerState }) => void)[] = [];
+  const linkRules: LinkRule[] = [];
+  const joinChecks: ((officeId: string, s: SocketContext, role: Role) => string | null)[] = [];
+  const roleHandlers: ((s: SocketContext, before: Role) => void)[] = [];
+  const officeHandlers: ((officeId: string, office: Office) => void)[] = [];
 
   // Typed emits for a generic event name are beyond Socket.IO's types; the signatures above check them.
   const emit = (to: string | string[], event: ServerEvent, args: unknown[]) => {
@@ -206,7 +246,20 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
     },
     contextOf: (socketId) => contexts.get(socketId),
     onlineCount: (officeId: string) => rooms.get(officeId)?.players.size ?? 0,
+    players: (officeId) => [...(rooms.get(officeId)?.players.values() ?? [])],
     linkedPeers: (officeId, playerId) => rooms.get(officeId)?.linkedPeers(playerId) ?? [],
+    addLinkRule: (rule) => void linkRules.push(rule),
+    relink(officeId, playerIds) {
+      const room = rooms.get(officeId);
+      const o = store.peek(officeId)?.office;
+      if (room && o) emitLinks(room.recompute(o.zones, playerIds));
+    },
+    addJoinCheck: (check) => void joinChecks.push(check),
+    removePlayer(officeId, playerId, reason) {
+      if (contexts.get(playerId)?.room()?.officeId === officeId) controls.get(playerId)?.remove(reason);
+    },
+    onRoleChange: (handler) => void roleHandlers.push(handler),
+    onOfficeChange: (handler) => void officeHandlers.push(handler),
     setRole(officeId, userId, role) {
       admissions++;
       const guests = store.peek(officeId)?.guests ?? 'off';
@@ -240,6 +293,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
     if (user) void socket.join(socket.data.sessionHash ? [userRoom(user.id), sessionRoom(socket.data.sessionHash)] : [userRoom(user.id)]);
 
     const office = () => (room ? store.peek(room.officeId)?.office : undefined);
+    const customer = () => !!room && isCustomer(role, store.peek(room.officeId)?.kind);
     const ctx: SocketContext = {
       socket,
       user,
@@ -252,9 +306,10 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         const stored = room ? store.peek(room.officeId) : undefined;
         return !!stored && (isOwner || may(role, 'build', { buildPolicy: stored.office.settings.buildPolicy, guests: stored.guests }));
       },
+      mayChangeWorld: () => !!room && !customer(),
       limiter,
     };
-    const { me, mayEdit } = ctx;
+    const { me, mayEdit, mayChangeWorld } = ctx;
     contexts.set(socket.id, ctx);
 
     const canEmote = limiter(2, 4);
@@ -289,11 +344,17 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
     controls.set(socket.id, {
       setRole(next, guests) {
         if (!room) return;
+        const before = role!;
         role = next;
         isOwner = next === 'owner';
         if (next === 'guest') room.guests.add(socket.id);
         else room.guests.delete(socket.id);
         socket.emit('office:role', next, guests);
+        if (before === next) return;
+        // A customer made a member is no longer anonymous.
+        const p = me();
+        if (p?.customer && user && !customer()) api.updatePlayer(room.officeId, p.id, { customer: false, userId: user.id, name: user.name });
+        each(roleHandlers, ctx, before);
       },
       remove(reason) {
         if (!room) return;
@@ -351,8 +412,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
           }
           // Never as someone else: without their account, they can't come in.
           if (!account) return ack({ ok: false, error: 'Could not load your account right now. Please try again.' });
-          // An account without a character yet keeps the one they came in with.
-          if (!account.profile.avatar && req.avatar && typeof req.avatar === 'object') {
+          // An account without a character yet keeps the one they came in with (not a customer's).
+          if (!account.profile.avatar && req.avatar && typeof req.avatar === 'object' && !isCustomer(admitted.role, stored.kind)) {
             try {
               account = (await opts.accounts.update(user.id, { profile: { avatar: sanitizeAvatar(req.avatar) } })) ?? account;
               io.to(userRoom(user.id)).emit('account:updated', account);
@@ -385,18 +446,30 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
       if (joinedAs === 'guest' && (r?.guests.size ?? 0) >= MAX_GUESTS_PER_ROOM) return ack({ ok: false, error: 'This office is full.' });
+      for (const check of joinChecks) {
+        let why: string | null = null;
+        try {
+          why = check(id, ctx, joinedAs);
+        } catch (err) {
+          console.error('[realtime] a join check failed:', err);
+        }
+        if (why) return ack({ ok: false, error: why });
+      }
       if (!r) {
-        r = new Room(id);
+        r = new Room(id, linkRules);
         rooms.set(id, r);
       }
 
       role = joinedAs;
       isOwner = admitted.isOwner;
       const spot = spawnSpot(stored.office, r.players.values());
+      // Customers stay anonymous to the others (the support feature numbers them once they have a
+      // ticket): no account, its name or its character.
+      const asCustomer = isCustomer(joinedAs, stored.kind);
       const player: PlayerState = {
         id: socket.id,
-        name: account?.name || sanitizeName(req.name) || 'Guest',
-        avatar: account?.profile.avatar ?? sanitizeAvatar(req.avatar),
+        name: asCustomer ? CUSTOMER_NAME : account?.name || sanitizeName(req.name) || 'Guest',
+        avatar: (!asCustomer && account?.profile.avatar) || sanitizeAvatar(req.avatar),
         status: sanitizeStatus(req.status),
         x: spot.x,
         z: spot.z,
@@ -406,7 +479,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         cam: req.cam === true,
         screen: false,
       };
-      if (user) player.userId = user.id;
+      if (asCustomer) player.customer = true;
+      else if (user) player.userId = user.id;
       room = r;
       r.players.set(socket.id, player);
       if (joinedAs === 'guest') r.guests.add(socket.id);
@@ -456,11 +530,13 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       const p = me();
       if (!p || !office() || !room || !patch || typeof patch !== 'object' || !canProfile()) return;
       const clean = sanitizeProfile(patch, p.name);
-      // A signed-in person's name and character change only with their account (Profile).
+      // A signed-in person's name and character change only with their account (Profile), and
+      // customers' names only with their ticket.
       if (user) {
         delete clean.name;
         delete clean.avatar;
       }
+      if (customer()) delete clean.name;
       if (Object.keys(clean).length) api.updatePlayer(room.officeId, p.id, clean);
     });
 
@@ -480,6 +556,9 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       if (op?.t === 'settings' && op.settings && 'buildPolicy' in op.settings && !isOwner) {
         return reject('Only the owner can change who may edit.');
       }
+      // Some items are made for one kind of workspace (support desks).
+      const kinds = (op?.t === 'add' || op?.t === 'update') && op.item && typeof op.item === 'object' ? getEntry(op.item.type)?.kinds : undefined;
+      if (kinds && !kinds.includes(stored.kind)) return reject('That doesn’t belong in this kind of workspace.');
       // Item data (a jukebox's station and links…) changes only through its feature's own ops, so
       // moving, copying or re-typing an item can't overwrite (or forge) it.
       if (op?.t === 'update' && op.item && typeof op.item === 'object') {
@@ -504,6 +583,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       else if (op.t === 'remove' || op.t === 'zone:remove') normalized = { t: op.t, id: op.id };
       io.to(roomName(room.officeId)).emit('office:op', normalized, socket.id);
       if (op.t.startsWith('zone:') || op.t === 'settings') emitLinks(room.recompute(next.zones));
+      each(officeHandlers, room.officeId, next);
       // Listen-along sessions end with their jukebox (removed, re-typed, or cut off by a smaller floor).
       for (const itemId of [...room.spotify.keys()]) {
         if (!isJukebox(next.items.find((i) => i.id === itemId))) endSpotify(room, itemId);
@@ -521,6 +601,11 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
     socket.on('music', (op) => {
       const p = me();
       if (!room || !p || !canMusic()) return;
+      if (!mayChangeWorld()) {
+        // Listeners' track lengths are just ignored.
+        if (op?.t !== 'track:durations') socket.emit('notice', 'Only staff can change the music here.');
+        return;
+      }
       const r = room;
       const stored = store.peek(r.officeId);
       if (!stored) return;
@@ -549,7 +634,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
 
     socket.on('spotify:session', (itemId, update, start) => {
       const p = me();
-      if (!room || !p || typeof itemId !== 'string') return;
+      if (!room || !p || typeof itemId !== 'string' || !mayChangeWorld()) return;
       if (update === null) {
         // Anyone in the room may stop the music, like turning off a shared speaker.
         endSpotify(room, itemId);

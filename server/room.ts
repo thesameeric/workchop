@@ -7,6 +7,15 @@ export interface LinkChanges {
   removed: { a: string; b: string }[];
 }
 
+/** For two people: false keeps them apart, true links them wherever they are, null leaves it to the usual rules. */
+export type PairRule = (a: PlayerState, b: PlayerState) => boolean | null;
+
+/**
+ * A feature's say in who is in a call with whom, asked once per check of an office's calls: the
+ * rule for its pairs (look up what it needs once, here), or null for no say in that office.
+ */
+export type LinkRule = (officeId: string) => PairRule | null;
+
 export function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
@@ -22,7 +31,10 @@ export class Room {
   readonly spotify = new Map<string, SpotifySession>();
   private nextSid = 1;
 
-  constructor(readonly officeId: string) {}
+  constructor(
+    readonly officeId: string,
+    private readonly rules: readonly LinkRule[] = [],
+  ) {}
 
   linkSid(a: string, b: string): number | undefined {
     return this.links.get(pairKey(a, b));
@@ -38,6 +50,29 @@ export class Room {
     return out;
   }
 
+  /** The rules' say about each pair, for one check. A rule that fails is logged and has no say. */
+  private pairRules(): PairRule[] {
+    const out: PairRule[] = [];
+    const failed = (err: unknown) => console.error('[realtime] a link rule failed:', err);
+    for (const rule of this.rules) {
+      try {
+        const pair = rule(this.officeId);
+        if (!pair) continue;
+        out.push((a, b) => {
+          try {
+            return pair(a, b);
+          } catch (err) {
+            failed(err);
+            return null;
+          }
+        });
+      } catch (err) {
+        failed(err);
+      }
+    }
+    return out;
+  }
+
   /**
    * Re-evaluate links for the given people (or everybody). Each pair is only
    * checked once, and the result says which calls to start or end.
@@ -46,6 +81,17 @@ export class Room {
     const changes: LinkChanges = { added: [], removed: [] };
     const subjects = ids ? [...ids] : [...this.players.keys()];
     const seen = new Set<string>();
+    const rules = this.pairRules();
+    // The rules first (any false: no call; else any true: a call), then distance and private areas.
+    const wants = (a: PlayerState, b: PlayerState, linked: boolean) => {
+      let forced = false;
+      for (const rule of rules) {
+        const said = rule(a, b);
+        if (said === false) return false;
+        if (said === true) forced = true;
+      }
+      return forced || shouldLink(a, b, zones, linked);
+    };
     for (const id of subjects) {
       const a = this.players.get(id);
       if (!a) continue;
@@ -55,7 +101,7 @@ export class Room {
         if (seen.has(key)) continue;
         seen.add(key);
         const linked = this.links.has(key);
-        const want = shouldLink(a, b, zones, linked);
+        const want = wants(a, b, linked);
         if (want && !linked) {
           const sid = this.nextSid++;
           this.links.set(key, sid);

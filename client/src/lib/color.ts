@@ -18,8 +18,13 @@ export function colorFor(text: string): string {
   return `hsl(${h % 360} 65% 55%)`;
 }
 
+/** Up to two initials, from letters and digits only ("Visitor #2" is "V2"). */
 export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
   if (!parts.length) return '?';
   return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
 }
