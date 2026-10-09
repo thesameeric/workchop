@@ -83,6 +83,8 @@ export class MockPaystack {
   /** Outcomes for the next charges of saved cards, in order (then 'success'); by payer email first. */
   readonly nextCharges: ChargeOutcome[] = [];
   readonly nextChargesFor = new Map<string, ChargeOutcome[]>();
+  /** Fields to answer differently on the next charge of a payer's saved card (once). */
+  readonly nextChargeExtraFor = new Map<string, Record<string, unknown>>();
   /** References refunds were asked for. */
   readonly refunds: string[] = [];
   /** Answers to the next refund requests, in order (then a refund): 503, Paystack down; 400, refused. */
@@ -169,7 +171,8 @@ export class MockPaystack {
       requested_amount: tx.amount,
       currency: tx.currency,
       gateway_response: tx.gatewayResponse,
-      ...(tx.status === 'success' ? { gateway_response_code: 'approved' } : {}),
+      // Like Paystack: checkout payments say 'approved'; charges of a saved card have no code (null).
+      ...(tx.status === 'success' ? { gateway_response_code: tx.recurring ? null : 'approved' } : {}),
       paid_at: tx.paidAt,
       channel: 'card',
       metadata: tx.metadata,
@@ -232,6 +235,8 @@ export class MockPaystack {
       if (outcome === 500) return json(res, 500, { status: false, message: 'Mock failure' });
       const tx = this.record(reference, body, true);
       tx.authorization = card.authorization;
+      tx.extra = this.nextChargeExtraFor.get(card.email);
+      this.nextChargeExtraFor.delete(card.email);
       if (outcome === 'paused') {
         tx.status = 'ongoing';
         tx.gatewayResponse = 'Pending bank confirmation';

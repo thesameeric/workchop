@@ -21,13 +21,17 @@ const CHARGE_STATUSES: Record<ChargeStatus, string> = {
 };
 
 const REFUNDS: Record<RefundState, string> = {
-  due: 'Paid twice · refund due',
-  requested: 'Paid twice · refunding',
-  refused: 'Paid twice · refund needs attention',
+  due: 'refund due',
+  requested: 'refunding',
+  refused: 'refund needs attention',
 };
 
-/** What became of a charge; a payment made twice says where its refund is. */
-export const chargeStatus = (c: BillingReceipt) => (c.status === 'superseded' && c.refund ? REFUNDS[c.refund] : CHARGE_STATUSES[c.status]);
+/**
+ * What became of a charge. A payment that's being given back says where its refund is: one made
+ * twice, or one that couldn't be applied (it didn't match what was charged for).
+ */
+export const chargeStatus = (c: BillingReceipt) =>
+  c.refund ? `${c.status === 'superseded' ? 'Paid twice' : 'Not applied'} · ${REFUNDS[c.refund]}` : CHARGE_STATUSES[c.status];
 
 /** "12 Nov", with the year when it isn't this one. */
 export function day(ts: number): string {

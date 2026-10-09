@@ -81,6 +81,8 @@ describe('renewals', () => {
   it('stop retrying cards that won’t work again', () => {
     expect(hardDecline('Expired Card')).toBe(true);
     expect(hardDecline('Lost card, pick up')).toBe(true);
+    // Paystack's answer when the saved card's authorization was removed.
+    expect(hardDecline('Email does not match Authorization code. Authorization may be inactive or belong to a different email. Please confirm.')).toBe(true);
     expect(hardDecline('Insufficient Funds')).toBe(false);
   });
 });

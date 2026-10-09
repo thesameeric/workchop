@@ -178,7 +178,7 @@ async function account(run: Running, officeId: string) {
 }
 const ms = (d: Date | null) => (d === null ? null : new Date(d).getTime());
 const chargesOf = async (run: Running, officeId: string) =>
-  (await run.db.query<{ reference: string; purpose: string; status: string; amount: string; seats: number }>('SELECT * FROM billing_charges WHERE office_id = $1 ORDER BY id', [officeId])).rows;
+  (await run.db.query<{ reference: string; purpose: string; status: string; amount: string; seats: number; refund: string | null; gateway_response: string | null }>('SELECT * FROM billing_charges WHERE office_id = $1 ORDER BY id', [officeId])).rows;
 
 /** Comes into the office (or is refused), like the client's join. */
 async function enter(run: Running, officeId: string, opts: { who?: Person; guest?: string; ip?: string } = {}) {
@@ -481,7 +481,10 @@ describe('settling', () => {
       expect((await verify(main, owner, reference)).status).toBe('failed');
     }
     expect(await view(main, owner, id)).toMatchObject({ plan: 'free' });
-    expect((await chargesOf(main, id)).every((c) => c.status === 'failed')).toBe(true);
+    const charges = await chargesOf(main, id);
+    expect(charges.every((c) => c.status === 'failed')).toBe(true);
+    // The money was taken: every one of them is given back.
+    for (const c of charges) expect(mock.refunds).toContain(c.reference);
   });
 });
 
@@ -551,6 +554,28 @@ describe('renewals', () => {
     expect(ms(after.period_start)).toBe(end);
     expect(ms(after.period_end)).toBe(nextPeriodEnd(ms(before.period_start)!, end, 'month'));
     expect(sent.filter((m) => m.to === owner.email && m.subject.startsWith('Receipt for'))).toHaveLength(2);
+  });
+
+  it('that took the money but don’t match are refunded, and the card isn’t charged again by itself', async () => {
+    const owner = await person(main, 'Mat');
+    const id = await team(main, owner);
+    await subscribe(main, owner, id, 4);
+    // More than the Free plan's 3, so it waits for a card instead of going back to Free.
+    await staff(main, owner, id, 3);
+    const end = ms((await account(main, id)).period_end)!;
+    const attempts = () => mock.calls('/transaction/charge_authorization').filter((c) => c.body.email === owner.email).length;
+    mock.nextChargeExtraFor.set(owner.email, { requested_amount: 1 });
+    clock = end + MINUTE;
+    await tick(main);
+    expect(attempts()).toBe(1);
+    const renewal = (await chargesOf(main, id)).find((c) => c.purpose === 'renewal')!;
+    expect(renewal).toMatchObject({ status: 'failed', refund: 'requested', gateway_response: 'mismatch: amount' });
+    expect(mock.refunds).toContain(renewal.reference);
+    expect((await account(main, id)).auto_renew).toBe(false);
+    clock += DAY;
+    await tick(main);
+    expect(attempts()).toBe(1);
+    expect(await view(main, owner, id)).toMatchObject({ status: 'past_due', graceReason: 'no_card' });
   });
 
   it('that fail are tried again after 1, 3 and 6 days, then the workspace locks on day 7', async () => {

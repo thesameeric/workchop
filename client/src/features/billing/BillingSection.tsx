@@ -313,12 +313,12 @@ function Ending({ view, busy, onCancel, onResume }: { view: BillingView; busy: b
 }
 
 function History({ charges, onPrint }: { charges: BillingReceipt[]; onPrint: (charge: BillingReceipt) => void }) {
-  // Paystack wouldn't refund a payment made twice: it's refunded by hand.
-  const refused = charges.some((c) => c.status === 'superseded' && c.refund === 'refused');
+  // Paystack wouldn't refund a payment we're giving back: it's refunded by hand.
+  const refused = charges.some((c) => c.refund === 'refused');
   return (
     <section className="billing-block">
       <h4>Payments</h4>
-      {refused && <p className="muted small">Paystack didn’t refund a payment you made twice. Contact support to get it back.</p>}
+      {refused && <p className="muted small">Paystack didn’t refund a payment we owe you. Contact support to get it back.</p>}
       <ul className="billing-history">
         {charges.map((c) => (
           <li key={c.reference}>
