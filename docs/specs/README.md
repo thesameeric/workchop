@@ -80,7 +80,7 @@ where the hooks below allow it, to keep merges easy.
   the office is locked is taken out at once (`lockChanged`).
 - RealtimeApi (ctx.realtime): `onSocket(s => s.socket.on(...))`, `onJoin(s => ...)`,
   `onLeave((s, {officeId, player}) => ...)` (may be async; failures are logged), `emitToOffice`,
-  `emitToUser`, `playersOfUser`, `players(officeId)` (who is in the office now), `updatePlayer`
+  `emitToUser`, `playersOfUser` (at most one per office: one presence per person), `players(officeId)` (who is in the office now), `updatePlayer`
   (broadcasts player:updated), `contextOf`, `onlineCount`,
   `linkedPeers(officeId, playerId)` (who they're in a call with), `addLinkRule((officeId) => ((a, b) =>
   boolean | null) | null)` (set up once per check of an office's calls, so look up what you need
@@ -105,7 +105,19 @@ where the hooks below allow it, to keep merges easy.
   before the limits and join checks: `onLeave` runs for the old one, then `onJoin` for the new one.
   So a feature keyed by socket id picks people up again in `onJoin` (and the client in
   `session.onJoined(rejoin)`). Dropped connections are noticed within PING_INTERVAL_MS +
-  PING_TIMEOUT_MS (20 s, server/realtime.ts). `move` relays walking steps and repeats as volatile,
+  PING_TIMEOUT_MS (20 s, server/realtime.ts). One presence per person per office: joins also carry
+  `browser` (a secret the browser keeps in localStorage `workchop:browser`; the server keeps its
+  SHA-256 in memory), and two connections in one office are the same person when they have the
+  same account or the same browser (a guest without one is never matched; the page's own
+  connections, with its `resume`, are the resume rule's). A join takes the person's other
+  connection there out (`office:removed` 'elsewhere') right after the resume rule, so it isn't
+  counted against the limits (a full office still lets the newest tab in); a join with
+  `rejoin: true` (the page coming back by itself) is refused instead
+  (`{ ok: false, reason: 'elsewhere' }`) while the person is in on another connection (features
+  see `onLeave`, then `onJoin`, as for a reconnect). Two fresh joins at once: the last one stays, the first was let in and then gets
+  'elsewhere'. The client shows "Homeoffice is open in another tab" and joins again only on *Use
+  here* (never by itself); tabs follow sign-in and sign-out in other tabs; background lobbies
+  don't go in until shown. `move` relays walking steps and repeats as volatile,
   everything else (stops, sitting, standing, jumps) reliably.
 - SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (the
   person's role in the office: 'owner' | 'admin' | 'member' | 'guest', null before joining),
@@ -188,8 +200,9 @@ where the hooks below allow it, to keep merges easy.
   events), session.officeId, session.selfId(), session.onJoined((rejoin) => …) (returns unsubscribe;
   runs at once if already joined; the session rejoins by itself after a dropped connection, retrying
   while the server turns it away for a passing reason, so resend there what the server should know), session.onLeave(fn), session.upload(file, {name?, onProgress?,
-  signal?}) → {id, url, name, contentType, size}, session.setFullVolume(playerId | null) (hear that
-  person at full volume wherever they are: a support agent and their customer).
+  signal?}) → {id, url, name, contentType, size}, session.setFullVolume(playerIds) (hear those
+  people at full volume wherever they are: a support agent, their customer and the colleagues
+  helping; [] for nobody).
 - Account: getState().account (AccountUser | null); saveAccountSettings({key: value}) merges into
   profile.settings (≤50 keys per account — use few, short keys); saveCharacter(...).
 - Toasts: toast(text, 'error' | { kind, icon, action: {label, run}, duration }) → id; dismissToast(id).
@@ -199,5 +212,6 @@ where the hooks below allow it, to keep merges easy.
   customers, the guests of support workspaces, who carry no userId; false in a player:updated when
   one is made a member; see isCustomer in shared/workspace.ts). office:removed reasons: 'removed',
   'guests-off', 'idle' (a customer without an open ticket for CUSTOMER_IDLE_MS), 'locked' (the
-  workspace was paused for not being paid; see shared/billing.ts). OfficeItem.data is ItemData; catalog entries may define
+  workspace was paused for not being paid; see shared/billing.ts), 'elsewhere' (the person came
+  into the office in another tab or on another device: the newest one stays). OfficeItem.data is ItemData; catalog entries may define
   sanitizeData(raw) used by sanitizeItem; build moves keep data for an unchanged type.

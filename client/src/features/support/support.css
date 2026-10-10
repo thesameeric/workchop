@@ -785,6 +785,153 @@ button.sc-top {
   text-decoration: underline;
 }
 
+/* Handing over and inviting */
+.sp-ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sp-helpers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.sp-helpers-label {
+  color: var(--glass-muted);
+  font-weight: 600;
+}
+
+.sp-helper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px 2px 2px 10px;
+  border-radius: 999px;
+  background: var(--glass-fill);
+  font-weight: 600;
+}
+
+.sp-helper-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 24px to tap, round like the chip. */
+.sp-helper-end {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--glass-muted);
+}
+
+.sp-helper-end:hover:not(:disabled) {
+  background: var(--glass-hover);
+  color: var(--glass-ink);
+}
+
+.sp-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 10px;
+  background: var(--glass-soft);
+  font-size: 0.8rem;
+}
+
+.sp-pending > .hgi {
+  color: var(--away);
+}
+
+.sp-pending-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sp-countdown {
+  flex: none;
+  color: var(--glass-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The colleague picker, where the chat was */
+.sp-picker {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sp-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 8px 4px 14px;
+  border-bottom: 1px solid var(--glass-line);
+}
+
+.sp-picker-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.sp-picker-note {
+  margin: 0 2px 10px;
+}
+
+.sp-colleagues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-colleagues li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--glass-soft);
+}
+
+.sp-colleague-who {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.sp-colleague-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-colleagues .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
 /* Removing a visitor who misuses the link (asked twice). */
 .sp-remove {
   display: inline-flex;
@@ -968,6 +1115,20 @@ button.sc-top {
   flex-direction: column;
 }
 
+/* A ticket's history besides the chat: handed over, colleagues joining and leaving. */
+.sp-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--glass-line);
+  color: var(--glass-muted);
+  font-size: 0.78rem;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- A support desk's card ---------- */
 
 .support-desk-anchor {
@@ -1058,6 +1219,119 @@ button.sc-top {
   margin-top: 10px;
 }
 
+/* ---------- Staff: an offer from a colleague ---------- */
+
+.support-offer {
+  position: absolute;
+  top: calc(104px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  /* Above dialogs (.modal-backdrop is 90): an offer runs out, so it can't wait for Settings to close. */
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--glass-shadow);
+  color: var(--glass-ink);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  animation: sdc-in 0.16s ease-out;
+}
+
+/* Under the video tiles too; centred beside an open side panel. */
+.office:has(> .video-strip) .support-offer:not(.sheet) {
+  top: calc(150px + env(safe-area-inset-top));
+}
+
+@media (min-width: 721px) {
+  .office:has(> .side-panel) .support-offer {
+    left: max(calc(min(380px, 100vw - 32px) / 2 + 12px), calc((100% - var(--panel-w) - 24px) / 2));
+  }
+}
+
+/* Phones: a sheet above the dock. */
+.support-offer.sheet {
+  position: fixed;
+  top: auto;
+  left: 16px;
+  right: 16px;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  width: auto;
+  transform: none;
+}
+
+.so-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.so-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.so-title h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.so-title p {
+  margin: 1px 0 0;
+  color: var(--glass-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.so-left {
+  align-self: flex-start;
+  flex: none;
+  color: var(--glass-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.so-quote {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--primary);
+  border-radius: 4px 8px 8px 4px;
+  background: var(--glass-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.so-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.support-offer.sheet .so-actions .btn {
+  flex: 1;
+  min-height: 44px;
+}
+
+.support-offer-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* ---------- Staff: customers' names over their visitor numbers ---------- */
 
 .support-realname {
@@ -1087,6 +1361,7 @@ button.sc-top {
 @media (prefers-reduced-motion: reduce) {
   .support-card,
   .support-desk-card,
+  .support-offer,
   .sc-fold,
   .sc-stars button {
     animation: none;

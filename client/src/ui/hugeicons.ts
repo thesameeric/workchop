@@ -144,6 +144,7 @@ export const HUGEICONS = {
   'tick-double-02': 0xf2830,
   'ticket-01': 0xf2833,
   'user-add-01': 0xf2914,
+  'user-arrow-left-right': 0xf2917,
   'user-circle': 0xf291d,
   'user-edit-01': 0xf291f,
   'user-group': 0xf2923,

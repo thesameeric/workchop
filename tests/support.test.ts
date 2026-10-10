@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_AVATAR } from '../shared/avatar';
-import { deskLabels, SUPPORT_DESK } from '../shared/support';
+import { canInvite, canTransferTo, deskLabels, MAX_HELPERS, SUPPORT_DESK, type Colleague } from '../shared/support';
 import type { PlayerState } from '../shared/types';
 import { isCustomer } from '../shared/workspace';
 import { supportLink, type SupportParty } from '../server/features/support/link';
@@ -9,6 +9,7 @@ import { Room, type LinkRule } from '../server/room';
 
 const customer = (serving: string | null = null): SupportParty => ({ customer: true, serving });
 const staff = (serving: string | null = null): SupportParty => ({ customer: false, serving });
+const helper = (helping: string): SupportParty => ({ customer: false, serving: null, helping });
 
 describe('supportLink', () => {
   it('never links customers with each other', () => {
@@ -31,6 +32,57 @@ describe('supportLink', () => {
     expect(supportLink(staff(), staff('t2'))).toBe(false);
     expect(supportLink(staff('t1'), staff('t2'))).toBe(false);
     expect(supportLink(staff(), staff())).toBeNull();
+  });
+
+  it('puts colleagues helping with a ticket in its call, wherever they are, and in no other', () => {
+    expect(supportLink(helper('t1'), staff('t1'))).toBe(true);
+    expect(supportLink(staff('t1'), helper('t1'))).toBe(true);
+    expect(supportLink(helper('t1'), customer('t1'))).toBe(true);
+    expect(supportLink(customer('t1'), helper('t1'))).toBe(true);
+    expect(supportLink(helper('t1'), helper('t1'))).toBe(true);
+    // Another ticket's customer or agent, other staff, and a helper of another ticket: never.
+    expect(supportLink(helper('t1'), customer('t2'))).toBe(false);
+    expect(supportLink(helper('t1'), customer())).toBe(false);
+    expect(supportLink(helper('t1'), staff('t2'))).toBe(false);
+    expect(supportLink(helper('t1'), staff())).toBe(false);
+    expect(supportLink(staff(), helper('t1'))).toBe(false);
+    expect(supportLink(helper('t1'), helper('t2'))).toBe(false);
+    // Nobody on a ticket: the usual rules.
+    expect(supportLink({ customer: false, serving: null, helping: null }, staff())).toBeNull();
+  });
+});
+
+describe('who can take a ticket over, or help', () => {
+  const colleague = (state: Colleague['state'], more: Partial<Colleague> = {}): Colleague => ({
+    userId: 'u',
+    name: 'Tunde',
+    playerId: 'p',
+    desk: state === 'no-desk' ? null : 'Desk 3',
+    state,
+    helping: state === 'helping' ? 't9' : null,
+    ...more,
+  });
+
+  it('hands a ticket only to someone here, at a desk, serving nobody and helping with nothing else', () => {
+    expect(canTransferTo(colleague('free'), 't1')).toBe(true);
+    expect(canTransferTo(colleague('helping', { helping: 't1' }), 't1')).toBe(true);
+    expect(canTransferTo(colleague('helping'), 't1')).toBe(false);
+    expect(canTransferTo(colleague('helping', { helping: 't1', desk: null }), 't1')).toBe(false);
+    expect(canTransferTo(colleague('serving'), 't1')).toBe(false);
+    expect(canTransferTo(colleague('away', { playerId: null }), 't1')).toBe(false);
+    expect(canTransferTo(colleague('no-desk'), 't1')).toBe(false);
+    expect(canTransferTo(colleague('free', { playerId: null }), 't1')).toBe(false);
+  });
+
+  it('invites someone here, serving nobody and helping with nothing, while there’s room', () => {
+    const none = { helpers: [] };
+    expect(canInvite(colleague('free'), none)).toBe(true);
+    expect(canInvite(colleague('no-desk'), none)).toBe(true);
+    for (const state of ['serving', 'helping', 'away'] as const) expect(canInvite(colleague(state), none)).toBe(false);
+    expect(canInvite(colleague('helping', { helping: 't1' }), none)).toBe(false);
+    expect(canInvite(colleague('no-desk', { playerId: null }), none)).toBe(false);
+    const full = { helpers: Array.from({ length: MAX_HELPERS }, (_, i) => ({ userId: `h${i}`, name: 'H', playerId: null })) };
+    expect(canInvite(colleague('free'), full)).toBe(false);
   });
 });
 

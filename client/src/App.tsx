@@ -13,12 +13,13 @@ import { Toasts } from './ui/Toasts';
 // A workspace's lobby and its office load together, as one leads to the other, and with the features
 // (their panels, and support's lobby for customers).
 const Workspace = lazyPage(async () => {
-  const [{ OfficeView }, { Lobby }] = await Promise.all([import('./ui/OfficeView'), import('./ui/Lobby'), loadFeatures()]);
+  const [{ OfficeView }, { Lobby }, { Elsewhere }] = await Promise.all([import('./ui/OfficeView'), import('./ui/Lobby'), import('./ui/Elsewhere'), loadFeatures()]);
   return function Workspace() {
     const inside = useStore((s) => s.phase === 'office');
+    const elsewhere = useStore((s) => s.elsewhere);
     const officeId = useStore((s) => s.officeId);
     // Another workspace's lobby starts afresh.
-    return inside ? <OfficeView /> : <Lobby key={officeId} />;
+    return elsewhere ? <Elsewhere /> : inside ? <OfficeView /> : <Lobby key={officeId} />;
   };
 });
 const AuthPage = lazyPage(() => import('./ui/AuthPage').then((m) => m.AuthPage));

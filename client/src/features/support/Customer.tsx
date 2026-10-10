@@ -111,12 +111,38 @@ function Waiting({ number, ahead, ticketId }: { number: number; ahead: number; t
   );
 }
 
-function Serving({ ticketId, number, agent, here, deskItemId, desk }: { ticketId: string; number: number; agent: string; here: boolean; deskItemId: string; desk: string }) {
+/** "Ada is here too", "Ada and Ben are here too": the colleagues helping your agent. */
+const alsoHere = (names: string[]) => `${names.join(' and ')} ${names.length === 1 ? 'is' : 'are'} here too`;
+
+function Serving({
+  ticketId,
+  number,
+  agent,
+  here,
+  deskItemId,
+  desk,
+  helpers,
+}: {
+  ticketId: string;
+  number: number;
+  agent: string;
+  here: boolean;
+  deskItemId: string;
+  desk: string;
+  helpers: string[];
+}) {
   useTick(500);
   useEffect(checkArrived);
+  const moved = useSupport((s) => s.moved);
   const seated = local.seat?.itemId === deskItemId;
   // Your agent's connection dropped (or they reloaded): their desk and your ticket wait for them.
-  const title = !here ? `${agent} stepped away` : seated ? `You’re with ${agent}` : `${agent} at ${desk} is ready`;
+  const title = !here
+    ? `${agent} stepped away`
+    : seated
+      ? `You’re with ${agent}`
+      : moved
+        ? `${agent} at ${desk} will help you now`
+        : `${agent} at ${desk} is ready`;
   return (
     <div className="support-card active" role="status">
       <div className="sc-top">
@@ -134,6 +160,7 @@ function Serving({ ticketId, number, agent, here, deskItemId, desk }: { ticketId
               </>
             )}
           </span>
+          {helpers.length > 0 && <span>{alsoHere(helpers)}</span>}
         </span>
       </div>
       <div className="sc-actions">
@@ -284,6 +311,7 @@ export function CustomerCard() {
           here={!!ticket.agent.playerId}
           deskItemId={ticket.agent.deskItemId}
           desk={ticket.agent.desk}
+          helpers={ticket.helpers.map((h) => h.name)}
         />
       ) : null;
     case 'resolved':
@@ -332,7 +360,11 @@ export function CustomerChat() {
             <span className="conv-name">{agent ? agent.name : `Ticket #${ticket.number}`}</span>
           </div>
           <span className="conv-sub">
-            {agent ? `${agent.desk} · ticket #${ticket.number}` : open ? 'Add anything that helps. Whoever helps you sees it.' : 'Closed'}
+            {agent
+              ? `${agent.desk} · ticket #${ticket.number}${ticket.helpers.length ? ` · with ${ticket.helpers.map((h) => h.name).join(' and ')}` : ''}`
+              : open
+                ? 'Add anything that helps. Whoever helps you sees it.'
+                : 'Closed'}
           </span>
         </div>
       </header>

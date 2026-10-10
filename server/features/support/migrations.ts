@@ -49,4 +49,26 @@ export const migrations: Migration[] = [
         last_number int NOT NULL
       );`,
   },
+  {
+    id: 701,
+    name: 'support_ticket_events',
+    sql: `
+      -- What happened on a ticket besides its chat, for its history: handed to another agent, and
+      -- colleagues joining and leaving its conversation. Names come from the accounts.
+      CREATE TABLE support_ticket_events (
+        id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        ticket_id     text NOT NULL REFERENCES support_tickets ON DELETE CASCADE,
+        kind          text NOT NULL CHECK (kind IN ('transferred', 'joined', 'left')),
+        -- transferred: the agent who handed it over; joined and left: the colleague helping.
+        actor_user_id text REFERENCES users ON DELETE SET NULL,
+        -- transferred: the agent it went to; joined: who invited them; left: who ended their part
+        -- (null when they left, or were away too long).
+        other_user_id text REFERENCES users ON DELETE SET NULL,
+        at            timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX support_ticket_events_ticket_idx ON support_ticket_events (ticket_id, id);
+      -- For the foreign keys (an account's events lose it with it).
+      CREATE INDEX support_ticket_events_actor_idx ON support_ticket_events (actor_user_id);
+      CREATE INDEX support_ticket_events_other_idx ON support_ticket_events (other_user_id);`,
+  },
 ];

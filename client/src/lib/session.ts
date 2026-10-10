@@ -16,7 +16,7 @@ import type { UploadedFile } from '../../../shared/uploads';
 import type { AccessDenied, Role } from '../../../shared/workspace';
 import { canBuild, getState, initialBuild, personalMusicVolume, setState, toast, type RemotePlayer } from '../state/store';
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
-import { accountUpdated, refreshAccount, saveCharacter } from './account';
+import { accountUpdated, followAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
 import { serverNow, syncClock } from './clock';
 import { LoungeRadio } from './radio';
@@ -26,7 +26,7 @@ import { media } from './media';
 import { PeerManager } from './peers';
 import { local, remoteTargets, setRemoteTarget } from './positions';
 import { goHome } from './router';
-import { forgetGuestToken, getGuestToken, getOwnerKey } from './storage';
+import { browserId, forgetGuestToken, getGuestToken, getOwnerKey, randomSecret } from './storage';
 import { postFile, type UploadOptions } from './upload';
 
 /** The office connection, typed with every event (features add theirs to the shared event maps). */
@@ -58,12 +58,6 @@ const FIRST_JOIN_TRIES = 4;
 /** Where you are is sent again this long after the last time (when nothing changed), for anyone who missed it. */
 export const KEYFRAME_MS = 5_000;
 
-/** A random secret, URL-safe (JoinRequest.resume). */
-function newSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(24));
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 type Refusal = Extract<JoinResponse, { ok: false }>;
 
 /** Everything that happens while you're inside an office: socket, calls, audio. */
@@ -84,7 +78,19 @@ export class OfficeSession {
   /** The current connection's id and upload key, while joined. */
   private joined: { selfId: string; uploadKey: string } | null = null;
   /** Sent with every join of this visit: a rejoin replaces our earlier connection if the server still has it. */
-  private readonly resume = newSecret();
+  private readonly resume = randomSecret();
+  /**
+   * Whether the next join may take you out of your other tab (or device) in this office: a page's
+   * first join and Use here do; coming back by itself (after a dropped connection, or after signing
+   * in or out in another tab) doesn't, so two tabs never take turns.
+   */
+  private takeover = true;
+  /** You came into this office in another tab or on another device: this one stepped aside until Use here. */
+  private parked = false;
+  /** The mic and camera as they were when this tab stepped aside, for Use here. */
+  private parkedMedia = { mic: false, cam: false };
+  /** The music started (after the first join); it stops while this tab steps aside. */
+  private musicStarted = false;
   /** Counts joins sent (and connections dropped): an answer to an older join is ignored. */
   private joinTry = 0;
   private firstJoinTimeouts = 0;
@@ -96,8 +102,8 @@ export class OfficeSession {
   private pastIds = new Set<string>();
   private joinedHandlers = new Set<(rejoin: boolean) => void>();
   private leaveHandlers = new Set<() => void>();
-  /** Heard at full volume wherever they are (a support agent and their customer). */
-  private fullVolume: string | null = null;
+  /** Heard at full volume wherever they are (a support agent, their customer and colleagues helping). */
+  private fullVolume = new Set<string>();
   private uploadMaxBytes: number | undefined;
   private closed = false;
   /** You're leaving the workspace yourself: being removed from it needs no message. */
@@ -138,7 +144,7 @@ export class OfficeSession {
     await new Promise<void>((resolve, reject) => {
       this.onFirstJoin = (res: JoinResponse) => {
         if (res.ok) resolve();
-        else reject(new JoinRefused(res.error, res.reason ?? null));
+        else reject(new JoinRefused(res.error, res.reason === 'elsewhere' ? null : (res.reason ?? null)));
       };
       this.socket.on('connect', () => this.sendJoin());
       this.socket.on('connect_error', () => {
@@ -151,7 +157,7 @@ export class OfficeSession {
   /** Joins (again, after a reconnect) on the current connection. */
   private sendJoin(): void {
     clearTimeout(this.joinRetry);
-    if (this.closed || !this.socket.connected) return;
+    if (this.closed || this.parked || !this.socket.connected) return;
     const attempt = ++this.joinTry;
     const { me } = getState();
     const req: JoinRequest = {
@@ -164,9 +170,12 @@ export class OfficeSession {
       mic: media.micOn,
       cam: media.camOn || media.screenOn,
       resume: this.resume,
+      browser: browserId(),
     };
     // Back after a dropped connection: where you are, not at the entrance.
     if (this.hasJoined) req.at = { x: local.x, z: local.z, ry: local.ry, anim: local.anim };
+    // Coming back by itself: while you're here in another tab, this one steps aside.
+    if (this.hasJoined && !this.takeover) req.rejoin = true;
     this.socket.timeout(JOIN_TIMEOUT_MS).emit('join', req, (err, res) => {
       // Answers to an older join (or on a connection that has since dropped) don't count.
       if (attempt !== this.joinTry || this.closed) return;
@@ -185,6 +194,11 @@ export class OfficeSession {
         return;
       }
       this.onFirstJoin?.(res);
+      return;
+    }
+    // You're here in another tab now: this one steps aside (and doesn't try again by itself).
+    if (res.reason === 'elsewhere') {
+      this.park();
       return;
     }
     // Let in no longer (say, removed or the guest link reset while away): the lobby says why.
@@ -212,6 +226,7 @@ export class OfficeSession {
   private joinedOk(res: Extract<JoinResponse, { ok: true }>): void {
     const rejoin = this.hasJoined;
     this.hasJoined = true;
+    this.takeover = false;
     this.joinFailures = 0;
     this.joined = { selfId: res.selfId, uploadKey: res.uploadKey };
     remoteTargets.clear();
@@ -231,6 +246,7 @@ export class OfficeSession {
     }
     setState({
       phase: 'office',
+      elsewhere: false,
       connection: 'online',
       connectionNote: null,
       selfId: res.selfId,
@@ -260,11 +276,66 @@ export class OfficeSession {
 
   /**
    * Connects again, so the server sees who is signed in now (the session cookie goes with each new
-   * connection): after signing in here you rejoin as your account, as after any reconnect.
+   * connection): after signing in you rejoin as your account, as after any reconnect. With
+   * `takeover` (signed in in this tab) your other tab in this office steps aside; without (signed
+   * in or out in another tab), this one does if you're there. Nothing while this tab stepped aside.
    */
-  reconnect(): void {
-    if (this.closed) return;
+  reconnect(takeover = false): void {
+    if (this.closed || this.parked) return;
+    this.takeover = takeover;
     this.socket.disconnect();
+    this.socket.connect();
+  }
+
+  /** Whether this tab stepped aside for another (see useHere). */
+  isParked(): boolean {
+    return this.parked;
+  }
+
+  /**
+   * You came into this office in another tab or on another device: this one steps aside. It leaves
+   * the office (calls, music, mic and camera off, so the other tab can have them) and stays out until
+   * Use here; what features know is kept, as after a long dropped connection.
+   */
+  private park(): void {
+    if (this.parked || this.closed) return;
+    this.parked = true;
+    this.joinTry++;
+    clearTimeout(this.joinRetry);
+    if (this.joined) this.pastIds.add(this.joined.selfId);
+    this.joined = null;
+    this.dropAllPeers();
+    remoteTargets.clear();
+    this.parkedMedia = { mic: media.micOn, cam: media.camOn };
+    media.stopAll();
+    this.radio.stop();
+    setState({
+      elsewhere: true,
+      connection: 'online',
+      connectionNote: null,
+      selfId: null,
+      players: {},
+      linked: {},
+      streams: {},
+      speaking: {},
+      spotlight: null,
+      spotifySessions: {},
+      mode: 'play',
+    });
+    // Socket.IO doesn't connect again by itself after this.
+    this.socket.disconnect();
+  }
+
+  /** Use here (from a click): back into the office in this tab, and your other one steps aside. */
+  async useHere(): Promise<void> {
+    if (!this.parked || this.closed) return;
+    this.parked = false;
+    this.takeover = true;
+    const { mic, cam } = this.parkedMedia;
+    if (mic || cam) await media.start(mic, cam);
+    if (this.closed) return;
+    if (this.musicStarted) this.radio.start();
+    // Joins where you were once connected (see sendJoin).
     this.socket.connect();
   }
 
@@ -305,7 +376,8 @@ export class OfficeSession {
   }
 
   private startMusic(): void {
-    this.radio.start();
+    this.musicStarted = true;
+    if (!this.parked) this.radio.start();
     this.spotify.configure(this.spotifyClientId);
     // Keep Spotify listen-along in step with the session at the jukebox we can hear.
     this.timers.push(
@@ -356,7 +428,7 @@ export class OfficeSession {
    * have every call look for its new way through.
    */
   private onOnline = (): void => {
-    if (this.closed) return;
+    if (this.closed || this.parked) return;
     if (this.socket.connected) {
       this.peers?.restartAll();
     } else {
@@ -373,7 +445,7 @@ export class OfficeSession {
   private wireSocket(): void {
     const s = this.socket;
     s.on('disconnect', (reason) => {
-      if (this.closed) return;
+      if (this.closed || this.parked) return;
       // Answers to joins sent on that connection no longer count: the next connection joins anew.
       this.joinTry++;
       clearTimeout(this.joinRetry);
@@ -382,10 +454,13 @@ export class OfficeSession {
       setState({ connection: 'reconnecting' });
       // Every call comes back on the new connection, with new links (our player id changes).
       this.dropAllPeers();
-      // The server ends a session's connections when it signs out (in another tab): stay, as a guest.
+      // The server ends a session's connections when it ends (signed out in another tab or from
+      // another device, or expired): signed out now, back to the lobby; otherwise (still or newly
+      // signed in) back in as who you are.
       if (reason === 'io server disconnect') {
-        void refreshAccount();
-        s.connect();
+        void followAccount().then(() => {
+          if (!this.closed && !this.parked && !s.active) s.connect();
+        });
       }
     });
     s.on('player:joined', (p) => {
@@ -464,6 +539,11 @@ export class OfficeSession {
     });
     s.on('office:removed', (reason) => {
       if (this.leaving) return;
+      // You came in in another tab or on another device: this one steps aside.
+      if (reason === 'elsewhere') {
+        this.park();
+        return;
+      }
       const name = getState().office?.settings.name || 'this office';
       // A support customer there a long while without a question: back to the lobby, to ask one.
       if (reason === 'idle') {
@@ -635,11 +715,11 @@ export class OfficeSession {
   }
 
   /**
-   * Hear this person (a player id) at full volume wherever they are, or nobody (null): a support
-   * agent and the customer they're serving, who are linked from across the office.
+   * Hear these people (player ids) at full volume wherever they are, or nobody ([]): a support agent,
+   * the customer they're serving and the colleagues helping, who are linked from across the office.
    */
-  setFullVolume(playerId: string | null): void {
-    this.fullVolume = playerId;
+  setFullVolume(playerIds: string[]): void {
+    this.fullVolume = new Set(playerIds);
   }
 
   /**
@@ -651,7 +731,7 @@ export class OfficeSession {
     const zones = st.office?.zones ?? [];
     for (const [id, el] of this.audio) {
       const t = remoteTargets.get(id);
-      const v = id === this.fullVolume ? 1 : t ? proximityVolume(local, t, zones) : 0;
+      const v = this.fullVolume.has(id) ? 1 : t ? proximityVolume(local, t, zones) : 0;
       if (Math.abs(el.volume - v) > 0.01) el.volume = v;
       if (el.muted !== st.focus) el.muted = st.focus;
     }
@@ -807,6 +887,7 @@ export function closeOffice(): void {
   setState({
     phase: 'landing',
     officeId: null,
+    elsewhere: false,
     office: null,
     role: null,
     players: {},

@@ -39,6 +39,28 @@ function tabWrite(key: string, value: string | null): void {
   }
 }
 
+/** A random secret, URL-safe: 24 random bytes as 32 characters. */
+export function randomSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** This browser's id as this page knows it (all it has when storage is unavailable). */
+let pageBrowserId: string | undefined;
+
+/**
+ * This browser's secret (JoinRequest.browser), sent with every join: you're one person per browser,
+ * so coming into an office in another tab takes you out of it in this one. Without storage it's
+ * this page's own, and the tab isn't matched with others. Signing out keeps it.
+ */
+export function browserId(): string {
+  const kept = read<unknown>('browser');
+  if (typeof kept === 'string' && /^[A-Za-z0-9_-]{22,128}$/.test(kept)) return (pageBrowserId = kept);
+  pageBrowserId ??= randomSecret();
+  write('browser', pageBrowserId);
+  return pageBrowserId;
+}
+
 export interface Profile {
   name: string;
   avatar: AvatarConfig;

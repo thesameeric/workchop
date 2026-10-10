@@ -122,6 +122,7 @@ export const WaitIcon = icon('hourglass');
 export const WalkIcon = icon('walking');
 export const NextIcon = icon('arrow-right-02');
 export const StarIcon = icon('star');
+export const HandOverIcon = icon('user-arrow-left-right');
 export const FishIcon = icon('fish');
 export const CoffeeIcon = icon('coffee-02');
 export const BookIcon = icon('book-open-01');

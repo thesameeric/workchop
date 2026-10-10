@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import type { TicketOffer } from '../../../../shared/support';
 import type { OfficeItem } from '../../../../shared/types';
 import { useAnchor } from '../../lib/anchors';
+import { serverNow } from '../../lib/clock';
 import { local, rendered } from '../../lib/positions';
 import { useStore } from '../../state/store';
-import { CloseIcon, DeskIcon, SupportIcon } from '../../ui/icons';
+import { CloseIcon, DeskIcon, HandOverIcon, InviteIcon, SupportIcon } from '../../ui/icons';
 import { supportDesks } from './places';
-import { leaveDesk, sitAtDesk, takeDesk, useMyDesk, useSupport } from './state';
+import { answerOffer, leaveDesk, sitAtDesk, takeDesk, useMyDesk, useSupport } from './state';
 
-// Over the office: the card of a clicked support desk, and (for staff) customers' real names over
-// their "Visitor #N" name tags.
+// Over the office: the card of a clicked support desk, an offer from a colleague (staff), and (for
+// staff) customers' real names over their "Visitor #N" name tags.
 
 const NARROW = window.matchMedia('(max-width: 720px)');
 const onNarrow = (fn: () => void) => {
@@ -51,11 +53,12 @@ function DeskInfo({ item, label }: { item: OfficeItem; label: string }) {
   const myTicket = useSupport((s) => (s.ticket?.status === 'active' && s.ticket.agent?.deskItemId === item.id ? s.ticket : null));
   const mine = useMyDesk();
   const busy = useSupport((s) => !!s.queue.mine);
+  const helping = useSupport((s) => !!s.queue.helping);
   let subtitle: string;
   let body: ReactNode = null;
   if (as === 'staff') {
     if (mine?.itemId === item.id) {
-      subtitle = busy ? 'Your desk · serving a customer' : 'Your desk · ready';
+      subtitle = busy ? 'Your desk · serving a customer' : helping ? 'Your desk · helping' : 'Your desk · ready';
       body = (
         <div className="sdc-actions">
           {local.seat?.itemId !== item.id && (
@@ -63,7 +66,7 @@ function DeskInfo({ item, label }: { item: OfficeItem; label: string }) {
               Sit down
             </Action>
           )}
-          {!busy && <Action run={leaveDesk}>Leave desk</Action>}
+          {!busy && !helping && <Action run={leaveDesk}>Leave desk</Action>}
         </div>
       );
     } else if (taken) {
@@ -194,10 +197,12 @@ function RealName({ playerId, name }: { playerId: string; name: string }) {
   );
 }
 
-/** Staff see who's behind the visitor numbers they're waiting for or serving. */
+/** Staff see who's behind the visitor numbers they're waiting for, serving or helping with. */
 export function CustomerNames() {
   const customers = useSupport(
-    useShallow((s) => (s.as === 'staff' ? [...s.queue.waiting, ...(s.queue.mine ? [s.queue.mine] : [])].filter((t) => t.present && t.playerId) : [])),
+    useShallow((s) =>
+      s.as === 'staff' ? [...s.queue.waiting, s.queue.mine, s.queue.helping].filter((t) => !!t && t.present && !!t.playerId).map((t) => t!) : [],
+    ),
   );
   if (!customers.length) return null;
   return (
@@ -206,5 +211,72 @@ export function CustomerNames() {
         <RealName key={t.id} playerId={t.playerId!} name={t.customerName} />
       ))}
     </div>
+  );
+}
+
+// ---------- An offer from a colleague ----------
+
+const offerTitle = (o: TicketOffer) =>
+  o.kind === 'transfer' ? `${o.from.name} wants to hand you Visitor #${o.number}` : `${o.from.name} wants your help with Visitor #${o.number}`;
+
+function OfferCardFor({ offer }: { offer: TicketOffer }) {
+  const narrow = useNarrow();
+  const [busy, setBusy] = useState(false);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const left = Math.max(0, Math.ceil((offer.expiresAt - serverNow()) / 1000));
+  const title = offerTitle(offer);
+  const answer = async (accept: boolean) => {
+    setBusy(true);
+    if (!(await answerOffer(offer.id, accept))) setBusy(false);
+  };
+  const Icon = offer.kind === 'transfer' ? HandOverIcon : InviteIcon;
+  return (
+    <div className={`support-offer${narrow ? ' sheet' : ''}`} role="region" aria-label={title}>
+      <header className="so-head">
+        <span className="sdc-icon">
+          <Icon size={20} />
+        </span>
+        <div className="so-title">
+          <h3>{title}</h3>
+          <p>
+            {offer.customerName} · {offer.from.desk}
+          </p>
+        </div>
+        <span className="so-left" aria-hidden="true">
+          {left} s left
+        </span>
+      </header>
+      <p className="so-quote" title={offer.firstMessage}>
+        {offer.firstMessage}
+      </p>
+      <div className="so-actions">
+        <button type="button" className="btn primary" disabled={busy} onClick={() => void answer(true)}>
+          Accept
+        </button>
+        <button type="button" className="btn" disabled={busy} onClick={() => void answer(false)}>
+          Decline
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Staff: a colleague offers you the customer they're serving, or asks for your help with them. */
+export function OfferCard() {
+  const staff = useSupport((s) => s.as === 'staff');
+  const offer = useSupport((s) => (s.as === 'staff' ? s.queue.offers.incoming : null));
+  if (!staff) return null;
+  return (
+    <>
+      {/* Said when it appears (the region is there before, so it's announced). */}
+      <p className="support-offer-live" aria-live="polite">
+        {offer ? offerTitle(offer) : ''}
+      </p>
+      {offer && <OfferCardFor key={offer.id} offer={offer} />}
+    </>
   );
 }

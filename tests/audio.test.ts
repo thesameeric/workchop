@@ -195,13 +195,15 @@ describe('shoulder taps', () => {
     await jar.fetch(`${base}/api/auth/dev`, json({ name: 'Pat', email: 'pat@example.com' }));
     const { id } = await createOffice(base);
     const tab1 = await join(base, id, 'Pat', { jar });
-    const tab2 = await join(base, id, 'Pat', { jar });
     const dee = await join(base, id, 'Dee');
     const updated = next(tab1.socket, 'player:updated');
     dee.socket.emit('profile', { focus: true });
     await updated;
     expect(await tap(tab1.socket, dee.socket.id!)).toEqual({ ok: true });
+    // Their newer tab takes over (one of you per office), and is the same person.
+    const tab2 = await join(base, id, 'Pat', { jar });
     expect((await tap(tab2.socket, dee.socket.id!)).ok).toBe(false);
+    expect((await tap(tab1.socket, dee.socket.id!)).ok).toBe(false);
 
     // A socket that hasn't joined an office.
     const loose: Client = connect(base, { transports: ['websocket'], forceNew: true });

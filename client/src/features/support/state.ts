@@ -9,8 +9,11 @@ import {
   SUMMON_TIMEOUT_MS,
   ticketConv,
   visitorName,
+  type HelpingEnded,
   type HistoryRequest,
   type MyTicket,
+  type OfferEnded,
+  type OfferKind,
   type Summon,
   type SupportBoard,
   type SupportQueue,
@@ -19,7 +22,7 @@ import {
 import type { AvatarConfig, ClientToServerEvents, OfficeItem } from '../../../../shared/types';
 import { isCustomer } from '../../../../shared/workspace';
 import { local } from '../../lib/positions';
-import { getSession, type OfficeSession } from '../../lib/session';
+import { backToLobby, getSession, type OfficeSession } from '../../lib/session';
 import { getState, setState, toast, useStore } from '../../state/store';
 import { SupportIcon } from '../../ui/icons';
 import { sitOn, standUp, walkTo } from '../../world/movement';
@@ -51,15 +54,19 @@ interface SupportState {
   draft: string;
   /** Customers: the desk you were called to, until you sit down there. */
   summon: Summon | null;
+  /** Customers: handed to another agent, on your way to their desk (until you sit down there). */
+  moved: boolean;
   /** Customers: the ticket you took out of the queue yourself (it ends as abandoned, like one you were away too long from). */
   left: string | null;
   /** The support desk whose card is open. */
   deskCard: string | null;
   /** Staff: the panel's tab. */
   tab: StaffTab;
+  /** Staff serving someone: choosing a colleague to hand them to, or to invite (the picker is open). */
+  picker: OfferKind | null;
 }
 
-const EMPTY_QUEUE: SupportQueue = { waiting: [], desks: [], mine: null };
+const EMPTY_QUEUE: SupportQueue = { waiting: [], desks: [], mine: null, helping: null, colleagues: [], offers: { outgoing: null, incoming: null } };
 const EMPTY_BOARD: SupportBoard = { serving: [], waiting: 0 };
 
 const initial = (): SupportState => ({
@@ -71,9 +78,11 @@ const initial = (): SupportState => ({
   asking: false,
   draft: '',
   summon: null,
+  moved: false,
   left: null,
   deskCard: null,
   tab: 'desk',
+  picker: null,
 });
 
 export const useSupport = create<SupportState>()(initial);
@@ -301,10 +310,14 @@ function keep(officeId: string, ticket: MyTicket): void {
  */
 function onTicket(ticket: MyTicket | null): void {
   if (!ticket) {
-    if (!get().entering) set({ ticket: null, summon: null });
+    if (!get().entering) set({ ticket: null, summon: null, moved: false });
     return;
   }
   const was = get().ticket;
+  // The same conversation going on: who is in it may have changed.
+  const going = was?.id === ticket.id && was.status === 'active' && ticket.status === 'active' ? was : null;
+  // Handed to another agent: the server calls you to their desk.
+  const moved = !!going && !!ticket.agent && going.agent?.deskItemId !== ticket.agent.deskItemId;
   set((s) => ({
     ticket,
     entering: false,
@@ -312,13 +325,21 @@ function onTicket(ticket: MyTicket | null): void {
     // A closed ticket coming back doesn't close the question form you're filling in.
     asking: isOpen(ticket) ? false : s.asking,
     summon: ticket.status === 'active' ? s.summon : null,
+    moved: ticket.status === 'active' && (moved || s.moved),
   }));
   const officeId = getSession()?.officeId;
   if (officeId) keep(officeId, ticket);
   // Your number over your head, as the others see it.
   const name = visitorName(ticket.number);
   if (getState().me.name !== name) setState((s) => ({ me: { ...s.me, name } }));
-  if (ticket.status === 'active' && (was?.id !== ticket.id || was.status !== 'active') && ticket.agent) {
+  if (going) {
+    if (moved) toast(`${ticket.agent!.name} at ${ticket.agent!.desk} will help you now`, { icon: SupportIcon, duration: 8000 });
+    const before = going.helpers.map((h) => h.name);
+    const now = ticket.helpers.map((h) => h.name);
+    for (const helper of now.filter((n) => !before.includes(n))) toast(`${helper} joined`);
+    // A colleague who took you over didn't leave.
+    for (const helper of before.filter((n) => !now.includes(n) && n !== ticket.agent?.name)) toast(`${helper} left`);
+  } else if (ticket.status === 'active' && ticket.agent) {
     toast(`${ticket.agent.name} at ${ticket.agent.desk} is ready for you`, { icon: SupportIcon, duration: 8000 });
     // The chat opens beside the office where there's room for both.
     if (window.matchMedia('(min-width: 721px)').matches) setState({ panel: 'chat', mode: 'play' });
@@ -362,10 +383,11 @@ function onSummon(summon: Summon): void {
   }, SUMMON_TIMEOUT_MS);
 }
 
-/** Whether you've reached the seat you were called to (then the summon is done). */
+/** Whether you've reached the seat you were called to (then the summon is done, and so is a move). */
 export function checkArrived(): void {
-  const { summon } = get();
+  const { summon, moved, ticket } = get();
   if (summon && seatedAt({ ...summon.seat, itemId: summon.deskItemId })) set({ summon: null });
+  if (moved && local.seat && local.seat.itemId === ticket?.agent?.deskItemId) set({ moved: false });
 }
 
 // ---------- staff ----------
@@ -415,6 +437,82 @@ export async function fetchHistory(req: HistoryRequest): Promise<{ tickets: Tick
   return ask(request('support:history', req));
 }
 
+// ---------- staff: handing over and inviting ----------
+
+/** Opens the colleague picker (or closes it, with null). */
+export const openPicker = (picker: OfferKind | null) => set({ picker });
+
+/** Offers the customer you're serving to a colleague (transfer), or invites them into the conversation. */
+export async function offerTicket(kind: OfferKind, userId: string): Promise<boolean> {
+  const ok = !!(await ask(request('support:offer', { kind, to: userId })));
+  if (ok) set({ picker: null });
+  return ok;
+}
+
+/** Shows the ticket you took over, or are helping with: the Desk tab of the Support panel. */
+function showDesk(): void {
+  set({ tab: 'desk' });
+  if (getState().panel !== 'support') setState({ panel: 'support', mode: 'play' });
+}
+
+export async function answerOffer(id: string, accept: boolean): Promise<boolean> {
+  const offer = get().queue.offers.incoming;
+  const ok = !!(await ask(request('support:offer:answer', id, accept)));
+  if (ok && accept && offer?.id === id) {
+    if (offer.kind === 'transfer') toast(`Visitor #${offer.number} is yours now. They’re on their way.`, { icon: SupportIcon });
+    showDesk();
+  }
+  return ok;
+}
+
+export async function cancelOffer(id: string): Promise<boolean> {
+  return !!(await ask(request('support:offer:cancel', id)));
+}
+
+/** A colleague helping: out of the conversation. */
+export async function leaveHelping(): Promise<boolean> {
+  const ok = !!(await ask(request('support:helper:leave')));
+  if (ok) toast('You left the conversation.');
+  return ok;
+}
+
+/** The agent serving: ends a colleague's part in the conversation. */
+export async function removeHelper(userId: string): Promise<boolean> {
+  return !!(await ask(request('support:helper:remove', userId)));
+}
+
+/** An offer you sent or got ended (the server tells only the side that didn't end it). */
+function onOfferEnded({ offer, why, note }: OfferEnded): void {
+  const sent = offer.from.userId === getState().account?.id;
+  const { from, to, number } = offer;
+  const text = sent
+    ? {
+        accepted: offer.kind === 'transfer' ? `Visitor #${number} is with ${to.name} now.` : `${to.name} joined.`,
+        declined: `${to.name} declined.`,
+        expired: `${to.name} didn’t answer.`,
+        cancelled: null,
+        gone: note ?? 'That offer no longer works.',
+      }[why]
+    : {
+        accepted: null,
+        declined: null,
+        expired: `The offer from ${from.name} ran out.`,
+        cancelled: `${from.name} took the offer back.`,
+        gone: `The offer from ${from.name} no longer works.`,
+      }[why];
+  if (text) toast(text, why === 'gone' ? 'error' : { icon: SupportIcon });
+}
+
+/** Your part in a conversation ended: the agent ended it, resolved the ticket, or it closed. */
+function onHelpingEnded({ why, agent, number }: HelpingEnded): void {
+  const text = {
+    removed: `${agent} ended your part in Visitor #${number}’s conversation.`,
+    resolved: `${agent} resolved Visitor #${number}.`,
+    ended: `Visitor #${number}’s conversation ended.`,
+  }[why];
+  toast(text, { icon: SupportIcon });
+}
+
 /** The desk you've taken, if any. */
 export function myDesk(): SupportQueue['desks'][number] | undefined {
   const userId = getState().account?.id;
@@ -439,10 +537,26 @@ function deskSeatedAt(): string | null {
   return seat && staff && Math.hypot(staff.x - seat.x, staff.z - seat.z) < 0.1 ? item.id : null;
 }
 
+/** No longer a customer here (made a member, or signed in as staff in another tab): staff from now on, as yourself. */
+function startAsStaff(): void {
+  clearTimeout(summonTimer);
+  pending = last = null;
+  set(initial());
+  if (before) setState({ me: before });
+  before = null;
+}
+
 /** Asks what you are here after every join (a reconnect is a new connection for the server too). */
 async function sync(session: OfficeSession, rejoin: boolean): Promise<void> {
   const { role, kind } = getState();
   if (kind !== 'support') return;
+  // Back in as someone else, after signing in in another tab: as staff after coming in as a customer,
+  // or as a customer (an account that isn't staff here), who starts in the customers' lobby.
+  const was = get().as;
+  if (was === 'customer' && !isCustomer(role, kind)) {
+    startAsStaff();
+    rejoin = false;
+  }
   // Customers pick their ticket up again below; until then, "no ticket" from the server means nothing.
   if (isCustomer(role, kind)) set({ entering: true });
   // Staff: the desk you had before the connection dropped (or the one you're sitting at).
@@ -468,6 +582,10 @@ async function sync(session: OfficeSession, rejoin: boolean): Promise<void> {
     if (item && seat) sitOn({ ...seat, itemId: item.id });
     if (item && res.queue.mine && getState().panel === 'none') setState({ panel: 'support', mode: 'play' });
   } else if (res.as === 'customer') {
+    if (was === 'staff') {
+      backToLobby();
+      return;
+    }
     set({ as: 'customer', board: res.board });
     // The question from the lobby; otherwise pick up where you left off (after a reload, a reconnect or a restart).
     const question = pending;
@@ -480,43 +598,67 @@ async function sync(session: OfficeSession, rejoin: boolean): Promise<void> {
   }
 }
 
-/** Wires a support workspace's session: its events, and hearing your agent (or customer) at full volume. */
+/**
+ * The others on your ticket (player ids): a customer's agent and the colleagues helping; an agent's
+ * customer and helpers; a helper's customer, agent and the other helper.
+ */
+function onTicketWith(st: SupportState, userId: string | undefined): string[] {
+  const ids: (string | null | undefined)[] = [];
+  if (st.as === 'customer' && st.ticket?.status === 'active') {
+    ids.push(st.ticket.agent?.playerId, ...st.ticket.helpers.map((h) => h.playerId));
+  } else if (st.as === 'staff') {
+    const ticket = st.queue.mine ?? st.queue.helping;
+    if (ticket) {
+      ids.push(ticket.playerId, ...ticket.helpers.filter((h) => h.userId !== userId).map((h) => h.playerId));
+      if (ticket !== st.queue.mine) ids.push(st.queue.desks.find((d) => d.ticketId === ticket.id)?.playerId);
+    }
+  }
+  return ids.filter((id): id is string => !!id);
+}
+
+/** Wires a support workspace's session: its events, and hearing the others on your ticket at full volume. */
 export function attach(session: OfficeSession): () => void {
   set(initial());
   const s = session.socket;
-  const onQueue = (queue: SupportQueue) => set({ queue });
+  // The picker is for the customer you're serving: it closes when they're not yours any more.
+  const onQueue = (queue: SupportQueue) => set((st) => ({ queue, picker: queue.mine && queue.mine.id === st.queue.mine?.id ? st.picker : null }));
   const onBoard = (board: SupportBoard) => set({ board });
   s.on('support:queue', onQueue);
   s.on('support:board', onBoard);
   s.on('support:ticket', onTicket);
   s.on('support:summon', onSummon);
+  s.on('support:offer:ended', onOfferEnded);
+  s.on('support:helping:ended', onHelpingEnded);
   const offJoined = session.onJoined((rejoin) => void sync(session, rejoin));
   // Made a member while you were here as a customer: you're staff now.
   const onRole = () => {
     if (get().as !== 'customer' || isCustomer(getState().role, getState().kind)) return;
-    clearTimeout(summonTimer);
-    pending = last = null;
-    set(initial());
-    if (before) {
-      setState({ me: before });
-      before = null;
-    }
+    startAsStaff();
     void sync(session, false);
   };
   s.on('office:role', onRole);
-  // The other side of your ticket is heard as if they were next to you, wherever they are.
-  const partner = (st: SupportState) =>
-    st.as === 'customer' ? (st.ticket?.status === 'active' ? (st.ticket.agent?.playerId ?? null) : null) : st.as === 'staff' ? (st.queue.mine?.playerId ?? null) : null;
+  // Signed in or out in another tab while you're a customer here: you stay the visitor people see
+  // (the account's character is yours again as staff, or when you leave).
+  const offAccount = useStore.subscribe((st, prev) => {
+    if (st.account?.id === prev.account?.id || st.me === prev.me || get().as !== 'customer') return;
+    before = st.me;
+    setState({ me: prev.me });
+  });
+  // The others on your ticket are heard as if they were next to you, wherever they are.
+  const loud = (st: SupportState) => onTicketWith(st, getState().account?.id).join(' ');
   const unsub = useSupport.subscribe((st, prev) => {
-    if (partner(st) !== partner(prev)) session.setFullVolume(partner(st));
+    if (loud(st) !== loud(prev)) session.setFullVolume(onTicketWith(st, getState().account?.id));
   });
   return () => {
     s.off('support:queue', onQueue);
     s.off('support:board', onBoard);
     s.off('support:ticket', onTicket);
     s.off('support:summon', onSummon);
+    s.off('support:offer:ended', onOfferEnded);
+    s.off('support:helping:ended', onHelpingEnded);
     s.off('office:role', onRole);
     offJoined();
+    offAccount();
     unsub();
     clearTimeout(summonTimer);
     pending = last = null;

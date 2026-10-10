@@ -9,18 +9,26 @@ import {
   CUSTOMER_SEAT,
   customerEmail,
   deskLabels,
+  HELPER_AWAY_MS,
   MAX_CUSTOMER_NAME,
   MAX_CUSTOMERS_PER_ADDRESS,
   MAX_FIRST_MESSAGE,
+  MAX_HELPERS,
+  OFFER_MS,
   SUPPORT_DESK,
   ticketConv,
   visitorName,
+  type Colleague,
+  type ColleagueState,
+  type HelpingEnded,
   type MyTicket,
+  type OfferEnd,
   type SupportBoard,
   type SupportQueue,
   type SupportState,
   type TakenDesk,
   type Ticket,
+  type TicketOffer,
 } from '../../../shared/support';
 import { clip } from '../../../shared/text';
 import type { OfficeItem, PlayerState } from '../../../shared/types';
@@ -68,6 +76,10 @@ export interface SupportOptions {
   sweepEveryMs?: number;
   /** Delete closed tickets (with their chat) after this many days; default CHAT_RETENTION_DAYS (null keeps them). */
   retentionDays?: number | null;
+  /** How long a colleague helping with a ticket may be gone before their part ends (default HELPER_AWAY_MS). */
+  helperAwayMs?: number;
+  /** How long an offer waits for an answer (default OFFER_MS). */
+  offerMs?: number;
 }
 
 /** A help desk someone has taken. */
@@ -83,6 +95,24 @@ interface Desk {
   awaySince: number | null;
   /** Frees the desk if its agent (not serving anyone) doesn't come back. */
   release?: ReturnType<typeof setTimeout>;
+}
+
+/** A colleague the agent serving a ticket invited into its conversation. */
+interface Helper {
+  userId: string;
+  name: string;
+  /** The ticket's number, for telling them when their part ends. */
+  number: number;
+  /** Their connection; null while they're away. */
+  playerId: string | null;
+  /** Ends their part if they don't come back. */
+  release?: ReturnType<typeof setTimeout>;
+}
+
+/** An open offer, and the timer that ends it unanswered. */
+interface Offer {
+  offer: TicketOffer;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 /** A customer connection on a ticket (`closed`: how it ended, for the thanks and the rating). */
@@ -127,6 +157,10 @@ interface Office {
   entering: Set<string>;
   /** Bytes customers uploaded, by ticket. */
   uploaded: Map<string, number>;
+  /** Colleagues helping, by ticket id (at most MAX_HELPERS each). */
+  helpers: Map<string, Helper[]>;
+  /** Open offers, by id. */
+  offers: Map<string, Offer>;
   /** Updates are sent one at a time; `queued` is the one not started yet. */
   chain: Promise<void>;
   queued: Promise<void> | null;
@@ -139,7 +173,9 @@ const sha256 = (text: string) => crypto.createHash('sha256').update(text).digest
 /** Sorts desks by number ("Desk 2" is 2). */
 const byDesk = (labels: Map<string, string>, itemId: string | null) => Number(labels.get(itemId ?? '')?.slice(5)) || 0;
 const placeOf = (item: OfficeItem) => ({ x: item.x, z: item.z, rot: item.rot });
-const closedTicket = (r: TicketRow): MyTicket => ({ id: r.id, number: r.number, status: r.status, ahead: null, agent: null, rating: r.rating });
+const closedTicket = (r: TicketRow): MyTicket => ({ id: r.id, number: r.number, status: r.status, ahead: null, agent: null, rating: r.rating, helpers: [] });
+/** What stops an offer working now (besides someone not being here): see offerTexts. */
+type Problem = 'not-serving' | 'no-desk' | 'serving' | 'helping' | 'already' | 'full';
 
 export function supportFeature(opts: SupportOptions = {}): Feature {
   return {
@@ -152,6 +188,8 @@ export function supportFeature(opts: SupportOptions = {}): Feature {
         customerIdleMs: opts.customerIdleMs ?? CUSTOMER_IDLE_MS,
         sweepEveryMs: opts.sweepEveryMs ?? 60_000,
         retentionDays: opts.retentionDays !== undefined ? opts.retentionDays : retentionFromEnv(),
+        helperAwayMs: opts.helperAwayMs ?? HELPER_AWAY_MS,
+        offerMs: opts.offerMs ?? OFFER_MS,
       }),
   };
 }
@@ -160,7 +198,7 @@ export const feature = supportFeature();
 
 function registerSupport(
   ctx: ServerContext,
-  opts: { graceMs: number; idleDeskMs: number; customerIdleMs: number; sweepEveryMs: number; retentionDays: number | null },
+  opts: { graceMs: number; idleDeskMs: number; customerIdleMs: number; sweepEveryMs: number; retentionDays: number | null; helperAwayMs: number; offerMs: number },
 ): void {
   const { realtime, store: offices, io } = ctx;
   const tickets = new SupportStore(ctx.db);
@@ -192,6 +230,8 @@ function registerSupport(
         sockets: new Set(),
         entering: new Set(),
         uploaded: new Map(),
+        helpers: new Map(),
+        offers: new Map(),
         chain: Promise.resolve(),
         queued: null,
         snap: null,
@@ -213,7 +253,7 @@ function registerSupport(
         // (unless the desk is gone meanwhile: then the customer goes back to the queue).
         const item = items.find((i) => i.id === r.desk_item_id && i.type === SUPPORT_DESK);
         if (!item || st.desks.has(item.id) || deskOfUser(st, r.assignee_user_id)) {
-          await tickets.requeue(r.id);
+          await tickets.requeue(r.id, r.assignee_user_id);
           continue;
         }
         st.desks.set(item.id, { itemId: item.id, at: placeOf(item), userId: r.assignee_user_id, name: r.assignee_name ?? '', playerId: null, ticketId: r.id, awaySince: Date.now() });
@@ -229,7 +269,76 @@ function registerSupport(
 
   /** Forgets a workspace nobody is in, unless a desk is waiting for its agent. */
   const forget = (st: Office) => {
-    if (!st.sockets.size && !st.desks.size && live.get(st.officeId) === st) live.delete(st.officeId);
+    if (!st.sockets.size && !st.desks.size && !st.helpers.size && !st.offers.size && live.get(st.officeId) === st) live.delete(st.officeId);
+  };
+
+  /** A staff member's connections here. */
+  const staffSockets = (st: Office, userId: string) => staffHere(st).filter((id) => realtime.contextOf(id)?.user?.id === userId);
+  /** The ticket someone helps with, and their part in it. */
+  const helpingOf = (st: Office, userId: string): { ticketId: string; helper: Helper } | undefined => {
+    for (const [ticketId, list] of st.helpers) {
+      const helper = list.find((h) => h.userId === userId);
+      if (helper) return { ticketId, helper };
+    }
+    return undefined;
+  };
+  /** Everyone on a ticket: the agent serving it, its customer's connections and the colleagues helping. */
+  const onTicket = (st: Office, ticketId: string) => [
+    ...[...st.desks.values()].filter((d) => d.ticketId === ticketId).map((d) => d.playerId),
+    ...customerSockets(st, ticketId),
+    ...(st.helpers.get(ticketId) ?? []).map((h) => h.playerId),
+  ];
+  const labelsOf = (st: Office) => deskLabels(offices.peek(st.officeId)?.office.items ?? []);
+
+  /** A colleague's part in a ticket ends (they're relinked; the caller writes any history line). */
+  const dropHelper = (st: Office, ticketId: string, helper: Helper) => {
+    clearTimeout(helper.release);
+    const rest = (st.helpers.get(ticketId) ?? []).filter((h) => h !== helper);
+    if (rest.length) st.helpers.set(ticketId, rest);
+    else st.helpers.delete(ticketId);
+    relink(st, [helper.playerId, ...onTicket(st, ticketId)]);
+  };
+
+  const logEvent = (ticketId: string, kind: 'joined' | 'left', actor: string, other: string | null) =>
+    void tickets.addEvent(ticketId, kind, actor, other).catch((err) => console.error('[support] could not save a ticket’s history:', err));
+
+  /**
+   * Ends an offer, telling the staff who didn't end it: the sender (accepted, declined, a failed
+   * accept), the recipient (cancelled), or both (expired, or it stopped working). Callers publish.
+   */
+  const endOffer = (st: Office, entry: Offer, why: OfferEnd, note?: string, tell: 'from' | 'to' | 'both' = why === 'cancelled' ? 'to' : why === 'accepted' || why === 'declined' ? 'from' : 'both') => {
+    if (st.offers.get(entry.offer.id) === entry) st.offers.delete(entry.offer.id);
+    clearTimeout(entry.timer);
+    const users = tell === 'both' ? [entry.offer.from.userId, entry.offer.to.userId] : [tell === 'from' ? entry.offer.from.userId : entry.offer.to.userId];
+    const ids = users.flatMap((u) => staffSockets(st, u));
+    if (ids.length) io.to(ids).emit('support:offer:ended', note ? { offer: entry.offer, why, note } : { offer: entry.offer, why });
+  };
+
+  /** A ticket's offers stop working (it closed, or went back to the queue): `note` says why, by its visitor's name. */
+  const endOffersFor = (st: Office, ticketId: string, note: (visitor: string) => string) => {
+    for (const entry of [...st.offers.values()]) if (entry.offer.ticketId === ticketId) endOffer(st, entry, 'gone', note(visitorName(entry.offer.number)));
+  };
+
+  /**
+   * The colleagues helping with a ticket that closed or went back to the queue are told, and their
+   * parts end (`left`: with a history line each, when the ticket stays open).
+   */
+  const endHelpers = (st: Office, ticketId: string, why: HelpingEnded['why'], agent: string, left: boolean) => {
+    const list = st.helpers.get(ticketId) ?? [];
+    st.helpers.delete(ticketId);
+    for (const helper of list) {
+      clearTimeout(helper.release);
+      const ids = staffSockets(st, helper.userId);
+      if (ids.length) io.to(ids).emit('support:helping:ended', { ticketId, number: helper.number, why, agent });
+      if (left) logEvent(ticketId, 'left', helper.userId, null);
+    }
+    relink(st, list.map((h) => h.playerId));
+  };
+
+  /** A ticket is back in the queue (its agent left, or their desk changed). */
+  const requeued = (st: Office, ticketId: string, agent: string) => {
+    endHelpers(st, ticketId, 'ended', agent, true);
+    endOffersFor(st, ticketId, (visitor) => `${visitor} is back in the queue.`);
   };
 
   /** Frees a desk; a ticket it was serving goes back to the front of the queue. */
@@ -237,7 +346,9 @@ function registerSupport(
     if (st.desks.get(desk.itemId) === desk) st.desks.delete(desk.itemId);
     clearTimeout(desk.release);
     relink(st, [desk.playerId, ...customerSockets(st, desk.ticketId)]);
-    if (desk.ticketId) await tickets.requeue(desk.ticketId);
+    const ticketId = desk.ticketId;
+    // Only while it's still theirs: a ticket handed over meanwhile stays with its new agent.
+    if (ticketId && (await tickets.requeue(ticketId, desk.userId))) requeued(st, ticketId, desk.name);
   };
 
   /** Moves a desk to another connection of its agent (a second tab, or back after a reload). */
@@ -246,10 +357,25 @@ function registerSupport(
     desk.playerId = playerId;
     desk.awaySince = null;
     clearTimeout(desk.release);
-    relink(st, [before, playerId]);
+    relink(st, [before, playerId, ...(desk.ticketId ? onTicket(st, desk.ticketId) : [])]);
   };
 
-  /** The customers on a ticket that just closed see how it ended, and are idle from now. */
+  /** A desk whose agent is away and serves nobody waits a moment for them, then is free. */
+  const releaseLater = (st: Office, desk: Desk) => {
+    clearTimeout(desk.release);
+    desk.release = setTimeout(() => {
+      if (st.desks.get(desk.itemId) !== desk || desk.playerId || desk.ticketId) return;
+      st.desks.delete(desk.itemId);
+      changed(st);
+      forget(st);
+    }, opts.idleDeskMs);
+    desk.release.unref();
+  };
+
+  /**
+   * The customers on a ticket that just closed see how it ended, and are idle from now; the
+   * colleagues helping are told, and its offers end.
+   */
   const closedFor = (st: Office, row: TicketRow) => {
     for (const [id, c] of st.customers) {
       if (c.ticketId !== row.id) continue;
@@ -257,7 +383,10 @@ function registerSupport(
       const v = st.visitors.get(id);
       if (v) v.idleSince = Date.now();
     }
+    const agent = [...st.desks.values()].find((d) => d.ticketId === row.id)?.name ?? row.assignee_name ?? '';
     for (const desk of st.desks.values()) if (desk.ticketId === row.id) desk.ticketId = null;
+    endHelpers(st, row.id, row.status === 'resolved' ? 'resolved' : 'ended', agent, false);
+    endOffersFor(st, row.id, (visitor) => `${visitor}’s ticket is closed.`);
   };
 
   // ---------- what people see ----------
@@ -290,14 +419,56 @@ function registerSupport(
     return { waiting, active, ahead, labels, present, board: { serving, waiting: waiting.length } };
   };
 
-  const ticketOf = (snap: Snapshot, r: TicketRow): Ticket => toTicket(r, snap.present.get(r.id) ?? null);
+  const ticketOf = (st: Office, snap: Snapshot, r: TicketRow): Ticket => ({
+    ...toTicket(r, snap.present.get(r.id) ?? null),
+    helpers: (st.helpers.get(r.id) ?? []).map((h) => ({ userId: h.userId, name: h.name, playerId: h.playerId })),
+  });
 
-  const queueFor = (st: Office, snap: Snapshot, userId: string | null): SupportQueue => {
+  /**
+   * The signed-in staff who are here, hold a desk or help with a ticket (you too: queueFor leaves
+   * you out), by desk, then name.
+   */
+  const colleaguesOf = (st: Office, labels: Map<string, string>): Colleague[] => {
+    const here = new Map<string, { name: string; playerId: string }>();
+    for (const id of staffHere(st)) {
+      const s = realtime.contextOf(id);
+      if (s?.user && !here.has(s.user.id)) here.set(s.user.id, { name: s.me()?.name ?? s.user.name, playerId: id });
+    }
+    const users = new Set([...here.keys(), ...[...st.desks.values()].map((d) => d.userId), ...[...st.helpers.values()].flat().map((h) => h.userId)]);
+    const deskNumber = (c: Colleague) => Number(c.desk?.slice(5)) || Infinity;
+    return [...users]
+      .map((userId): Colleague => {
+        const desk = deskOfUser(st, userId);
+        const helping = helpingOf(st, userId);
+        const state: ColleagueState = desk?.ticketId ? 'serving' : helping ? 'helping' : desk && !desk.playerId ? 'away' : desk ? 'free' : 'no-desk';
+        return {
+          userId,
+          name: desk?.name ?? helping?.helper.name ?? here.get(userId)?.name ?? '',
+          playerId: desk?.playerId ?? helping?.helper.playerId ?? here.get(userId)?.playerId ?? null,
+          desk: desk ? (labels.get(desk.itemId) ?? 'Desk') : null,
+          state,
+          helping: helping?.ticketId ?? null,
+        };
+      })
+      .sort((a, b) => deskNumber(a) - deskNumber(b) || a.name.localeCompare(b.name));
+  };
+
+  const queueFor = (st: Office, snap: Snapshot, userId: string | null, colleagues = colleaguesOf(st, snap.labels)): SupportQueue => {
     const desks: TakenDesk[] = [...st.desks.values()]
       .sort((a, b) => byDesk(snap.labels, a.itemId) - byDesk(snap.labels, b.itemId))
       .map((d) => ({ itemId: d.itemId, label: snap.labels.get(d.itemId) ?? 'Desk', userId: d.userId, name: d.name, playerId: d.playerId, ticketId: d.ticketId }));
     const mine = userId ? snap.active.find((r) => r.assignee_user_id === userId) : undefined;
-    return { waiting: snap.waiting.map((r) => ticketOf(snap, r)), desks, mine: mine ? ticketOf(snap, mine) : null };
+    const helpingId = userId ? helpingOf(st, userId)?.ticketId : undefined;
+    const helping = helpingId ? snap.active.find((r) => r.id === helpingId) : undefined;
+    const offers = [...st.offers.values()].map((e) => e.offer);
+    return {
+      waiting: snap.waiting.map((r) => ticketOf(st, snap, r)),
+      desks,
+      mine: mine ? ticketOf(st, snap, mine) : null,
+      helping: helping ? ticketOf(st, snap, helping) : null,
+      colleagues: colleagues.filter((c) => c.userId !== userId),
+      offers: { outgoing: offers.find((o) => o.from.userId === userId) ?? null, incoming: offers.find((o) => o.to.userId === userId) ?? null },
+    };
   };
 
   const ticketFor = (st: Office, snap: Snapshot, c: Customer | undefined): MyTicket | null => {
@@ -316,6 +487,7 @@ function registerSupport(
           ? { name: desk?.name ?? r.assignee_name ?? '', playerId: desk?.playerId ?? null, deskItemId: r.desk_item_id, desk: snap.labels.get(r.desk_item_id) ?? 'Desk' }
           : null,
       rating: r.rating,
+      helpers: r.status === 'active' ? (st.helpers.get(r.id) ?? []).map((h) => ({ name: h.name, playerId: h.playerId })) : [],
     };
   };
 
@@ -327,8 +499,10 @@ function registerSupport(
     if (st.queued) return st.queued;
     const run = st.chain.then(async () => {
       st.queued = null;
+      checkOffers(st);
       const snap = await snapshot(st);
       st.snap = snap;
+      const colleagues = colleaguesOf(st, snap.labels);
       const send = (to: string, json: string, emit: () => void) => {
         if (st.sent.get(to) === json) return;
         st.sent.set(to, json);
@@ -344,7 +518,7 @@ function registerSupport(
           const ticket = ticketFor(st, snap, c);
           send(id, JSON.stringify(ticket), () => io.to(id).emit('support:ticket', ticket));
         } else {
-          const queue = queueFor(st, snap, s.user?.id ?? null);
+          const queue = queueFor(st, snap, s.user?.id ?? null, colleagues);
           send(id, JSON.stringify(queue), () => io.to(id).emit('support:queue', queue));
         }
       }
@@ -354,6 +528,52 @@ function registerSupport(
     return run;
   };
   const changed = (st: Office) => void publish(st).catch(() => {});
+
+  // ---------- offers ----------
+
+  /**
+   * What stops an offer working now, besides someone not being here: the sender no longer serving
+   * the ticket, or the recipient busy (or, for an invite, the conversation full).
+   */
+  const problemOf = (st: Office, o: Pick<TicketOffer, 'kind' | 'ticketId' | 'from' | 'to'>): Problem | null => {
+    if (deskOfUser(st, o.from.userId)?.ticketId !== o.ticketId) return 'not-serving';
+    const desk = deskOfUser(st, o.to.userId);
+    if (o.kind === 'transfer' && !desk) return 'no-desk';
+    if (desk?.ticketId) return 'serving';
+    const helping = helpingOf(st, o.to.userId)?.ticketId;
+    if (helping && helping !== o.ticketId) return 'helping';
+    if (o.kind === 'invite' && helping) return 'already';
+    if (o.kind === 'invite' && (st.helpers.get(o.ticketId)?.length ?? 0) >= MAX_HELPERS) return 'full';
+    return null;
+  };
+
+  /** A problem's words: to the sender when sending, to the recipient accepting, and to the sender when it stops working. */
+  const offerTexts = (problem: Problem, o: Pick<TicketOffer, 'number' | 'from' | 'to'>): { send: string; accept: string; note: string } => {
+    const visitor = visitorName(o.number);
+    const to = o.to.name;
+    switch (problem) {
+      case 'not-serving':
+        return { send: 'You’re not serving anyone.', accept: `${o.from.name} isn’t serving ${visitor} any more.`, note: `${visitor} isn’t at your desk any more.` };
+      case 'no-desk':
+        return { send: `${to} isn’t at a desk.`, accept: 'Take a desk first.', note: `${to} isn’t at a desk.` };
+      case 'serving':
+        return { send: `${to} is serving someone.`, accept: 'Resolve your ticket first.', note: `${to} is serving someone.` };
+      case 'helping':
+        return { send: `${to} is helping with another ticket.`, accept: 'Leave the conversation you’re helping with first.', note: `${to} is helping with another ticket.` };
+      case 'already':
+        return { send: `${to} is already helping.`, accept: 'That offer is no longer open.', note: `${to} is already helping.` };
+      case 'full':
+        return { send: 'Two colleagues are helping already.', accept: 'Two colleagues are helping already.', note: 'Two colleagues are helping already.' };
+    }
+  };
+
+  /** Open offers that stopped working end (at the start of every publish). */
+  const checkOffers = (st: Office) => {
+    for (const entry of [...st.offers.values()]) {
+      const problem = problemOf(st, entry.offer);
+      if (problem) endOffer(st, entry, 'gone', offerTexts(problem, entry.offer).note);
+    }
+  };
 
   // ---------- calls ----------
 
@@ -368,13 +588,15 @@ function registerSupport(
       served.add(d.ticketId);
       if (d.playerId) serving.set(d.playerId, d.ticketId);
     }
+    const helping = new Map<string, string>();
+    for (const [ticketId, list] of st.helpers) for (const h of list) if (h.playerId) helping.set(h.playerId, ticketId);
     const parties = new Map<string, SupportParty>();
     const party = (p: PlayerState): SupportParty => {
       let found = parties.get(p.id);
       if (!found) {
         const c = st.customers.get(p.id);
         const ticketId = c && !c.closed && served.has(c.ticketId) ? c.ticketId : null;
-        found = p.customer ? { customer: true, serving: ticketId } : { customer: false, serving: serving.get(p.id) ?? null };
+        found = p.customer ? { customer: true, serving: ticketId } : { customer: false, serving: serving.get(p.id) ?? null, helping: helping.get(p.id) ?? null };
         parties.set(p.id, found);
       }
       return found;
@@ -423,9 +645,11 @@ function registerSupport(
           if (row.customer_key !== live.get(officeId)?.customers.get(s.socket.id)?.keyHash) return null;
           return isOpen(row.status) ? { write: true } : closed;
         }
-        // Staff read every ticket; only whoever is serving it writes.
-        if (row.status === 'active' && row.assignee_user_id === s.user?.id) return { write: true };
-        return isOpen(row.status) ? { write: false, why: 'Only whoever is serving this ticket can write here.' } : closed;
+        // Staff read every ticket; whoever is serving it writes, and the colleagues helping.
+        const userId = s.user?.id;
+        const helping = !!userId && !!live.get(officeId)?.helpers.get(id)?.some((h) => h.userId === userId);
+        if (row.status === 'active' && (row.assignee_user_id === s.user?.id || helping)) return { write: true };
+        return isOpen(row.status) ? { write: false, why: 'Only the people helping with this ticket can write here.' } : closed;
       },
       audience(officeId, key) {
         const st = live.get(officeId);
@@ -599,6 +823,8 @@ function registerSupport(
         const { st, officeId } = await where(s, 'staff');
         limit(canAct());
         const desk = s.user ? deskOfUser(st, s.user.id) : undefined;
+        const helping = 'Leave the conversation you’re helping with first.';
+        if (s.user && helpingOf(st, s.user.id)) throw new SupportError(helping);
         if (!desk) throw new SupportError('Take a desk first.');
         // Asked from another tab: the desk moves there.
         if (desk.playerId !== socket.id) moveDesk(st, desk, socket.id);
@@ -607,29 +833,41 @@ function registerSupport(
         const row = await tickets.claimNext(officeId, present, desk.userId, desk.itemId);
         if (row === 'serving') throw new SupportError('Resolve your ticket first.');
         if (!row) throw new SupportError((await snapshot(st)).waiting.length ? 'Nobody waiting is here right now.' : 'Nobody is waiting.');
-        // They left the desk (or the office) meanwhile: the ticket goes back where it was.
-        if (st.desks.get(desk.itemId) !== desk || desk.ticketId) {
-          await tickets.requeue(row.id);
+        // They left the desk (or the office), or joined a colleague's conversation, meanwhile: the
+        // ticket goes back where it was.
+        const joined = !!helpingOf(st, desk.userId);
+        if (st.desks.get(desk.itemId) !== desk || desk.ticketId || joined) {
+          await tickets.requeue(row.id, desk.userId);
           changed(st);
-          throw new SupportError('Take a desk first.');
+          throw new SupportError(joined ? helping : 'Take a desk first.');
         }
         desk.ticketId = row.id;
         summon(st, desk, row.id);
         relink(st, [desk.playerId, ...customerSockets(st, row.id)]);
         await publish(st);
-        return { ticket: ticketOf(st.snap!, st.snap!.active.find((r) => r.id === row.id) ?? row) };
+        return { ticket: ticketOf(st, st.snap!, st.snap!.active.find((r) => r.id === row.id) ?? row) };
       }),
     );
 
     socket.on('support:resolve', (ack) =>
       answer(ack, async () => {
-        const { st } = await where(s, 'staff');
+        const { st, officeId } = await where(s, 'staff');
         limit(canAct());
         const desk = s.user ? deskOfUser(st, s.user.id) : undefined;
         if (!desk?.ticketId) throw new SupportError('You’re not serving anyone.');
         const ticketId = desk.ticketId;
+        // An offer of it made by this agent is taken back first.
+        for (const entry of [...st.offers.values()]) if (entry.offer.ticketId === ticketId && entry.offer.from.userId === desk.userId) endOffer(st, entry, 'cancelled');
         const row = await tickets.resolve(ticketId, desk.userId);
-        desk.ticketId = null;
+        if (!row) {
+          // Handed over meanwhile: it's the other agent's to resolve.
+          const now = await tickets.byId(officeId, ticketId);
+          if (now?.status === 'active' && now.assignee_user_id !== desk.userId) {
+            changed(st);
+            throw new SupportError(`${now.assignee_name ?? 'Someone else'} has this ticket now.`);
+          }
+        }
+        if (desk.ticketId === ticketId) desk.ticketId = null;
         if (row) closedFor(st, row);
         relink(st, [desk.playerId, ...customerSockets(st, ticketId)]);
         await publish(st);
@@ -644,7 +882,8 @@ function registerSupport(
         const query = typeof req?.query === 'string' ? req.query.trim().slice(0, 100) : '';
         const before = req?.before;
         const page = await tickets.history(officeId, query, Number.isInteger(before) && before! > 0 && before! <= MAX_NUMBER ? before! : null);
-        return { tickets: page.rows.map((r) => toTicket(r, null)), more: page.more };
+        const events = await tickets.events(page.rows.map((r) => r.id));
+        return { tickets: page.rows.map((r) => ({ ...toTicket(r, null), events: events.get(r.id) ?? [] })), more: page.more };
       }),
     );
 
@@ -667,6 +906,166 @@ function registerSupport(
         const gone = [...st.visitors.keys()].filter((id) => id === playerId || (!!c && st.customers.get(id)?.keyHash === c.keyHash));
         for (const id of gone) realtime.removePlayer(officeId, id, 'removed');
         await publish(st);
+        return {};
+      }),
+    );
+
+    socket.on('support:offer', (req, ack) =>
+      answer(ack, async () => {
+        const { st, officeId } = await where(s, 'staff');
+        limit(canAct());
+        const user = s.user;
+        const desk = user ? deskOfUser(st, user.id) : undefined;
+        if (!user || !desk?.ticketId) throw new SupportError('You’re not serving anyone.');
+        const kind = req && typeof req === 'object' ? req.kind : undefined;
+        const to = req && typeof req === 'object' ? req.to : undefined;
+        if ((kind !== 'transfer' && kind !== 'invite') || typeof to !== 'string') throw new SupportError('Reload the page and try again.');
+        const row = await tickets.byId(officeId, desk.ticketId);
+        // From here on nothing waits.
+        if (!row || row.status !== 'active' || row.assignee_user_id !== user.id || deskOfUser(st, user.id)?.ticketId !== row.id) throw new SupportError('You’re not serving anyone.');
+        if (desk.playerId !== socket.id) moveDesk(st, desk, socket.id);
+        const open = [...st.offers.values()].map((e) => e.offer);
+        const waiting = open.find((o) => o.from.userId === user.id);
+        if (waiting) throw new SupportError(`You’re waiting for an answer from ${waiting.to.name}.`);
+        if (to === user.id) throw new SupportError('That’s you.');
+        const colleague = colleaguesOf(st, labelsOf(st)).find((c) => c.userId === to);
+        if (!colleague) throw new SupportError('They’re not here.');
+        if (open.some((o) => o.to.userId === to)) throw new SupportError(`${colleague.name} has another offer to answer. Try again in a moment.`);
+        const offer: TicketOffer = {
+          id: crypto.randomBytes(12).toString('base64url'),
+          kind,
+          ticketId: row.id,
+          number: row.number,
+          customerName: row.customer_name,
+          firstMessage: row.first_message,
+          from: { userId: user.id, name: desk.name, desk: labelsOf(st).get(desk.itemId) ?? 'Desk' },
+          to: { userId: colleague.userId, name: colleague.name },
+          expiresAt: Date.now() + opts.offerMs,
+        };
+        // The same checks as canTransferTo and canInvite (what the picker shows), with their reasons.
+        const problem = problemOf(st, offer);
+        if (problem) throw new SupportError(offerTexts(problem, offer).send);
+        if (kind === 'transfer' && colleague.state === 'away') throw new SupportError(`${colleague.name} is away.`);
+        if (!colleague.playerId) throw new SupportError(`${colleague.name} isn’t here.`);
+        const expire = () => {
+          endOffer(st, entry, 'expired');
+          changed(st);
+        };
+        const entry: Offer = { offer, timer: setTimeout(expire, opts.offerMs) };
+        entry.timer.unref();
+        st.offers.set(offer.id, entry);
+        await publish(st);
+        return { offer };
+      }),
+    );
+
+    socket.on('support:offer:answer', (offerId, accept, ack) =>
+      answer(ack, async () => {
+        const { st, officeId } = await where(s, 'staff');
+        limit(canAct());
+        const user = s.user;
+        const entry = typeof offerId === 'string' ? st.offers.get(offerId) : undefined;
+        if (!user || !entry || entry.offer.to.userId !== user.id) throw new SupportError('That offer is no longer open.');
+        const { offer } = entry;
+        if (accept !== true) {
+          endOffer(st, entry, 'declined');
+          await publish(st);
+          return {};
+        }
+        // Out of the open offers before anything waits: a second click finds nothing.
+        st.offers.delete(offer.id);
+        clearTimeout(entry.timer);
+        const problem = problemOf(st, offer);
+        if (problem) {
+          const { accept: mine, note } = offerTexts(problem, offer);
+          endOffer(st, entry, 'gone', note, 'from');
+          changed(st);
+          throw new SupportError(mine);
+        }
+        const fromDesk = deskOfUser(st, offer.from.userId)!;
+        const ticketId = offer.ticketId;
+        if (offer.kind === 'invite') {
+          const helpers = st.helpers.get(ticketId) ?? [];
+          helpers.push({ userId: user.id, name: s.me()?.name ?? user.name, number: offer.number, playerId: socket.id });
+          st.helpers.set(ticketId, helpers);
+          endOffer(st, entry, 'accepted');
+          relink(st, onTicket(st, ticketId));
+          await publish(st);
+          logEvent(ticketId, 'joined', user.id, offer.from.userId);
+          return {};
+        }
+        const toDesk = deskOfUser(st, user.id)!;
+        if (toDesk.playerId !== socket.id) moveDesk(st, toDesk, socket.id);
+        const moved = await tickets.transfer(officeId, ticketId, { userId: fromDesk.userId, deskItemId: fromDesk.itemId }, { userId: user.id, deskItemId: toDesk.itemId });
+        if (moved === null || moved === 'busy') {
+          const { accept: mine, note } = offerTexts(moved === 'busy' ? 'serving' : 'not-serving', offer);
+          endOffer(st, entry, 'gone', note, 'from');
+          changed(st);
+          throw new SupportError(mine);
+        }
+        // Their desk was moved or left meanwhile: the visitor goes back to the queue.
+        if (st.desks.get(toDesk.itemId) !== toDesk || toDesk.ticketId) {
+          await tickets.requeue(ticketId, user.id);
+          if (fromDesk.ticketId === ticketId) fromDesk.ticketId = null;
+          requeued(st, ticketId, toDesk.name);
+          endOffer(st, entry, 'gone', `${visitorName(offer.number)} is back in the queue.`, 'from');
+          relink(st, [fromDesk.playerId, ...customerSockets(st, ticketId)]);
+          await publish(st);
+          throw new SupportError(`Your desk changed. ${visitorName(offer.number)} is back in the queue.`);
+        }
+        if (fromDesk.ticketId === ticketId) fromDesk.ticketId = null;
+        toDesk.ticketId = ticketId;
+        // A colleague helping who takes it over is its agent now (the other one keeps helping).
+        const was = st.helpers.get(ticketId)?.find((h) => h.userId === user.id);
+        if (was) dropHelper(st, ticketId, was);
+        // The old desk, with its agent away, waits for them as an idle one does.
+        if (!fromDesk.playerId && st.desks.get(fromDesk.itemId) === fromDesk) releaseLater(st, fromDesk);
+        summon(st, toDesk, ticketId);
+        relink(st, [fromDesk.playerId, ...onTicket(st, ticketId)]);
+        endOffer(st, entry, 'accepted');
+        await publish(st);
+        return {};
+      }),
+    );
+
+    socket.on('support:offer:cancel', (offerId, ack) =>
+      answer(ack, async () => {
+        const { st } = await where(s, 'staff');
+        limit(canAct());
+        const entry = typeof offerId === 'string' ? st.offers.get(offerId) : undefined;
+        if (!s.user || !entry || entry.offer.from.userId !== s.user.id) throw new SupportError('That offer is no longer open.');
+        endOffer(st, entry, 'cancelled');
+        await publish(st);
+        return {};
+      }),
+    );
+
+    socket.on('support:helper:leave', (ack) =>
+      answer(ack, async () => {
+        const { st } = await where(s, 'staff');
+        limit(canAct());
+        const helping = s.user ? helpingOf(st, s.user.id) : undefined;
+        if (!helping) throw new SupportError('You’re not helping anyone.');
+        dropHelper(st, helping.ticketId, helping.helper);
+        await publish(st);
+        logEvent(helping.ticketId, 'left', helping.helper.userId, null);
+        return {};
+      }),
+    );
+
+    socket.on('support:helper:remove', (userId, ack) =>
+      answer(ack, async () => {
+        const { st } = await where(s, 'staff');
+        limit(canAct());
+        const desk = s.user ? deskOfUser(st, s.user.id) : undefined;
+        const helper = desk?.ticketId && typeof userId === 'string' ? st.helpers.get(desk.ticketId)?.find((h) => h.userId === userId) : undefined;
+        if (!desk?.ticketId || !helper) throw new SupportError('They’re not helping you.');
+        const ticketId = desk.ticketId;
+        const ids = staffSockets(st, helper.userId);
+        if (ids.length) io.to(ids).emit('support:helping:ended', { ticketId, number: helper.number, why: 'removed', agent: desk.name });
+        dropHelper(st, ticketId, helper);
+        await publish(st);
+        logEvent(ticketId, 'left', helper.userId, desk.userId);
         return {};
       }),
     );
@@ -738,9 +1137,16 @@ function registerSupport(
     st.sockets.add(id);
     if (isCustomer(s.role(), 'support')) st.visitors.set(id, { address: addressOf(s), idleSince: Date.now() });
     await loaded(st);
-    // An agent back in time takes their desk (and the customer they were serving) back.
+    // An agent back in time takes their desk (and the customer they were serving) back, and a
+    // colleague helping their part in the conversation.
     const desk = s.user && !st.visitors.has(id) ? deskOfUser(st, s.user.id) : undefined;
     if (desk && !desk.playerId && s.room()?.officeId === st.officeId) moveDesk(st, desk, id);
+    const helping = s.user && !st.visitors.has(id) ? helpingOf(st, s.user.id) : undefined;
+    if (helping && !helping.helper.playerId && s.room()?.officeId === st.officeId) {
+      helping.helper.playerId = id;
+      clearTimeout(helping.helper.release);
+      relink(st, onTicket(st, helping.ticketId));
+    }
     await publish(st);
   });
 
@@ -754,25 +1160,30 @@ function registerSupport(
     st.entering.delete(id);
     const c = st.customers.get(id);
     st.customers.delete(id);
+    // A desk waits for its agent a while (longer while serving): back on a new connection (a reload,
+    // or their newest tab), they take it again in onJoin.
     const desk = deskOfPlayer(st, id);
     if (desk) {
-      // Their other tab keeps the desk; otherwise it waits for them a while (longer while serving).
-      const other = s.user ? realtime.playersOfUser(s.user.id).find((p) => p.officeId === officeId && p.player.id !== id) : undefined;
-      if (other) moveDesk(st, desk, other.player.id);
-      else {
-        desk.playerId = null;
-        desk.awaySince = Date.now();
-        relink(st, customerSockets(st, desk.ticketId));
-        if (!desk.ticketId) {
-          desk.release = setTimeout(() => {
-            if (st.desks.get(desk.itemId) !== desk || desk.playerId || desk.ticketId) return;
-            st.desks.delete(desk.itemId);
-            changed(st);
-            forget(st);
-          }, opts.idleDeskMs);
-          desk.release.unref();
-        }
-      }
+      desk.playerId = null;
+      desk.awaySince = Date.now();
+      relink(st, desk.ticketId ? onTicket(st, desk.ticketId) : []);
+      if (!desk.ticketId) releaseLater(st, desk);
+    }
+    // A colleague helping with a ticket keeps their part a short while (a reload).
+    for (const [ticketId, list] of st.helpers) {
+      const helper = list.find((h) => h.playerId === id);
+      if (!helper) continue;
+      helper.playerId = null;
+      relink(st, onTicket(st, ticketId));
+      clearTimeout(helper.release);
+      helper.release = setTimeout(() => {
+        if (helper.playerId || !st.helpers.get(ticketId)?.includes(helper)) return;
+        dropHelper(st, ticketId, helper);
+        logEvent(ticketId, 'left', helper.userId, null);
+        changed(st);
+        forget(st);
+      }, opts.helperAwayMs);
+      helper.release.unref();
     }
     forget(st);
     // Customers keep their place for a while, from now.
@@ -812,14 +1223,14 @@ function registerSupport(
     }
   });
 
-  // An agent's new name shows on their desk.
+  // An agent's new name shows on their desk, a colleague's where they help, and in the colleagues.
   ctx.auth.onUserUpdated((user) => {
     for (const st of live.values()) {
       const desk = deskOfUser(st, user.id);
-      if (desk && desk.name !== user.name) {
-        desk.name = user.name;
-        changed(st);
-      }
+      if (desk) desk.name = user.name;
+      const helping = helpingOf(st, user.id);
+      if (helping) helping.helper.name = user.name;
+      if (desk || helping || staffSockets(st, user.id).length) changed(st);
     }
   });
 
@@ -870,7 +1281,11 @@ function registerSupport(
   timer.unref();
   ctx.onClose(async () => {
     clearInterval(timer);
-    for (const st of live.values()) for (const desk of st.desks.values()) clearTimeout(desk.release);
+    for (const st of live.values()) {
+      for (const desk of st.desks.values()) clearTimeout(desk.release);
+      for (const helper of [...st.helpers.values()].flat()) clearTimeout(helper.release);
+      for (const entry of st.offers.values()) clearTimeout(entry.timer);
+    }
     await sweeping;
   });
 }
