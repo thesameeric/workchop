@@ -7,7 +7,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_AVATAR } from '../shared/avatar';
 import { seatsOf } from '../shared/catalog';
 import type { UploadedFile } from '../shared/uploads';
-import { CUSTOMER_SEAT, deskLabels, MAX_CUSTOMERS_PER_ADDRESS, ticketConv, type EnterRequest, type MyTicket } from '../shared/support';
+import {
+  CUSTOMER_SEAT,
+  deskLabels,
+  MAX_CUSTOMERS_PER_ADDRESS,
+  MAX_HELPERS,
+  OFFER_MS,
+  ticketConv,
+  type EnterRequest,
+  type MyTicket,
+  type OfferKind,
+  type TicketOffer,
+} from '../shared/support';
 import type { JoinRequest, JoinResponse, ServerToClientEvents } from '../shared/types';
 import type { MembersAnswer } from '../shared/workspace';
 import { isLightOn } from '../shared/world';
@@ -138,9 +149,24 @@ const asCustomer = async (c: Joined) => {
 };
 const nameOf = ({ server }: Running, officeId: string, c: Joined) => server.realtime.players(officeId).find((p) => p.id === c.socket.id)?.name;
 const itemOf = ({ server }: Running, officeId: string, id: string) => server.store.peek(officeId)!.office.items.find((i) => i.id === id)!;
-const ticketRow = async (id: string) =>
-  (await main.server.db.query<{ status: string; assignee_user_id: string | null; assigned_at: Date | null }>('SELECT status, assignee_user_id, assigned_at FROM support_tickets WHERE id = $1', [id]))
-    .rows[0];
+const ticketRow = async (id: string, run: Running = main) =>
+  (
+    await run.server.db.query<{ status: string; assignee_user_id: string | null; assigned_at: Date | null; desk_item_id: string | null }>(
+      'SELECT status, assignee_user_id, assigned_at, desk_item_id FROM support_tickets WHERE id = $1',
+      [id],
+    )
+  ).rows[0];
+/** A staff member's account id. */
+const uid = (p: Joined) => (p.res.ok ? p.res.players.find((x) => x.id === p.socket.id)?.userId : undefined) ?? '';
+/** Whether two people are in a call. */
+const linkedIn = ({ server }: Running, officeId: string) => (p: Joined, q: Joined) => server.realtime.linkedPeers(officeId, p.socket.id!).includes(q.socket.id!);
+const offer = (p: Joined, kind: OfferKind, to: string) => p.socket.emitWithAck('support:offer', { kind, to });
+const reply = (p: Joined, o: TicketOffer, accept: boolean) => p.socket.emitWithAck('support:offer:answer', o.id, accept);
+/** The last support:queue a staff member heard (heard() from before), without asking support:state over and over. */
+const lastQueue = (queues: Parameters<ServerToClientEvents['support:queue']>[]) => queues.at(-1)?.[0];
+/** A ticket's history lines as stored. */
+const eventRows = async (ticketId: string, run: Running = main) =>
+  (await run.server.db.query<{ kind: string; actor_user_id: string | null; other_user_id: string | null }>('SELECT kind, actor_user_id, other_user_id FROM support_ticket_events WHERE ticket_id = $1 ORDER BY id', [ticketId])).rows;
 
 describe('customers', () => {
   it('come in with the customer link, without an account, as visitors', async () => {
@@ -171,7 +197,7 @@ describe('customers', () => {
     // Nothing that would change a mailto: link.
     expect(failed(await enter(ana, { email: 'a?cc=everyone@example.com' }))).toBe('Check your email address.');
     const { ticket } = ok(await enter(ana, { email: ' Alice@Example.com ' }));
-    expect(ticket).toEqual({ id: expect.any(String), number: 1, status: 'waiting', ahead: 0, agent: null, rating: null });
+    expect(ticket).toEqual({ id: expect.any(String), number: 1, status: 'waiting', ahead: 0, agent: null, rating: null, helpers: [] });
     await until(() => nameOf(main, office.id, ana) === 'Visitor #1');
 
     // Staff see the real name, the email and the first message, which also starts the ticket's chat.
@@ -200,10 +226,14 @@ describe('customers', () => {
           playerId: ana.socket.id,
           present: true,
           assignee: null,
+          helpers: [],
         }),
       ],
       desks: [],
       mine: null,
+      helping: null,
+      colleagues: [],
+      offers: { outgoing: null, incoming: null },
     });
     const history = ok(await olive.socket.emitWithAck('chat:history', { conv: ticketConv(ticket.id) }));
     // In the ticket's chat the customer writes under their own name (only staff and they see it).
@@ -368,6 +398,7 @@ describe('agents', () => {
         ahead: null,
         agent: { name: t.assignee?.name, playerId: desk === desk1 ? mia.socket.id : max.socket.id, deskItemId: desk, desk: desk === desk1 ? 'Desk 1' : 'Desk 2' },
         rating: null,
+        helpers: [],
       });
     }
 
@@ -442,7 +473,7 @@ describe('ticket chat', () => {
     // Waiting: the customer writes; staff read but don't write yet; other customers see nothing.
     const hello = ok(await send(a, 'Still there?')).message;
     expect(hello).toMatchObject({ conv, name: 'Alice Smith', userId: null, channelId: null, dm: null });
-    expect(failed(await send(mia, 'Hi!'))).toBe('Only whoever is serving this ticket can write here.');
+    expect(failed(await send(mia, 'Hi!'))).toBe('Only the people helping with this ticket can write here.');
     expect(failed(await send(b, 'Let me in'))).toBe('That conversation doesn’t exist.');
     expect(failed(await b.socket.emitWithAck('chat:history', { conv }))).toBe('That conversation doesn’t exist.');
     expect(failed(await b.socket.emitWithAck('chat:react', hello.id, '👍'))).toBe('That message no longer exists.');
@@ -455,9 +486,9 @@ describe('ticket chat', () => {
     ok(await mia.socket.emitWithAck('support:next'));
     const reply = ok(await send(mia, 'Hi, I’m Mia. Let me check.')).message;
     expect(reply).toMatchObject({ conv, name: 'Mia' });
-    expect(failed(await send(max, 'Me too'))).toBe('Only whoever is serving this ticket can write here.');
+    expect(failed(await send(max, 'Me too'))).toBe('Only the people helping with this ticket can write here.');
     ok(await a.socket.emitWithAck('chat:react', reply.id, '🙏'));
-    expect(failed(await max.socket.emitWithAck('chat:react', reply.id, '👍'))).toBe('Only whoever is serving this ticket can write here.');
+    expect(failed(await max.socket.emitWithAck('chat:react', reply.id, '👍'))).toBe('Only the people helping with this ticket can write here.');
 
     // Files too.
     const uploadKey = a.res.ok ? a.res.uploadKey : '';
@@ -824,7 +855,7 @@ describe('staff', () => {
     expect(failed(await enter(await customer(main, office), { key }))).toBe('You can’t open tickets here right now.');
   });
 
-  it('keep their desk a moment when they drop out, and in a second tab it follows them', async () => {
+  it('keep their desk a moment when they drop out, and it follows them to their newest tab', async () => {
     const office = await supportOffice(main);
     let mia = await staff(main, office, 'Mia');
     const max = await staff(main, office, 'Max');
@@ -836,16 +867,22 @@ describe('staff', () => {
     mia = { ...(await join(main.base, office.id, 'Mia', { jar: mia.jar, guest: '' })), jar: mia.jar };
     await until(async () => (await asStaff(max)).queue.desks[0]?.playerId === mia.socket.id);
 
-    // Next from another tab moves the desk there: that tab is the one in the call.
-    const tab = await join(main.base, office.id, 'Mia', { jar: mia.jar, guest: '' });
+    // Serving someone, she opens another tab: it takes over, with the desk and the call.
     const a = await customer(main, office);
-    ok(await enter(a));
-    ok(await tab.socket.emitWithAck('support:next'));
+    const { ticket } = ok(await enter(a));
+    ok(await mia.socket.emitWithAck('support:next'));
     const linked = (p: Joined, q: Joined) => main.server.realtime.linkedPeers(office.id, p.socket.id!).includes(q.socket.id!);
+    await until(() => linked(a, mia));
+    const removed = heard(mia.socket, 'office:removed');
+    const tab = await join(main.base, office.id, 'Mia', { jar: mia.jar, guest: '' });
+    await until(() => removed.length === 1);
+    expect(removed[0]).toEqual(['elsewhere']);
     await until(() => linked(a, tab));
     expect(linked(a, mia)).toBe(false);
-    expect((await asStaff(max)).queue.desks[0]).toMatchObject({ name: 'Mia', playerId: tab.socket.id });
-    ok(await mia.socket.emitWithAck('support:resolve'));
+    expect((await asStaff(max)).queue.desks[0]).toMatchObject({ name: 'Mia', playerId: tab.socket.id, ticketId: ticket.id });
+    expect((await asCustomer(a)).ticket?.agent?.playerId).toBe(tab.socket.id);
+    expect(failed(await mia.socket.emitWithAck('support:resolve'))).toBe('This isn’t a support workspace.');
+    ok(await tab.socket.emitWithAck('support:resolve'));
   });
 
   it('lose a desk moved or removed in build mode; its customer goes back to the front of the queue', async () => {
@@ -914,7 +951,7 @@ describe('customers’ tickets', () => {
     a.socket.disconnect();
     const back = await customer(main, office);
     const resolved = ok(await back.socket.emitWithAck('support:enter', { key, name: '', message: '' })).ticket;
-    expect(resolved).toEqual({ id: ticket.id, number: ticket.number, status: 'resolved', ahead: null, agent: null, rating: null });
+    expect(resolved).toEqual({ id: ticket.id, number: ticket.number, status: 'resolved', ahead: null, agent: null, rating: null, helpers: [] });
     ok(await back.socket.emitWithAck('support:rate', 5));
     // A question given up on comes back as abandoned (their place ran out, or they left).
     const second = ok(await enter(back, { key, message: 'Another thing' })).ticket;
@@ -1049,5 +1086,603 @@ describe('a few minutes on', () => {
     } finally {
       await stop(quick);
     }
+  });
+});
+
+describe('one of you per support workspace', () => {
+  // Servers of their own: each address may sign in and make workspaces only so often.
+  let run: Running;
+  beforeAll(async () => {
+    run = await start();
+  });
+  it('a customer’s newest tab gets their ticket, isn’t turned away for their network, and is the one the agent hears', { timeout: 30_000 }, async () => {
+    const office = await supportOffice(run);
+    const linked = linkedIn(run, office.id);
+    const mia = await staff(run, office, 'Mia');
+    const ip = nextIp();
+    const browser = newKey();
+    const key = newKey();
+    const a1 = await customer(run, office, { ip, request: { browser } });
+    const removed = heard(a1.socket, 'office:removed');
+    const ticket = ok(await enter(a1, { key })).ticket;
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    await until(() => linked(mia, a1));
+    for (let i = 1; i < MAX_CUSTOMERS_PER_ADDRESS; i++) await customer(run, office, { ip });
+
+    // Another tab of the same browser: in (the old one steps aside first), summoned again, heard.
+    const a2 = await customer(run, office, { ip, request: { browser } });
+    await until(() => removed.length === 1);
+    expect(removed[0]).toEqual(['elsewhere']);
+    const summons = heard(a2.socket, 'support:summon');
+    expect(ok(await a2.socket.emitWithAck('support:enter', { key, name: '', message: '' })).ticket).toMatchObject({ id: ticket.id, status: 'active' });
+    await until(() => summons.length === 1 && linked(mia, a2));
+    expect(summons[0][0]).toMatchObject({ ticketId: ticket.id, deskItemId: office.desks[0] });
+    expect(run.server.realtime.linkedPeers(office.id, mia.socket.id!)).toEqual([a2.socket.id]);
+    expect((await asStaff(mia)).queue.mine).toMatchObject({ id: ticket.id, playerId: a2.socket.id });
+    ok(await mia.socket.emitWithAck('support:resolve'));
+  });
+});
+
+describe('handing over a visitor', () => {
+  let run: Running;
+  beforeAll(async () => {
+    run = await start();
+  });
+  it('moves the ticket, the call and the visitor to the colleague who accepts', async () => {
+    const office = await supportOffice(run);
+    const linked = linkedIn(run, office.id);
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    const max = await staff(run, office, 'Max');
+    const a = await customer(run, office);
+    const { ticket } = ok(await enter(a));
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await tunde.socket.emitWithAck('support:desk', office.desks[2]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    await until(() => linked(mia, a));
+    const assignedAt = (await ticketRow(ticket.id)).assigned_at;
+
+    // Mia sees who could take it: Tunde free at Desk 3, Max here without a desk.
+    expect((await asStaff(mia)).queue.colleagues).toEqual([
+      { userId: uid(tunde), name: 'Tunde', playerId: tunde.socket.id, desk: 'Desk 3', state: 'free', helping: null },
+      { userId: uid(max), name: 'Max', playerId: max.socket.id, desk: null, state: 'no-desk', helping: null },
+    ]);
+    const tundeQueues = heard(tunde.socket, 'support:queue');
+    const miaEnded = heard(mia.socket, 'support:offer:ended');
+    const tundeEnded = heard(tunde.socket, 'support:offer:ended');
+    const sent = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    expect(sent).toEqual({
+      id: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+      kind: 'transfer',
+      ticketId: ticket.id,
+      number: ticket.number,
+      customerName: 'Alice Smith',
+      firstMessage: 'My order is late',
+      from: { userId: uid(mia), name: 'Mia', desk: 'Desk 1' },
+      to: { userId: uid(tunde), name: 'Tunde' },
+      expiresAt: expect.any(Number),
+    });
+    expect(sent.expiresAt - Date.now()).toBeGreaterThan(OFFER_MS - 5_000);
+    await until(() => tundeQueues.at(-1)?.[0].offers.incoming?.id === sent.id);
+    expect((await asStaff(mia)).queue.offers).toEqual({ outgoing: sent, incoming: null });
+    expect((await asStaff(max)).queue.offers).toEqual({ outgoing: null, incoming: null });
+
+    const summons = heard(a.socket, 'support:summon');
+    const mine = heard(a.socket, 'support:ticket');
+    expect(await reply(tunde, sent, true)).toEqual({ ok: true });
+    // One change to the ticket (Tunde at Desk 3, still called when it was), and a history line.
+    expect(await ticketRow(ticket.id)).toEqual({ status: 'active', assignee_user_id: uid(tunde), assigned_at: assignedAt, desk_item_id: office.desks[2] });
+    expect(await eventRows(ticket.id)).toEqual([{ kind: 'transferred', actor_user_id: uid(mia), other_user_id: uid(tunde) }]);
+    // The visitor walks over, sees who'll help them now, and is in a call with Tunde only.
+    await until(() => summons.length === 1);
+    expect(summons[0][0]).toEqual({ ticketId: ticket.id, deskItemId: office.desks[2], seat: seatsOf(itemOf(run, office.id, office.desks[2]))[CUSTOMER_SEAT], agentName: 'Tunde' });
+    await until(() => mine.at(-1)?.[0]?.agent?.deskItemId === office.desks[2]);
+    expect(mine.at(-1)![0]).toEqual({
+      id: ticket.id,
+      number: ticket.number,
+      status: 'active',
+      ahead: null,
+      agent: { name: 'Tunde', playerId: tunde.socket.id, deskItemId: office.desks[2], desk: 'Desk 3' },
+      rating: null,
+      helpers: [],
+    });
+    await until(() => linked(tunde, a) && !linked(mia, a));
+    // Mia hears it worked; Tunde, who accepted, hears nothing.
+    await until(() => miaEnded.length === 1);
+    expect(miaEnded[0][0]).toEqual({ offer: sent, why: 'accepted' });
+    expect(tundeEnded).toEqual([]);
+    const miaQueue = (await asStaff(mia)).queue;
+    expect([miaQueue.mine, miaQueue.offers]).toEqual([null, { outgoing: null, incoming: null }]);
+    expect((await asStaff(tunde)).queue.mine).toMatchObject({ id: ticket.id, assignee: { userId: uid(tunde), name: 'Tunde' }, deskItemId: office.desks[2] });
+    expect(await reply(tunde, sent, true)).toEqual({ ok: false, error: 'That offer is no longer open.' });
+
+    // The chat carries on: Tunde writes now, Mia only reads.
+    const conv = ticketConv(ticket.id);
+    ok(await tunde.socket.emitWithAck('chat:send', { conv, text: 'Hi, Tunde here.' }));
+    expect(failed(await mia.socket.emitWithAck('chat:send', { conv, text: 'Still me?' }))).toBe('Only the people helping with this ticket can write here.');
+    // Mia is free for the next visitor; only Tunde resolves this one.
+    expect(failed(await mia.socket.emitWithAck('support:resolve'))).toBe('You’re not serving anyone.');
+    const b = await customer(run, office);
+    ok(await enter(b));
+    expect(ok(await mia.socket.emitWithAck('support:next')).ticket.playerId).toBe(b.socket.id);
+    ok(await tunde.socket.emitWithAck('support:resolve'));
+    ok(await mia.socket.emitWithAck('support:resolve'));
+  });
+
+  it('can be declined, taken back or left to run out, one open offer each way', { timeout: 30_000 }, async () => {
+    const quick = await start({ offerMs: 300 });
+    try {
+      const office = await supportOffice(quick);
+      const mia = await staff(quick, office, 'Mia');
+      const tunde = await staff(quick, office, 'Tunde');
+      const max = await staff(quick, office, 'Max');
+      const ola = await staff(quick, office, 'Ola');
+      const [a, b] = [await customer(quick, office), await customer(quick, office)];
+      ok(await enter(a));
+      ok(await enter(b));
+      for (const [i, p] of [mia, max, tunde, ola].entries()) ok(await p.socket.emitWithAck('support:desk', office.desks[i]));
+      ok(await mia.socket.emitWithAck('support:next'));
+      ok(await max.socket.emitWithAck('support:next'));
+      const miaEnded = heard(mia.socket, 'support:offer:ended');
+      const tundeEnded = heard(tunde.socket, 'support:offer:ended');
+
+      // One at a time: from Mia, and to Tunde.
+      const first = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+      expect(failed(await offer(mia, 'invite', uid(ola)))).toBe('You’re waiting for an answer from Tunde.');
+      expect(failed(await offer(max, 'invite', uid(tunde)))).toBe('Tunde has another offer to answer. Try again in a moment.');
+      // Only Tunde answers it, only Mia takes it back.
+      expect(failed(await reply(ola, first, true))).toBe('That offer is no longer open.');
+      expect(failed(await tunde.socket.emitWithAck('support:offer:cancel', first.id))).toBe('That offer is no longer open.');
+      expect(failed(await tunde.socket.emitWithAck('support:offer:answer', 'nope', true))).toBe('That offer is no longer open.');
+
+      ok(await reply(tunde, first, false));
+      await until(() => miaEnded.length === 1);
+      expect(miaEnded[0][0]).toEqual({ offer: first, why: 'declined' });
+      expect((await asStaff(tunde)).queue.offers).toEqual({ outgoing: null, incoming: null });
+
+      const second = ok(await offer(mia, 'invite', uid(tunde))).offer;
+      ok(await mia.socket.emitWithAck('support:offer:cancel', second.id));
+      await until(() => tundeEnded.length === 1);
+      expect(tundeEnded[0][0]).toEqual({ offer: second, why: 'cancelled' });
+      expect(failed(await reply(tunde, second, true))).toBe('That offer is no longer open.');
+
+      // Nobody answers: both hear it ran out.
+      const third = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+      await until(() => miaEnded.length === 2 && tundeEnded.length === 2);
+      expect([miaEnded[1][0], tundeEnded[1][0]]).toEqual([
+        { offer: third, why: 'expired' },
+        { offer: third, why: 'expired' },
+      ]);
+      expect((await asStaff(mia)).queue.offers).toEqual({ outgoing: null, incoming: null });
+      expect(failed(await reply(tunde, third, true))).toBe('That offer is no longer open.');
+      // Only the sides that didn't end it heard of the others.
+      expect([miaEnded.length, tundeEnded.length]).toEqual([2, 2]);
+    } finally {
+      await stop(quick);
+    }
+  });
+
+  it('is refused, with the reason, when it can’t work', { timeout: 30_000 }, async () => {
+    const office = await supportOffice(run);
+    const people = [];
+    for (const name of ['Mia', 'Max', 'Tunde', 'Ola', 'Zed', 'Nia', 'Pia', 'Una']) people.push(await staff(run, office, name));
+    const [mia, max, tunde, ola, zed, nia, pia, una] = people;
+    // Desks 1 to 5 for Mia, Max, Tunde, Ola and Zed; Nia, Pia and Una have none.
+    for (const [i, p] of [mia, max, tunde, ola, zed].entries()) ok(await p.socket.emitWithAck('support:desk', office.desks[i]));
+    const [a, b] = [await customer(run, office), await customer(run, office)];
+    ok(await enter(a));
+    ok(await enter(b));
+    ok(await mia.socket.emitWithAck('support:next'));
+    ok(await max.socket.emitWithAck('support:next'));
+    // Zed stepped away from his desk.
+    const zedId = uid(zed);
+    const queues = heard(mia.socket, 'support:queue');
+    zed.socket.disconnect();
+    await until(() => lastQueue(queues)?.colleagues.find((c) => c.name === 'Zed')?.state === 'away');
+
+    expect(failed(await offer(a, 'invite', uid(tunde)))).toBe('Only staff can do that.');
+    expect(failed(await offer(tunde, 'transfer', uid(ola)))).toBe('You’re not serving anyone.');
+    expect(failed(await mia.socket.emitWithAck('support:offer', { kind: 'nope' as OfferKind, to: uid(tunde) }))).toBe('Reload the page and try again.');
+    expect(failed(await offer(max, 'transfer', uid(max)))).toBe('That’s you.');
+    expect(failed(await offer(max, 'invite', 'nobody'))).toBe('They’re not here.');
+    expect(failed(await offer(max, 'transfer', uid(nia)))).toBe('Nia isn’t at a desk.');
+    expect(failed(await offer(mia, 'transfer', uid(max)))).toBe('Max is serving someone.');
+    expect(failed(await offer(mia, 'invite', uid(max)))).toBe('Max is serving someone.');
+    expect(failed(await offer(mia, 'transfer', zedId))).toBe('Zed is away.');
+    expect(failed(await offer(mia, 'invite', zedId))).toBe('Zed isn’t here.');
+
+    // Pia (no desk) and Ola (at a desk) help Max.
+    for (const p of [pia, ola]) ok(await reply(p, ok(await offer(max, 'invite', uid(p))).offer, true));
+    expect(failed(await offer(mia, 'invite', uid(pia)))).toBe('Pia is helping with another ticket.');
+    expect(failed(await offer(mia, 'transfer', uid(pia)))).toBe('Pia isn’t at a desk.');
+    expect(failed(await offer(mia, 'transfer', uid(ola)))).toBe('Ola is helping with another ticket.');
+
+    // Tunde and Nia help Mia: two is all there's room for. (A pause: requests are limited.)
+    await wait(2_000);
+    for (const p of [tunde, nia]) ok(await reply(p, ok(await offer(mia, 'invite', uid(p))).offer, true));
+    expect(failed(await offer(mia, 'invite', uid(tunde)))).toBe('Tunde is already helping.');
+    expect(failed(await offer(mia, 'invite', uid(una)))).toBe('Two colleagues are helping already.');
+    expect((await asStaff(mia)).queue.mine?.helpers.map((h) => h.name)).toEqual(['Tunde', 'Nia']);
+    expect(MAX_HELPERS).toBe(2);
+    for (const p of [mia, max]) ok(await p.socket.emitWithAck('support:resolve'));
+  });
+
+  it('stops working when the sender resolves first', async () => {
+    const office = await supportOffice(run);
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await tunde.socket.emitWithAck('support:desk', office.desks[2]));
+    const miaEnded = heard(mia.socket, 'support:offer:ended');
+    const tundeEnded = heard(tunde.socket, 'support:offer:ended');
+    const serve = async () => {
+      const c = await customer(run, office);
+      const { ticket } = ok(await enter(c));
+      ok(await mia.socket.emitWithAck('support:next'));
+      return ticket;
+    };
+
+    // Mia resolves while Tunde thinks it over: the offer is taken back.
+    const t1 = await serve();
+    const o1 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    ok(await mia.socket.emitWithAck('support:resolve'));
+    await until(() => tundeEnded.length === 1);
+    expect(tundeEnded[0][0]).toEqual({ offer: o1, why: 'cancelled' });
+    expect(failed(await reply(tunde, o1, true))).toBe('That offer is no longer open.');
+    expect((await ticketRow(t1.id)).status).toBe('resolved');
+
+    // Resolve pressed while an Accept is being saved: Tunde has it.
+    const db = run.server.db;
+    const transaction = db.transaction;
+    const t2 = await serve();
+    const o2 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    // Saving the handover takes a while to answer.
+    db.transaction = (async (fn: Parameters<typeof transaction>[0]) => {
+      const done = await transaction.call(db, fn);
+      await wait(200);
+      return done;
+    }) as typeof transaction;
+    try {
+      const accepting = reply(tunde, o2, true);
+      await wait(50);
+      expect(await mia.socket.emitWithAck('support:resolve')).toEqual({ ok: false, error: 'Tunde has this ticket now.' });
+      expect(await accepting).toEqual({ ok: true });
+    } finally {
+      db.transaction = transaction;
+    }
+    expect(await ticketRow(t2.id)).toMatchObject({ status: 'active', assignee_user_id: uid(tunde) });
+    await until(() => miaEnded.length === 1);
+    expect(miaEnded[0][0]).toEqual({ offer: o2, why: 'accepted' });
+    ok(await tunde.socket.emitWithAck('support:resolve'));
+
+    // Resolved while an Accept waits its turn: it no longer works.
+    const t3 = await serve();
+    const o3 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    // Saving it waits a while to start.
+    db.transaction = (async (fn: Parameters<typeof transaction>[0]) => {
+      await wait(200);
+      return transaction.call(db, fn);
+    }) as typeof transaction;
+    try {
+      const accepting = reply(tunde, o3, true);
+      await wait(50);
+      ok(await mia.socket.emitWithAck('support:resolve'));
+      expect(await accepting).toEqual({ ok: false, error: `Mia isn’t serving Visitor #${t3.number} any more.` });
+    } finally {
+      db.transaction = transaction;
+    }
+    expect((await ticketRow(t3.id)).status).toBe('resolved');
+    await until(() => miaEnded.length === 2);
+    expect(miaEnded[1][0]).toEqual({ offer: o3, why: 'gone', note: `Visitor #${t3.number} isn’t at your desk any more.` });
+  });
+
+  it('stops working when the colleague calls someone, or the sender’s desk moves', async () => {
+    const office = await supportOffice(run);
+    const olive = await join(run.base, office.id, 'Olive', { jar: office.owner, guest: '' });
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await tunde.socket.emitWithAck('support:desk', office.desks[2]));
+    const miaEnded = heard(mia.socket, 'support:offer:ended');
+    const tundeEnded = heard(tunde.socket, 'support:offer:ended');
+
+    // Tunde calls someone himself first: it stops working for both.
+    ok(await enter(await customer(run, office)));
+    const t4 = ok(await mia.socket.emitWithAck('support:next')).ticket;
+    const o4 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    ok(await enter(await customer(run, office)));
+    ok(await tunde.socket.emitWithAck('support:next'));
+    await until(() => tundeEnded.some(([e]) => e.offer.id === o4.id) && miaEnded.some(([e]) => e.offer.id === o4.id));
+    const gone = { offer: o4, why: 'gone', note: 'Tunde is serving someone.' };
+    expect([miaEnded.at(-1)![0], tundeEnded.at(-1)![0]]).toEqual([gone, gone]);
+    ok(await tunde.socket.emitWithAck('support:resolve'));
+
+    // The database says Tunde is serving someone (a Next that crossed with the accept): refused there.
+    const o5 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    const other = await customer(run, office);
+    const otherTicket = ok(await enter(other)).ticket;
+    await run.server.db.query("UPDATE support_tickets SET status = 'active', assignee_user_id = $2, desk_item_id = $3 WHERE id = $1", [otherTicket.id, uid(tunde), office.desks[2]]);
+    expect(failed(await reply(tunde, o5, true))).toBe('Resolve your ticket first.');
+    await until(() => miaEnded.some(([e]) => e.offer.id === o5.id));
+    expect(miaEnded.at(-1)![0]).toEqual({ offer: o5, why: 'gone', note: 'Tunde is serving someone.' });
+    expect(await ticketRow(t4.id)).toMatchObject({ status: 'active', assignee_user_id: uid(mia) });
+    await run.server.db.query("UPDATE support_tickets SET status = 'abandoned', closed_at = now() WHERE id = $1", [otherTicket.id]);
+
+    // Mia's desk is moved in build mode: the visitor goes back to the queue, and the offer with it.
+    const o6 = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+    const desk = itemOf(run, office.id, office.desks[0]);
+    olive.socket.emit('office:op', { t: 'update', item: { ...desk, x: desk.x + 0.5 } });
+    await until(() => tundeEnded.some(([e]) => e.offer.id === o6.id) && miaEnded.some(([e]) => e.offer.id === o6.id));
+    const queued = { offer: o6, why: 'gone', note: `Visitor #${t4.number} is back in the queue.` };
+    expect([miaEnded.at(-1)![0], tundeEnded.at(-1)![0]]).toEqual([queued, queued]);
+    expect(await ticketRow(t4.id)).toMatchObject({ status: 'waiting', assignee_user_id: null });
+    expect(failed(await reply(tunde, o6, true))).toBe('That offer is no longer open.');
+  });
+
+  it('goes to a colleague helping with it, who becomes its agent; the other one keeps helping', async () => {
+    const office = await supportOffice(run);
+    const linked = linkedIn(run, office.id);
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    const nia = await staff(run, office, 'Nia');
+    const a = await customer(run, office);
+    const { ticket } = ok(await enter(a));
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await tunde.socket.emitWithAck('support:desk', office.desks[1]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    for (const p of [tunde, nia]) ok(await reply(p, ok(await offer(mia, 'invite', uid(p))).offer, true));
+    await until(() => linked(a, tunde) && linked(a, nia) && linked(mia, tunde));
+    expect((await asStaff(mia)).queue.colleagues.find((c) => c.name === 'Tunde')).toMatchObject({ state: 'helping', helping: ticket.id, desk: 'Desk 2' });
+    // History lines are saved after the answer.
+    await until(async () => (await eventRows(ticket.id)).length === 2);
+
+    ok(await reply(tunde, ok(await offer(mia, 'transfer', uid(tunde))).offer, true));
+    const { queue } = await asStaff(tunde);
+    expect([queue.mine?.id, queue.helping, queue.mine?.helpers.map((h) => h.name)]).toEqual([ticket.id, null, ['Nia']]);
+    expect((await asStaff(nia)).queue.helping?.assignee?.name).toBe('Tunde');
+    await until(() => linked(a, tunde) && linked(a, nia) && linked(tunde, nia) && !linked(a, mia) && !linked(mia, nia));
+    // Handing it over says it all: no "left" line for Tunde.
+    expect((await eventRows(ticket.id)).map((e) => e.kind)).toEqual(['joined', 'joined', 'transferred']);
+    ok(await tunde.socket.emitWithAck('support:resolve'));
+  });
+
+  it('is accepted once when Accept is pressed twice', async () => {
+    const office = await supportOffice(run);
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await tunde.socket.emitWithAck('support:desk', office.desks[1]));
+    for (const kind of ['transfer', 'invite'] as const) {
+      const a = await customer(run, office);
+      const { ticket } = ok(await enter(a));
+      ok(await mia.socket.emitWithAck('support:next'));
+      const sent = ok(await offer(mia, kind, uid(tunde))).offer;
+      const answers = await Promise.all([reply(tunde, sent, true), reply(tunde, sent, true)]);
+      expect(answers.filter((r) => r.ok)).toHaveLength(1);
+      expect(answers.find((r) => !r.ok)).toEqual({ ok: false, error: 'That offer is no longer open.' });
+      await until(async () => (await eventRows(ticket.id)).length > 0);
+      expect((await eventRows(ticket.id)).map((e) => e.kind)).toEqual([kind === 'transfer' ? 'transferred' : 'joined']);
+      if (kind === 'transfer') ok(await tunde.socket.emitWithAck('support:resolve'));
+      else {
+        expect((await asStaff(mia)).queue.mine?.helpers).toHaveLength(1);
+        ok(await mia.socket.emitWithAck('support:resolve'));
+      }
+    }
+  });
+
+  it('outlasts a reload of either side, and a desk left behind frees up', { timeout: 30_000 }, async () => {
+    const quick = await start({ idleDeskMs: 200, offerMs: 1_000 });
+    try {
+      const office = await supportOffice(quick);
+      const linked = linkedIn(quick, office.id);
+      let mia = await staff(quick, office, 'Mia');
+      let tunde = await staff(quick, office, 'Tunde');
+      const a = await customer(quick, office);
+      const { ticket } = ok(await enter(a));
+      ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+      ok(await tunde.socket.emitWithAck('support:desk', office.desks[1]));
+      ok(await mia.socket.emitWithAck('support:next'));
+      const sent = ok(await offer(mia, 'transfer', uid(tunde))).offer;
+
+      // Tunde reloads: the offer waits for him.
+      tunde.socket.disconnect();
+      tunde = { ...(await join(quick.base, office.id, 'Tunde', { jar: tunde.jar, guest: '' })), jar: tunde.jar };
+      expect((await asStaff(tunde)).queue.offers.incoming?.id).toBe(sent.id);
+      // Mia is gone (a reload she doesn't come back from): Tunde still takes it.
+      const queues = heard(tunde.socket, 'support:queue');
+      mia.socket.disconnect();
+      await until(() => lastQueue(queues)?.desks.find((d) => d.name === 'Mia')?.playerId === null);
+      ok(await reply(tunde, sent, true));
+      await until(() => linked(a, tunde));
+      expect(await ticketRow(ticket.id, quick)).toMatchObject({ status: 'active', assignee_user_id: uid(tunde), desk_item_id: office.desks[1] });
+      // Her desk, serving nobody now, frees up as an idle one does.
+      await until(() => lastQueue(queues)?.desks.map((d) => d.name).join() === 'Tunde');
+
+      // An offer to someone who left lapses.
+      mia = { ...(await join(quick.base, office.id, 'Mia', { jar: mia.jar, guest: '' })), jar: mia.jar };
+      const ended = heard(tunde.socket, 'support:offer:ended');
+      const invite = ok(await offer(tunde, 'invite', uid(mia))).offer;
+      mia.socket.disconnect();
+      await wait(500);
+      expect((await asStaff(tunde)).queue.offers.outgoing?.id).toBe(invite.id);
+      await until(() => ended.length === 1, 3_000);
+      expect(ended[0][0]).toEqual({ offer: invite, why: 'expired' });
+    } finally {
+      await stop(quick);
+    }
+  });
+});
+
+describe('inviting a colleague', () => {
+  let run: Running;
+  beforeAll(async () => {
+    run = await start();
+  });
+  it('brings them into the call and the chat wherever they are, until they leave or are let go', { timeout: 30_000 }, async () => {
+    const office = await supportOffice(run);
+    const linked = linkedIn(run, office.id);
+    const olive = await join(run.base, office.id, 'Olive', { jar: office.owner, guest: '' });
+    const mia = await staff(run, office, 'Mia');
+    const max = await staff(run, office, 'Max');
+    const a = await customer(run, office);
+    const b = await customer(run, office);
+    const { ticket } = ok(await enter(a));
+    ok(await enter(b));
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    // Olive is across the office, next to Max and the other visitor.
+    olive.socket.emit('move', 30, 30, 0, 'idle');
+    max.socket.emit('move', 30.5, 30, 0, 'idle');
+    b.socket.emit('move', 31, 30, 0, 'idle');
+    await until(() => linked(olive, max));
+
+    const mine = heard(a.socket, 'support:ticket');
+    const sent = ok(await offer(mia, 'invite', uid(olive))).offer;
+    expect(sent).toMatchObject({ kind: 'invite', to: { userId: uid(olive), name: 'Olive' } });
+    ok(await reply(olive, sent, true));
+    await until(() => linked(olive, a) && linked(olive, mia) && !linked(olive, max));
+    expect([linked(olive, b), linked(a, max)]).toEqual([false, false]);
+    // Everyone sees her helping.
+    await until(() => mine.at(-1)?.[0]?.helpers.length === 1);
+    expect(mine.at(-1)![0]!.helpers).toEqual([{ name: 'Olive', playerId: olive.socket.id }]);
+    expect((await asStaff(mia)).queue.mine?.helpers).toEqual([{ userId: uid(olive), name: 'Olive', playerId: olive.socket.id }]);
+    const oliveQueue = (await asStaff(olive)).queue;
+    expect([oliveQueue.helping?.id, oliveQueue.mine]).toEqual([ticket.id, null]);
+    expect((await asStaff(max)).queue.colleagues.find((c) => c.name === 'Olive')).toEqual({
+      userId: uid(olive),
+      name: 'Olive',
+      playerId: olive.socket.id,
+      desk: null,
+      state: 'helping',
+      helping: ticket.id,
+    });
+    await until(async () => (await eventRows(ticket.id)).length === 1);
+    expect(await eventRows(ticket.id)).toEqual([{ kind: 'joined', actor_user_id: uid(olive), other_user_id: uid(mia) }]);
+
+    // She writes in the ticket's chat; Max still only reads.
+    const conv = ticketConv(ticket.id);
+    expect(ok(await olive.socket.emitWithAck('chat:send', { conv, text: 'Olive here, I know this one.' })).message).toMatchObject({ name: 'Olive' });
+    expect(failed(await max.socket.emitWithAck('chat:send', { conv, text: 'Me too' }))).toBe('Only the people helping with this ticket can write here.');
+    // Mia stays in charge.
+    expect(failed(await olive.socket.emitWithAck('support:next'))).toBe('Leave the conversation you’re helping with first.');
+    expect(failed(await olive.socket.emitWithAck('support:resolve'))).toBe('You’re not serving anyone.');
+    expect(failed(await offer(olive, 'invite', uid(max)))).toBe('You’re not serving anyone.');
+    expect(failed(await olive.socket.emitWithAck('support:helper:remove', uid(mia)))).toBe('They’re not helping you.');
+    expect(failed(await max.socket.emitWithAck('support:helper:leave'))).toBe('You’re not helping anyone.');
+
+    // She leaves: out of the call, the visitor sees it.
+    const oliveEnded = heard(olive.socket, 'support:helping:ended');
+    ok(await olive.socket.emitWithAck('support:helper:leave'));
+    await until(() => !linked(olive, a) && !linked(olive, mia) && linked(olive, max));
+    await until(() => mine.at(-1)?.[0]?.helpers.length === 0);
+    expect(failed(await olive.socket.emitWithAck('chat:send', { conv, text: 'One more' }))).toBe('Only the people helping with this ticket can write here.');
+
+    // Invited again, then let go by Mia.
+    ok(await reply(olive, ok(await offer(mia, 'invite', uid(olive))).offer, true));
+    await until(() => linked(olive, a));
+    expect(failed(await mia.socket.emitWithAck('support:helper:remove', uid(max)))).toBe('They’re not helping you.');
+    ok(await mia.socket.emitWithAck('support:helper:remove', uid(olive)));
+    await until(() => oliveEnded.length === 1 && !linked(olive, a));
+    expect(oliveEnded[0][0]).toEqual({ ticketId: ticket.id, number: ticket.number, why: 'removed', agent: 'Mia' });
+    expect((await asStaff(olive)).queue.helping).toBeNull();
+    await until(async () => (await eventRows(ticket.id)).length === 4);
+    expect(await eventRows(ticket.id)).toEqual([
+      { kind: 'joined', actor_user_id: uid(olive), other_user_id: uid(mia) },
+      { kind: 'left', actor_user_id: uid(olive), other_user_id: null },
+      { kind: 'joined', actor_user_id: uid(olive), other_user_id: uid(mia) },
+      { kind: 'left', actor_user_id: uid(olive), other_user_id: uid(mia) },
+    ]);
+    ok(await mia.socket.emitWithAck('support:resolve'));
+  });
+
+  it('ends with the ticket, survives a helper’s reload but not a long absence, and shows in the history', { timeout: 30_000 }, async () => {
+    const quick = await start({ helperAwayMs: 300 });
+    try {
+      const office = await supportOffice(quick);
+      const linked = linkedIn(quick, office.id);
+      const olive = await join(quick.base, office.id, 'Olive', { jar: office.owner, guest: '' });
+      const mia = await staff(quick, office, 'Mia');
+      let nia = await staff(quick, office, 'Nia');
+      const tunde = await staff(quick, office, 'Tunde');
+      const a = await customer(quick, office);
+      const { ticket } = ok(await enter(a, { name: 'Ada Lovelace' }));
+      ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+      ok(await tunde.socket.emitWithAck('support:desk', office.desks[1]));
+      ok(await mia.socket.emitWithAck('support:next'));
+      ok(await reply(nia, ok(await offer(mia, 'invite', uid(nia))).offer, true));
+      await until(() => linked(nia, a));
+
+      // A reload: her part waits for her, and she's back in the call.
+      const queues = heard(mia.socket, 'support:queue');
+      nia.socket.disconnect();
+      await until(() => lastQueue(queues)?.mine?.helpers[0]?.playerId === null);
+      nia = { ...(await join(quick.base, office.id, 'Nia', { jar: nia.jar, guest: '' })), jar: nia.jar };
+      await until(() => linked(nia, a));
+      expect((await asStaff(nia)).queue.helping?.id).toBe(ticket.id);
+      await wait(400);
+      expect((await asStaff(mia)).queue.mine?.helpers).toEqual([{ userId: uid(nia), name: 'Nia', playerId: nia.socket.id }]);
+      // Gone longer: her part ends.
+      nia.socket.disconnect();
+      await until(() => lastQueue(queues)?.mine?.helpers.length === 0);
+
+      // Handed to Tunde with Olive helping, then resolved: Olive is told.
+      ok(await reply(olive, ok(await offer(mia, 'invite', uid(olive))).offer, true));
+      ok(await reply(tunde, ok(await offer(mia, 'transfer', uid(tunde))).offer, true));
+      const oliveEnded = heard(olive.socket, 'support:helping:ended');
+      ok(await tunde.socket.emitWithAck('support:resolve'));
+      await until(() => oliveEnded.length === 1);
+      expect(oliveEnded[0][0]).toEqual({ ticketId: ticket.id, number: ticket.number, why: 'resolved', agent: 'Tunde' });
+      expect((await asStaff(olive)).queue.helping).toBeNull();
+      await until(() => !linked(olive, a));
+
+      // Back in the queue (the agent's desk moved): the helpers are told, and it shows.
+      const b = await customer(quick, office);
+      const second = ok(await enter(b)).ticket;
+      ok(await mia.socket.emitWithAck('support:next'));
+      ok(await reply(olive, ok(await offer(mia, 'invite', uid(olive))).offer, true));
+      const desk = itemOf(quick, office.id, office.desks[0]);
+      olive.socket.emit('office:op', { t: 'update', item: { ...desk, x: desk.x + 0.5 } });
+      await until(() => oliveEnded.length === 2);
+      expect(oliveEnded[1][0]).toEqual({ ticketId: second.id, number: second.number, why: 'ended', agent: 'Mia' });
+      await until(async () => (await eventRows(second.id, quick)).length === 2);
+      expect((await eventRows(second.id, quick)).map((e) => [e.kind, e.other_user_id])).toEqual([
+        ['joined', uid(mia)],
+        ['left', null],
+      ]);
+
+      // The history: what happened, in order, with names.
+      const page = ok(await olive.socket.emitWithAck('support:history', { query: 'Ada' }));
+      expect(page.tickets.map((t) => t.id)).toEqual([ticket.id]);
+      expect(page.tickets[0].events).toEqual([
+        { kind: 'joined', at: expect.any(Number), helper: 'Nia', by: 'Mia' },
+        { kind: 'left', at: expect.any(Number), helper: 'Nia', by: null },
+        { kind: 'joined', at: expect.any(Number), helper: 'Olive', by: 'Mia' },
+        { kind: 'transferred', at: expect.any(Number), from: 'Mia', to: 'Tunde' },
+      ]);
+      const at = page.tickets[0].events!.map((e) => e.at);
+      expect([...at].sort((x, y) => x - y)).toEqual(at);
+      expect(page.tickets[0].helpers).toEqual([]);
+    } finally {
+      await stop(quick);
+    }
+  });
+
+  it('keeps its history in a table of its own, which goes with the ticket', async () => {
+    const office = await supportOffice(run);
+    const mia = await staff(run, office, 'Mia');
+    const tunde = await staff(run, office, 'Tunde');
+    const { ticket } = ok(await enter(await customer(run, office)));
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    ok(await reply(tunde, ok(await offer(mia, 'invite', uid(tunde))).offer, true));
+    ok(await tunde.socket.emitWithAck('support:helper:leave'));
+    await until(async () => (await eventRows(ticket.id)).length === 2);
+    const { db } = run.server;
+    expect((await db.query<{ id: number }>('SELECT id FROM schema_migrations WHERE id = 701')).rows).toHaveLength(1);
+    ok(await mia.socket.emitWithAck('support:resolve'));
+    // Retention deletes tickets: their history goes too.
+    await db.query('DELETE FROM support_tickets WHERE id = $1', [ticket.id]);
+    expect(await eventRows(ticket.id)).toEqual([]);
   });
 });

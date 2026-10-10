@@ -113,8 +113,63 @@ export async function loadAccount(): Promise<void> {
   if (user !== undefined) {
     applyAccount(user);
     adoptTheme(user);
+    // Back from signing in with Google, Apple or GitHub: the other tabs follow.
+    announce(user?.id ?? null);
   }
   setState({ accountReady: true });
+}
+
+// ---------- Other tabs ----------
+
+/** Tells this browser's other tabs who is signed in now (an account id, or null); each asks the server itself. */
+const tabs = typeof BroadcastChannel === 'function' ? new BroadcastChannel('workchop:account') : null;
+
+function announce(account: string | null): void {
+  try {
+    tabs?.postMessage({ account });
+  } catch {
+    // Closed; the other tabs check when they're shown again.
+  }
+}
+
+tabs?.addEventListener('message', (e: MessageEvent<unknown>) => {
+  const account = (e.data as { account?: unknown } | null)?.account;
+  if (account !== null && typeof account !== 'string') return;
+  const st = getState();
+  if (st.accountReady && account !== (st.account?.id ?? null)) void followAccount();
+});
+
+/**
+ * Who is signed in may have changed in another tab (or the server ended this browser's session):
+ * asks the server, and this tab follows. In an office you come in again as the account (without
+ * taking over: if you're there in another tab, this one steps aside), or go back to the lobby when
+ * signed out, so staff never stay in as a customer. Answers whether anything changed (whichever of
+ * two checks of one change comes second finds nothing).
+ */
+export async function followAccount(): Promise<boolean> {
+  let user: AccountUser | null;
+  try {
+    user = await fetchMe();
+  } catch {
+    return false;
+  }
+  if ((user?.id ?? null) === (getState().account?.id ?? null)) return false;
+  const session = getState().phase === 'office' ? getSession() : null;
+  if (!user) {
+    // Back to this browser's own character, in the lobby. Not "in another tab": the server may have
+    // ended the session (another device, expiry), and its word usually comes before the tab's.
+    if (session) backToLobby();
+    applyAccount(null);
+    if (session) toast('You were signed out.');
+    return true;
+  }
+  applyAccount(user);
+  adoptTheme(user);
+  if (session && !session.isParked()) {
+    session.reconnect();
+    toast(`Signed in as ${user.name}.`);
+  }
+  return true;
 }
 
 /** Checks again who is signed in (coming back to the page, or after being signed out elsewhere). */
@@ -159,8 +214,9 @@ export function connectUrl(provider: Exclude<AuthProvider, 'dev'>): string {
 function signedIn(user: AccountUser): void {
   applyAccount(user);
   adoptTheme(user);
-  // Signed in inside an office (say, from the GitHub panel): come back in as the account.
-  if (getState().phase === 'office') getSession()?.reconnect();
+  announce(user.id);
+  // Signed in inside an office (say, from the GitHub panel): come back in as the account, here.
+  if (getState().phase === 'office') getSession()?.reconnect(true);
 }
 
 export async function signInWithDev(name: string, email: string): Promise<void> {
@@ -235,6 +291,7 @@ export async function signOut(): Promise<void> {
   try {
     await signOutRequest();
     applyAccount(null);
+    announce(null);
   } catch (err) {
     toast(`Couldn’t sign out: ${(err as Error).message}`, 'error');
     // Still signed in, then.

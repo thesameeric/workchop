@@ -21,7 +21,7 @@ only (no mini-games).
   listen-along, `world:light`, `desk:note`; they can't build (guests build only in `open` offices;
   `kinds` keeps support items out of team offices), edit info boards (`world:board`: owner and
   admins), use chat outside their ticket, send or get coins, show their current app, or tap anyone
-  but the agent serving them.
+  but the agent serving them and the colleagues helping.
 - A customer made a member while inside (`onRoleChange`) is staff from then on: their ticket ends
   (waiting: abandoned, active: resolved), the others get `{customer: false, userId, name}`.
 
@@ -41,8 +41,15 @@ then north to south), `ticketConv(id)` = `t:<id>`, and the socket events:
 | `support:resolve` | the agent serving | closes the ticket as resolved |
 | `support:history` | staff | resolved and abandoned tickets, newest first, by name/email/number, 30 a page |
 | `support:remove` | staff | takes a customer out (`office:removed` 'removed'): their open ticket is abandoned, their key can't open tickets for 4 h, their address can't come in for 1 h (in memory) |
-| `support:queue` → staff | | waiting tickets (in queue order, with `present`, and `playerId`: the customer's newest connection), desks in use, your ticket |
-| `support:ticket` → customers | | your ticket (place in the queue, agent and desk, status, rating); only to connections that sent `support:enter` |
+| `support:offer` | the agent serving a ticket | `{kind: 'transfer' \| 'invite', to: userId}`: offers it to a colleague at a free desk (transfer), or invites a colleague serving nobody into its conversation (at most `MAX_HELPERS`, 2); answers `{offer}` or why not (the reasons follow `canTransferTo` / `canInvite`). One open offer per sender and per recipient; it lapses after `OFFER_MS` (60 s) |
+| `support:offer:answer` | the colleague it's for | `(offerId, accept)`: declines, or accepts: a transfer moves the ticket's assignee and desk at once (under the office's lock) and summons the customer to the new desk; an invite makes them a helper. Refused (and the offer ends 'gone') when it no longer works |
+| `support:offer:cancel` | the sender | takes it back |
+| `support:helper:leave` | a colleague helping | leaves the conversation |
+| `support:helper:remove` | the agent serving the ticket | ends a colleague's part (`userId`) |
+| `support:queue` → staff | | waiting tickets (in queue order, with `present`, and `playerId`: the customer's newest connection, and `helpers`), desks in use, your ticket, the ticket you're helping with, your colleagues (here or at a desk, with their state: free, serving, helping, away, no desk) and your open offers (sent and got) |
+| `support:offer:ended` → staff | | an offer ended (`accepted`, `declined`, `expired`, `cancelled`, or `gone` with a `note` for the sender): to the side that didn't end it, to both when it lapsed or stopped working |
+| `support:helping:ended` → staff | | your part in a ticket's conversation ended, not by your Leave (`removed`, `resolved`, or `ended`: closed or back in the queue) |
+| `support:ticket` → customers | | your ticket (place in the queue, agent and desk, status, rating, the colleagues helping by name); only to connections that sent `support:enter` |
 | `support:summon` → customers | | the customer seat of the desk to walk to |
 | `support:board` → everyone | | Now serving (number and desk) and how many wait |
 
@@ -62,23 +69,39 @@ Events are sent only when they change; `support:state` gives the current picture
   After a restart, active tickets' desks wait for their agents (a ticket whose desk is gone goes back
   to the queue). Closed tickets are re-checked against the database before each update, and the
   ticket chat checks the ticket row itself, so nothing is written into a closed ticket.
-- Desks: one per agent; asking from a second tab moves it there. An agent who leaves while not
-  serving keeps it 30 s; while serving, `AWAY_GRACE_MS`, then the ticket goes back to the front of
-  the queue. Moving or removing a desk in build mode (`onOfficeChange`) frees it the same way.
+- Desks: one per agent; it follows them to their newest tab (one presence per person: the older
+  tab's leave, then the newer one's join). An agent who leaves while not serving keeps it 30 s;
+  while serving, `AWAY_GRACE_MS`, then the ticket goes back to the front of the queue. Moving or removing a desk in build mode (`onOfficeChange`) frees it the same way.
 - A sweep every minute: present customers' `last_seen_at` is refreshed; waiting tickets of customers
   away longer than `AWAY_GRACE_MS` are abandoned, and so are active tickets nobody is serving (after
   a restart, in a workspace nobody came back to); customers here `CUSTOMER_IDLE_MS` (15 min) without
   an open ticket get `office:removed` 'idle'; tickets closed longer than `CHAT_RETENTION_DAYS` ago
   are deleted with their chat (`deleteConversations`). It stops with the server (`onClose`).
 - Calls (link.ts, `supportLink` as a link rule set up once per check): customers never with
-  customers; a customer always with the agent serving them, wherever they are, and with nobody else;
-  a serving agent not with other staff; otherwise the usual rules. Next, resolve, desks and people
-  coming and going call `realtime.relink` for the people concerned; resuming the ticket a connection
+  customers; a customer always with the agent serving them and the colleagues helping, wherever
+  they are, and with nobody else; staff on a ticket (serving or helping) with the others on it and
+  with no other staff; otherwise the usual rules. Next, resolve, handovers, helpers, desks and
+  people coming and going call `realtime.relink` for the people concerned; resuming the ticket a connection
   already has answers from memory (no lock, update, summon or relink).
 - Ticket chat (`registerConversation(ctx, 't', …)`): staff read every ticket; only the agent serving
-  it writes; the customer reads and writes while it's open, under the name on the ticket (matched by
-  their ticket, so after a reload they still own what they wrote). Customers get no channels, people,
+  it and the colleagues helping write (after a handover, the new agent); the customer reads and
+  writes while it's open, under the name on the ticket (matched by their ticket, so after a reload
+  they still own what they wrote). Customers get no channels, people,
   direct, live or nearby messages, and never get channel messages or mentions.
+- Handing over and inviting: colleagues helping (by ticket) and open offers are kept in memory,
+  like desks (a restart ends them). An offer's timer ends it after `OFFER_MS`; every update first
+  ends the open offers that stopped working (the sender no longer serving the ticket, the colleague
+  serving someone or helping elsewhere, no room left), so offers outlast a reload of either side.
+  Accepting takes the offer out at once (a second Accept finds nothing). A transfer is one `UPDATE`
+  of the ticket's assignee and desk under the office's advisory lock, with a history line; the
+  unique indexes refuse a colleague who got a ticket meanwhile, and `resolve` and `requeue` need the
+  assignee they expect, so exactly one of a handover and a Resolve (or a desk freed meanwhile)
+  wins. A colleague helping can't call Next or be offered another ticket; away (a reload) they
+  keep their part `HELPER_AWAY_MS` (30 s). Their part ends when the ticket closes or goes back to
+  the queue (`support:helping:ended`), and so do its offers.
+- History (`support_ticket_events`, migration 701): `transferred` (from, to), `joined` (who invited
+  them) and `left` (who ended their part, or nobody), with the accounts' names now; they go with
+  their ticket. `support:history` answers each ticket with its `events`.
 - Limits (per workspace and address, `addressKey`): `MAX_CUSTOMERS_PER_ADDRESS` (3) customers at once
   (`addJoinCheck`), 30 new tickets an hour (counted before anything waits), 10 open tickets; one open
   ticket per connection; files only in an open ticket, 20 MB per ticket (`uploads.addCheck`); email
@@ -86,8 +109,12 @@ Events are sent only when they change; `support:state` gives the current picture
   100 places).
 
 ## Client (client/src/features/support/)
-Plug-ins it uses: `registerLobby`, `registerConvView('t:', …)`, `session.setFullVolume`, a panel
+Plug-ins it uses: `registerLobby`, `registerConvView('t:', …)`, `session.setFullVolume` (a list:
+the agent, the customer and the colleagues helping), `registerOverlay` (the offer card), a panel
 (order 5) for staff and the `chat` panel for customers. Customer lobby (name, email, "How can we help?", device check), the queue overlay with "While you
 wait" sights, the summon walk (teleport and sit after `SUMMON_TIMEOUT_MS`, or at once in a background tab; nothing when already seated there, as after a reconnect), the ticket chat, rating;
-the staff panel (desks, Next, the active ticket, the queue, history); the queue screen's picture and
-desk interactions. Catalog: `support-desk`, `queue-board`, `aquarium`, `info-board`.
+the staff panel (desks, Next, the active ticket with Hand over, Invite, the colleagues helping and the
+pending offer, the colleague picker, a Helping card for colleagues, the queue, history with its
+events); the offer card (Accept, Decline, a countdown) over any panel; the customer's "Tunde at
+Desk 3 will help you now" and "{name} joined" / "{name} left"; the queue screen's picture and desk
+interactions. Catalog: `support-desk`, `queue-board`, `aquarium`, `info-board`.

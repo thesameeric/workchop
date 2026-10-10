@@ -38,10 +38,11 @@ export type AccessDenied = 'sign-in' | 'members-only' | 'link' | 'locked';
 
 /**
  * Why you were taken out of an office ('office:removed'): removed from its members (or, as a
- * customer, by staff), guests turned off, (customers) there a long while without an open ticket, or
- * the workspace was locked because it isn't paid for.
+ * customer, by staff), guests turned off, (customers) there a long while without an open ticket,
+ * the workspace was locked because it isn't paid for, or you came into it in another tab or on
+ * another device ('elsewhere': the newest one stays).
  */
-export type RemovedReason = 'removed' | 'guests-off' | 'idle' | 'locked';
+export type RemovedReason = 'removed' | 'guests-off' | 'idle' | 'locked' | 'elsewhere';
 
 export interface Member {
   userId: string;

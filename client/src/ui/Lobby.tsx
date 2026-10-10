@@ -101,18 +101,26 @@ export function Lobby() {
   // The first time in each workspace (per account, on this browser) is through the lobby: camera and mic first.
   const goStraight = !!info && !!account?.profile.avatar && isMember(info.role) && enteredBefore(account.id, officeId);
 
+  // Only while this tab is shown: a tab opened in the background (or restored with the browser)
+  // doesn't take you out of the office in the one you're using; it goes in when you look at it.
   useEffect(() => {
     if (!goStraight || tried.current) return;
-    tried.current = true;
-    setStraight('joining');
-    joinStraightIn(officeId).then(
-      () => rememberOffice(officeId, info!.name),
-      (err: unknown) => {
-        setStraight('failed');
-        if (err instanceof JoinRefused && err.reason) setLookup({ denied: err.reason });
-        else toast((err as Error).message, 'error');
-      },
-    );
+    const go = () => {
+      if (tried.current || document.visibilityState !== 'visible') return;
+      tried.current = true;
+      setStraight('joining');
+      joinStraightIn(officeId).then(
+        () => rememberOffice(officeId, info!.name),
+        (err: unknown) => {
+          setStraight('failed');
+          if (err instanceof JoinRefused && err.reason) setLookup({ denied: err.reason });
+          else toast((err as Error).message, 'error');
+        },
+      );
+    };
+    go();
+    document.addEventListener('visibilitychange', go);
+    return () => document.removeEventListener('visibilitychange', go);
   }, [goStraight, officeId, info]);
 
   // Ask for camera/mic once we know you'll stay here, so people can check how they look before going

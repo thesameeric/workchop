@@ -3,7 +3,8 @@ import type { JoinRequest, JoinResponse, Office, PlayerState } from '../shared/t
 
 // Coming back after a dropped connection, without a reload: the page joins again by itself (the
 // server replaces its old connection, see JoinRequest.resume), keeps trying while it isn't let back
-// in for a passing reason, and the calls come back with the new links.
+// in for a passing reason, and the calls come back with the new links. And one of you per office:
+// a tab steps aside when you come in in another, and comes back only with Use here.
 
 type Listener = (...args: unknown[]) => void;
 interface Join {
@@ -21,6 +22,8 @@ const fake = vi.hoisted(() => {
     joins: Join[] = [];
     connects = 0;
     disconnects = 0;
+    /** Whether it's connected or trying to (Socket.IO's `active`). */
+    active = false;
     io = { engine: { close() {} } };
     on(event: string, fn: Listener) {
       this.handlers.set(event, [...(this.handlers.get(event) ?? []), fn]);
@@ -52,10 +55,12 @@ const fake = vi.hoisted(() => {
     }
     connect() {
       this.connects++;
+      this.active = true;
       return this;
     }
     disconnect() {
       this.disconnects++;
+      this.active = false;
       if (this.connected) this.down('io client disconnect');
       return this;
     }
@@ -68,6 +73,8 @@ const fake = vi.hoisted(() => {
     down(reason = 'transport close') {
       this.connected = false;
       this.id = undefined;
+      // Socket.IO tries again by itself only after a dropped connection.
+      if (reason !== 'transport close') this.active = false;
       this.fire('disconnect', reason);
     }
   }
@@ -77,6 +84,9 @@ const fake = vi.hoisted(() => {
     connectPeer: vi.fn(),
     dropAll: vi.fn(),
     restartAll: vi.fn(),
+    media: { micOn: false, camOn: false, start: vi.fn(async () => {}), stopAll: vi.fn() },
+    /** What the account check does after the server ended this connection (see followAccount). */
+    followAccount: vi.fn(async () => false),
   };
 });
 
@@ -96,7 +106,7 @@ vi.mock('../client/src/lib/spotify', () => ({
 }));
 vi.mock('../client/src/lib/levels', () => ({ SpeakingDetector: class { watch() {} unwatch() {} close() {} } }));
 vi.mock('../client/src/lib/media', () => ({
-  media: { micOn: false, camOn: false, screenOn: false, version: 0, error: null, audioTrack: null, videoTrack: null, subscribe: () => () => {}, stopAll: () => {} },
+  media: Object.assign(fake.media, { screenOn: false, version: 0, error: null, audioTrack: null, videoTrack: null, subscribe: () => () => {} }),
 }));
 vi.mock('../client/src/lib/peers', () => ({
   PeerManager: class {
@@ -111,7 +121,7 @@ vi.mock('../client/src/lib/peers', () => ({
     }
   },
 }));
-vi.mock('../client/src/lib/account', () => ({ accountUpdated: () => {}, refreshAccount: async () => {}, saveCharacter: async () => {} }));
+vi.mock('../client/src/lib/account', () => ({ accountUpdated: () => {}, followAccount: () => fake.followAccount(), saveCharacter: async () => {} }));
 vi.mock('../client/src/lib/clock', () => ({ serverNow: () => 0, syncClock: async () => {} }));
 vi.mock('../client/src/lib/router', () => ({ goHome: () => {} }));
 vi.mock('../client/src/lib/upload', () => ({ postFile: async () => ({}) }));
@@ -121,7 +131,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), { matchMedia: () => ({ 
 vi.stubGlobal('document', { createElement: element, body: { appendChild() {} } });
 vi.stubGlobal('fetch', async () => ({}));
 
-const { enterOffice, getSession, KEYFRAME_MS } = await import('../client/src/lib/session');
+const { backToLobby, enterOffice, getSession, KEYFRAME_MS } = await import('../client/src/lib/session');
 const { getState, setState } = await import('../client/src/state/store');
 const { local } = await import('../client/src/lib/positions');
 
@@ -172,7 +182,11 @@ beforeEach(() => {
   fake.connectPeer.mockClear();
   fake.dropAll.mockClear();
   fake.restartAll.mockClear();
-  setState({ toasts: [], officeId: 'o1', phase: 'lobby', connection: 'online', connectionNote: null });
+  fake.media.start.mockClear();
+  fake.media.stopAll.mockClear();
+  Object.assign(fake.media, { micOn: false, camOn: false });
+  fake.followAccount.mockImplementation(async () => false);
+  setState({ toasts: [], officeId: 'o1', phase: 'lobby', connection: 'online', connectionNote: null, elsewhere: false });
 });
 
 afterEach(() => {
@@ -300,5 +314,106 @@ describe('where you are', () => {
     socket().down();
     await vi.advanceTimersByTimeAsync(2 * KEYFRAME_MS);
     expect(moves()).toHaveLength(2);
+  });
+});
+
+describe('in another tab', () => {
+  const BROWSER = /^[A-Za-z0-9_-]{32}$/;
+
+  it('joins first as the newest tab, then comes back by itself without taking over', async () => {
+    await enter();
+    expect(socket().joins[0].req).toMatchObject({ browser: expect.stringMatching(BROWSER) });
+    expect(socket().joins[0].req.rejoin).toBeUndefined();
+    socket().down();
+    socket().up('s2');
+    expect(lastJoin().req).toMatchObject({ browser: socket().joins[0].req.browser, rejoin: true });
+  });
+
+  it('steps aside when you come in elsewhere: out of the office, and nothing joins by itself', async () => {
+    await enter();
+    fake.media.micOn = true;
+    const s = socket();
+    s.fire('office:removed', 'elsewhere');
+    expect(getState()).toMatchObject({ elsewhere: true, phase: 'office', connection: 'online', selfId: null, players: {}, toasts: [] });
+    expect(s).toMatchObject({ connected: false, active: false, disconnects: 1 });
+    expect(fake.media.stopAll).toHaveBeenCalledOnce();
+    expect(getSession()!.isParked()).toBe(true);
+    // Not on a new connection, the network coming back, or a sign-in elsewhere.
+    s.up('s2');
+    window.dispatchEvent(new Event('online'));
+    getSession()!.reconnect();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(s.joins).toHaveLength(1);
+    expect(s.connects).toBe(1);
+  });
+
+  it('comes back with Use here: where you were, mic as it was, and your other tab steps aside', async () => {
+    const rejoins = await enter();
+    Object.assign(local, { x: 12, z: 9, ry: 1, anim: 'sit' });
+    fake.media.micOn = true;
+    socket().fire('office:removed', 'elsewhere');
+
+    await getSession()!.useHere();
+    expect(fake.media.start).toHaveBeenCalledWith(true, false);
+    socket().up('s2');
+    expect(lastJoin().req).toMatchObject({ at: { x: 12, z: 9, ry: 1, anim: 'sit' }, browser: expect.stringMatching(BROWSER) });
+    expect(lastJoin().req.rejoin).toBeUndefined();
+    // Not let in for now: Use here keeps trying, still taking over.
+    lastJoin().ack(null, { ok: false, error: 'This office is full.' });
+    expect(getState()).toMatchObject({ elsewhere: true, connectionNote: 'This office is full.' });
+    await vi.advanceTimersByTimeAsync(1300);
+    expect(lastJoin().req.rejoin).toBeUndefined();
+    lastJoin().ack(null, welcome('s2'));
+    expect(getState()).toMatchObject({ elsewhere: false, phase: 'office', selfId: 's2', connection: 'online' });
+    expect(rejoins).toEqual([true]);
+
+    // Later, back by itself again.
+    socket().down();
+    socket().up('s3');
+    expect(lastJoin().req.rejoin).toBe(true);
+  });
+
+  it('steps aside when coming back by itself finds you in another tab, and doesn’t try again', async () => {
+    await enter();
+    socket().down();
+    socket().up('s2');
+    lastJoin().ack(null, { ok: false, error: 'Homeoffice is open in another tab.', reason: 'elsewhere' });
+    expect(getState()).toMatchObject({ elsewhere: true, phase: 'office', toasts: [] });
+    expect(getSession()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(socket().joins).toHaveLength(2);
+  });
+
+  it('takes over after signing in in this tab, not after signing in or out in another', async () => {
+    await enter();
+    getSession()!.reconnect(true);
+    socket().up('s2');
+    expect(lastJoin().req.rejoin).toBeUndefined();
+    lastJoin().ack(null, welcome('s2'));
+    getSession()!.reconnect();
+    socket().up('s3');
+    expect(lastJoin().req.rejoin).toBe(true);
+  });
+
+  it('when the server ends the connection: in again while signed in, the lobby once signed out', async () => {
+    await enter();
+    let s = socket();
+    s.down('io server disconnect');
+    await flush();
+    expect(fake.followAccount).toHaveBeenCalledOnce();
+    expect(s.connects).toBe(2);
+
+    s.up('s2');
+    lastJoin().ack(null, welcome('s2'));
+    fake.followAccount.mockImplementation(async () => {
+      backToLobby();
+      return true;
+    });
+    s = socket();
+    s.down('io server disconnect');
+    await flush();
+    expect(getState().phase).toBe('lobby');
+    expect(getSession()).toBeNull();
+    expect(s.connects).toBe(2);
   });
 });

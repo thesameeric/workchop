@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Ticket, TakenDesk } from '../../../../shared/support';
+import {
+  canInvite,
+  canTransferTo,
+  MAX_HELPERS,
+  type Colleague,
+  type OfferKind,
+  type Ticket,
+  type TicketEvent,
+  type TicketOffer,
+  type TakenDesk,
+} from '../../../../shared/support';
 import { serverNow } from '../../lib/clock';
 import { local, remoteTargets } from '../../lib/positions';
 import { ago } from '../../lib/time';
@@ -7,7 +17,11 @@ import { useStore } from '../../state/store';
 import {
   BackIcon,
   CheckIcon,
+  CloseIcon,
+  HandOverIcon,
   HistoryIcon,
+  InviteIcon,
+  LeaveIcon,
   MailIcon,
   NextIcon,
   RemoveUserIcon,
@@ -19,7 +33,23 @@ import {
 } from '../../ui/icons';
 import { Avatar } from '../chat/parts';
 import { supportDesks } from './places';
-import { callNext, fetchHistory, leaveDesk, nextUp, removeVisitor, resolve, takeDesk, useMyDesk, useSupport, type StaffTab } from './state';
+import {
+  callNext,
+  cancelOffer,
+  fetchHistory,
+  leaveDesk,
+  leaveHelping,
+  nextUp,
+  offerTicket,
+  openPicker,
+  removeHelper,
+  removeVisitor,
+  resolve,
+  takeDesk,
+  useMyDesk,
+  useSupport,
+  type StaffTab,
+} from './state';
 import { TicketChat } from './TicketChat';
 
 // The staff's Support panel: your desk and the customer you're serving, the queue, and past tickets.
@@ -89,14 +119,18 @@ function DeskList({ mine }: { mine: TakenDesk | undefined }) {
   );
 }
 
-/** Where the customer you're serving is: on their way, at your desk, or gone for now. */
-function Whereabouts({ ticket }: { ticket: Ticket }) {
+/**
+ * Where the customer is: on their way, at the desk, or gone for now. The desk is yours, or (helping)
+ * `desk`, the one where they're served.
+ */
+function Whereabouts({ ticket, desk }: { ticket: Ticket; desk?: { x: number; z: number; label: string } }) {
   useTick(500);
   if (!ticket.present || !ticket.playerId) return <span className="sp-where away">Stepped away</span>;
   const t = remoteTargets.get(ticket.playerId);
   if (!t) return null;
-  const d = Math.hypot(t.x - local.x, t.z - local.z);
-  if (d < 3 && t.anim === 'sit') return <span className="sp-where here">At your desk</span>;
+  const at = desk ?? local;
+  const d = Math.hypot(t.x - at.x, t.z - at.z);
+  if (d < 3 && t.anim === 'sit') return <span className="sp-where here">{desk ? `At ${desk.label}` : 'At your desk'}</span>;
   return <span className="sp-where">Walking over · {Math.round(d)} m</span>;
 }
 
@@ -134,8 +168,148 @@ function RemoveVisitor({ playerId }: { playerId: string }) {
   );
 }
 
+/** Seconds left until `at` (server time). */
+const secondsTo = (at: number) => Math.max(0, Math.ceil((at - serverNow()) / 1000));
+
+/** Your offer waiting for an answer, with a countdown and Cancel. */
+function PendingOffer({ offer }: { offer: TicketOffer }) {
+  const [busy, setBusy] = useState(false);
+  useTick(1000);
+  return (
+    <div className="sp-pending" role="status">
+      <WaitIcon size={16} />
+      <span className="sp-pending-text">
+        {offer.kind === 'transfer' ? `Waiting for ${offer.to.name} to take #${offer.number}…` : `Waiting for ${offer.to.name} to join…`}
+      </span>
+      <span className="sp-countdown" aria-hidden="true">
+        {secondsTo(offer.expiresAt)} s
+      </span>
+      <button
+        type="button"
+        className="btn small"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          if (!(await cancelOffer(offer.id))) setBusy(false);
+        }}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+/** The colleagues helping with your ticket, each with a button to end their part. */
+function Helpers({ ticket }: { ticket: Ticket }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  return (
+    <div className="sp-helpers">
+      <span className="sp-helpers-label">Helping</span>
+      {ticket.helpers.map((h) => (
+        <span key={h.userId} className="sp-helper">
+          <span className="sp-helper-name">
+            {h.name}
+            {h.playerId ? '' : ' · away'}
+          </span>
+          <button
+            type="button"
+            className="sp-helper-end"
+            disabled={busy === h.userId}
+            aria-label={`End ${h.name}’s part`}
+            title={`End ${h.name}’s part`}
+            onClick={async () => {
+              setBusy(h.userId);
+              await removeHelper(h.userId);
+              setBusy(null);
+            }}
+          >
+            <CloseIcon size={14} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const PICKER_TITLE: Record<OfferKind, string> = { transfer: 'Hand over to', invite: 'Invite a colleague' };
+const NOBODY: Record<OfferKind, string> = { transfer: 'Nobody is free at a desk right now.', invite: 'Everyone is busy right now.' };
+
+/** What a colleague is doing, as the picker says it. */
+function colleagueLine(c: Colleague, ticketId: string, agentOf: (ticketId: string) => string | undefined): string {
+  switch (c.state) {
+    case 'free':
+      return `${c.desk} · free`;
+    case 'serving':
+      return `${c.desk} · serving`;
+    case 'away':
+      return `${c.desk} · away`;
+    case 'no-desk':
+      return 'No desk';
+    case 'helping':
+      return c.helping === ticketId ? 'Helping you' : `Helping ${(c.helping && agentOf(c.helping)) || 'someone'}`;
+  }
+}
+
+/** Choosing the colleague to hand your customer to, or to invite into the conversation. */
+function Picker({ kind, ticket }: { kind: OfferKind; ticket: Ticket }) {
+  const colleagues = useSupport((s) => s.queue.colleagues);
+  const desks = useSupport((s) => s.queue.desks);
+  const [busy, setBusy] = useState(false);
+  const can = (c: Colleague) => (kind === 'transfer' ? canTransferTo(c, ticket.id) : canInvite(c, ticket));
+  // Who you can ask first; otherwise as the server sorts them (by desk, then name).
+  const list = [...colleagues.filter(can), ...colleagues.filter((c) => !can(c))];
+  const agentOf = (id: string) => desks.find((d) => d.ticketId === id)?.name;
+  const label = kind === 'transfer' ? 'Hand over' : 'Invite';
+  return (
+    <section className="sp-picker" aria-label={PICKER_TITLE[kind]}>
+      <header className="sp-picker-head">
+        <h3>{PICKER_TITLE[kind]}</h3>
+        <button type="button" className="icon-btn" onClick={() => openPicker(null)} aria-label="Close" title="Close">
+          <CloseIcon size={16} />
+        </button>
+      </header>
+      <div className="sp-scroll">
+        {list.length === 0 ? (
+          <p className="muted small pad">Nobody else is here.</p>
+        ) : (
+          <>
+            {!list.some(can) && <p className="muted small sp-picker-note">{NOBODY[kind]}</p>}
+            <ul className="sp-colleagues">
+              {list.map((c) => (
+                <li key={c.userId}>
+                  <Avatar name={c.name} size={32} />
+                  <span className="sp-colleague-who">
+                    <strong title={c.name}>{c.name}</strong>
+                    <span className="muted small">{colleagueLine(c, ticket.id, agentOf)}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn small primary"
+                    disabled={busy || !can(c)}
+                    aria-label={kind === 'transfer' ? `Hand over to ${c.name}` : `Invite ${c.name}`}
+                    onClick={async () => {
+                      setBusy(true);
+                      await offerTicket(kind, c.userId);
+                      setBusy(false);
+                    }}
+                  >
+                    {label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Serving({ ticket }: { ticket: Ticket }) {
   const [busy, setBusy] = useState(false);
+  const picker = useSupport((s) => s.picker);
+  const outgoing = useSupport((s) => s.queue.offers.outgoing);
+  const full = ticket.helpers.length >= MAX_HELPERS;
   useTick(30_000);
   return (
     <div className="sp-serving">
@@ -170,6 +344,70 @@ function Serving({ ticket }: { ticket: Ticket }) {
             </a>
           )}
           {ticket.present && ticket.playerId && <RemoveVisitor playerId={ticket.playerId} />}
+        </div>
+        <div className="sp-ticket-actions">
+          <button
+            type="button"
+            className="btn small"
+            disabled={!!outgoing}
+            aria-expanded={picker === 'transfer'}
+            title="Hand this visitor to a colleague at a desk"
+            onClick={() => openPicker(picker === 'transfer' ? null : 'transfer')}
+          >
+            <HandOverIcon size={16} /> Hand over
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            disabled={!!outgoing || full}
+            aria-expanded={picker === 'invite'}
+            title={full ? 'Two colleagues are helping already.' : 'Invite a colleague into this conversation'}
+            onClick={() => openPicker(picker === 'invite' ? null : 'invite')}
+          >
+            <InviteIcon size={16} /> Invite
+          </button>
+        </div>
+        {ticket.helpers.length > 0 && <Helpers ticket={ticket} />}
+        {outgoing && <PendingOffer offer={outgoing} />}
+      </div>
+      {picker ? <Picker kind={picker} ticket={ticket} /> : <TicketChat ticketId={ticket.id} placeholder={`Message ${ticket.customerName}`} />}
+    </div>
+  );
+}
+
+/** Helping a colleague with their customer: the conversation, and Leave. */
+function Helping({ ticket }: { ticket: Ticket }) {
+  const [busy, setBusy] = useState(false);
+  const desk = useSupport((s) => s.queue.desks.find((d) => d.ticketId === ticket.id));
+  const item = useStore((s) => s.office?.items.find((i) => i.id === ticket.deskItemId));
+  const agent = desk?.name ?? ticket.assignee?.name ?? 'a colleague';
+  return (
+    <div className="sp-serving">
+      <div className="sp-ticket">
+        <div className="sp-ticket-top">
+          <Avatar name={ticket.customerName} size={40} />
+          <div className="sp-ticket-who">
+            <strong title={`Helping ${agent}`}>Helping {agent}</strong>
+            <span className="muted small">
+              {ticket.customerName} · #{ticket.number}
+              {desk ? ` · ${desk.label}` : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn small"
+            disabled={busy}
+            aria-label="Leave this conversation"
+            onClick={async () => {
+              setBusy(true);
+              if (!(await leaveHelping())) setBusy(false);
+            }}
+          >
+            <LeaveIcon size={16} /> Leave
+          </button>
+        </div>
+        <div className="sp-ticket-meta">
+          <Whereabouts ticket={ticket} desk={item && desk ? { x: item.x, z: item.z, label: desk.label } : undefined} />
         </div>
       </div>
       <TicketChat ticketId={ticket.id} placeholder={`Message ${ticket.customerName}`} />
@@ -229,8 +467,10 @@ function NextUp({ onQueue }: { onQueue: () => void }) {
 
 function DeskTab({ onQueue }: { onQueue: () => void }) {
   const mine = useSupport((s) => s.queue.mine);
+  const helping = useSupport((s) => s.queue.helping);
   const desk = useMyDesk();
   const [busy, setBusy] = useState(false);
+  if (!desk && helping && !mine) return <Helping ticket={helping} />;
   if (!desk) {
     return (
       <div className="sp-scroll">
@@ -248,9 +488,9 @@ function DeskTab({ onQueue }: { onQueue: () => void }) {
       <div className="sp-desk-bar">
         <span>
           <strong>{desk.label}</strong>
-          <span className="muted small">{mine ? ` · ticket #${mine.number}` : ' · ready'}</span>
+          <span className="muted small">{mine ? ` · ticket #${mine.number}` : helping ? ' · helping' : ' · ready'}</span>
         </span>
-        {!mine && (
+        {!mine && !helping && (
           <button
             type="button"
             className="btn small"
@@ -267,6 +507,8 @@ function DeskTab({ onQueue }: { onQueue: () => void }) {
       </div>
       {mine ? (
         <Serving ticket={mine} />
+      ) : helping ? (
+        <Helping ticket={helping} />
       ) : (
         <div className="sp-scroll">
           <NextUp onQueue={onQueue} />
@@ -326,6 +568,17 @@ function QueueTab() {
 
 const STATUS: Record<Ticket['status'], string> = { waiting: 'Waiting', active: 'Being served', resolved: 'Resolved', abandoned: 'Left' };
 
+function eventText(e: TicketEvent): string {
+  switch (e.kind) {
+    case 'transferred':
+      return `${e.from} handed this to ${e.to}`;
+    case 'joined':
+      return `${e.helper} joined`;
+    case 'left':
+      return e.by ? `${e.by} ended ${e.helper}’s part` : `${e.helper} left`;
+  }
+}
+
 function Transcript({ ticket, onBack }: { ticket: Ticket; onBack: () => void }) {
   return (
     <div className="sp-transcript">
@@ -348,6 +601,15 @@ function Transcript({ ticket, onBack }: { ticket: Ticket; onBack: () => void }) 
         </div>
         {ticket.rating ? <Stars rating={ticket.rating} /> : null}
       </header>
+      {!!ticket.events?.length && (
+        <ul className="sp-events" aria-label="What happened">
+          {ticket.events.map((e, i) => (
+            <li key={i}>
+              {eventText(e)} · {ago(e.at)}
+            </li>
+          ))}
+        </ul>
+      )}
       <TicketChat ticketId={ticket.id} placeholder="" closed={`Closed ${ticket.closedAt ? ago(ticket.closedAt) : ''}`} />
     </div>
   );

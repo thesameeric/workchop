@@ -164,6 +164,19 @@ export interface JoinRequest {
    * after a dropped connection the server may not have noticed yet, and they'd be left as ghosts.
    */
   resume?: string;
+  /**
+   * A secret this browser keeps (localStorage `workchop:browser`; 22 to 128 URL-safe characters).
+   * You're one person per browser and per account: joining an office takes your other connection
+   * there (another tab, or another device with the same account) out with office:removed
+   * 'elsewhere'. Without it, a guest is never matched with anyone.
+   */
+  browser?: string;
+  /**
+   * The page coming back by itself (after a dropped connection, or after signing in or out in
+   * another tab). While you're in this office on another connection (not this page's), it's refused
+   * with reason 'elsewhere' instead of taking over.
+   */
+  rejoin?: boolean;
   /** Coming back after a dropped connection: where you are (instead of the entrance). */
   at?: Spot;
 }
@@ -184,7 +197,7 @@ export type JoinResponse =
       /** Secret for uploading files while in this office (the X-Workchop-Upload-Key header); never shared. */
       uploadKey: string;
     }
-  | { ok: false; error: string; reason?: AccessDenied };
+  | { ok: false; error: string; reason?: AccessDenied | 'elsewhere' };
 
 /** Compact movement packet: [id, x, z, ry, anim]. */
 export type MovePacket = [string, number, number, number, AnimState];

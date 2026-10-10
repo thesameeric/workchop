@@ -14,7 +14,7 @@ import { walkTo } from '../../world/movement';
 import { registerConvView } from '../chat/state';
 import { CustomerCard, CustomerChat, useCustomerBadge } from './Customer';
 import { CustomerLobby } from './CustomerLobby';
-import { CustomerNames, DeskCard, toggleDeskCard } from './Overlays';
+import { CustomerNames, DeskCard, OfferCard, toggleDeskCard } from './Overlays';
 import { supportDesks } from './places';
 import { StaffPanel, useStaffBadge } from './Staff';
 import { attach, myDesk, sitAtDesk, takeDesk, useSupport } from './state';
@@ -30,6 +30,7 @@ registerLobby({ id: 'support-customer', match: (info) => isCustomer(info.role, i
 registerWorldModule(() => import('./scene'));
 registerTopBarItem({ id: 'support-customer', order: 1, Component: CustomerCard });
 registerOverlay({ id: 'support-desk', order: 12, Component: DeskCard });
+registerOverlay({ id: 'support-offer', order: 13, Component: OfferCard });
 registerOverlay({ id: 'support-names', order: 4, Component: CustomerNames });
 registerItemInteraction([SUPPORT_DESK], { onClick: toggleDeskCard });
 
@@ -63,11 +64,11 @@ useStore.subscribe(syncPanels);
 
 // ---------- Ticket chats (`t:<id>`), kept by the chat feature and shown here ----------
 
-/** Your ticket's chat: the customer's own, or the one staff are serving. */
-function myTicketConv(): string | null {
+/** Your tickets' chats: the customer's own, or the ones staff are serving or helping with. */
+function myTicketConvs(): string[] {
   const s = useSupport.getState();
-  const id = s.as === 'customer' ? s.ticket?.id : s.queue.mine?.id;
-  return id ? ticketConv(id) : null;
+  const ids = s.as === 'customer' ? [s.ticket?.id] : [s.queue.mine?.id, s.queue.helping?.id];
+  return ids.filter((id): id is string => !!id).map(ticketConv);
 }
 
 registerConvView('t:', {
@@ -78,8 +79,8 @@ registerConvView('t:', {
     if (getState().panel !== (staff ? 'support' : 'chat')) setPanel(staff ? 'support' : 'chat');
   },
   looking: (conv) => ticketsOnScreen.has(conv),
-  notify: (conv) => conv === myTicketConv(),
-  guestIsMe: (conv) => useSupport.getState().as === 'customer' && conv === myTicketConv(),
+  notify: (conv) => myTicketConvs().includes(conv),
+  guestIsMe: (conv) => useSupport.getState().as === 'customer' && myTicketConvs().includes(conv),
 });
 
 // ---------- E near a support desk ----------
@@ -126,12 +127,16 @@ registerNearbyAction('support-desk', (office, x, z) => {
 
 function PersonTicket({ player }: { player: RemotePlayer }) {
   const ticket = useSupport((s) =>
-    s.as !== 'staff' ? undefined : s.queue.mine?.playerId === player.id ? s.queue.mine : s.queue.waiting.find((t) => t.playerId === player.id),
+    s.as !== 'staff'
+      ? undefined
+      : [s.queue.mine, s.queue.helping].find((t) => t?.playerId === player.id) ?? s.queue.waiting.find((t) => t.playerId === player.id),
   );
+  const helping = useSupport((s) => !!ticket && ticket.id === s.queue.helping?.id);
   if (!ticket) return null;
+  const what = helping ? `helping ${ticket.assignee?.name ?? 'a colleague'}` : ticket.status === 'active' ? 'your customer' : `waiting, #${ticket.number}`;
   return (
     <span className="small person-ticket">
-      {ticket.customerName} · {ticket.status === 'active' ? 'your customer' : `waiting, #${ticket.number}`}
+      {ticket.customerName} · {what}
     </span>
   );
 }

@@ -418,16 +418,15 @@ describe('chat direct messages and read markers', () => {
     const mia = await signIn('Mia');
     await members(id, [ava, mia]);
     const a = await join(base, id, 'Ava', { jar: ava.jar });
-    const aOtherTab = await join(base, id, 'Ava', { jar: ava.jar });
     const m = await join(base, id, 'Mia', { jar: mia.jar });
     const g = await join(base, id, 'Gus');
 
     const toMia = collect(m.socket, 'chat:message');
-    const toOtherTab = collect(aOtherTab.socket, 'chat:message');
+    const toAva = collect(a.socket, 'chat:message');
     const toGus = collect(g.socket, 'chat:message');
     const dm = ok(await send(a.socket, { conv: `d:${mia.user.id}`, text: `just us <@u:${mia.user.id}> <!here>` })).message;
     expect(dm).toMatchObject({ channelId: null, dm: [ava.user.id, mia.user.id].sort().join(':'), text: `just us <@u:${mia.user.id}> @here` });
-    await until(() => toMia.length === 1 && toOtherTab.length === 1);
+    await until(() => toMia.length === 1 && toAva.length === 1);
     await wait(150);
     expect(toGus).toHaveLength(0);
 
@@ -440,21 +439,19 @@ describe('chat direct messages and read markers', () => {
     expect(failed(await g.socket.emitWithAck('chat:react', dm.id, '👍'))).toMatch(/no longer exists/);
     expect(failed(await send(g.socket, { conv: `d:${mia.user.id}`, text: 'hi' }))).toMatch(/Sign in/);
 
-    // Reading in one tab clears the other tab's badge too.
-    const seen = collect(aOtherTab.socket, 'chat:seen');
+    // Read markers.
     m.socket.emit('chat:read', `d:${ava.user.id}`);
     await until(async () => (await channels(m.socket)).counts[`d:${ava.user.id}`] === undefined);
     ok(await send(m.socket, { conv: `d:${ava.user.id}`, text: 'hello back' }));
     expect((await channels(a.socket)).counts[`d:${mia.user.id}`]).toEqual({ unread: 1, mentions: 0 });
     a.socket.emit('chat:read', `d:${mia.user.id}`);
-    await until(() => seen.length === 1);
-    expect(seen[0][0]).toBe(`d:${mia.user.id}`);
+    await until(async () => (await channels(a.socket)).counts[`d:${mia.user.id}`] === undefined);
 
     // With a guest it's live: delivered to the two of them only, and not stored.
     const live = ok(await send(g.socket, { conv: `p:${m.socket.id}`, text: 'psst' })).message;
     expect(live).toMatchObject({ live: 'dm', to: m.socket.id, playerId: g.socket.id });
     await until(() => toMia.some(([x]) => x.id === live.id));
-    expect(toOtherTab.some(([x]) => x.id === live.id)).toBe(false);
+    expect(toAva.some(([x]) => x.id === live.id)).toBe(false);
     expect(failed(await send(g.socket, { conv: `p:${g.socket.id}`, text: 'me' }))).toMatch(/left/);
     expect(failed(await send(g.socket, { conv: 'p:nobody', text: 'hi' }))).toMatch(/left/);
   });

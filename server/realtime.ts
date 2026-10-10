@@ -39,7 +39,7 @@ const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
  */
 export const PING_INTERVAL_MS = 10_000;
 export const PING_TIMEOUT_MS = 10_000;
-/** JoinRequest.resume: a page's secret for its visit. */
+/** JoinRequest.resume (a page's secret for its visit) and JoinRequest.browser (its browser's). */
 const RESUME = /^[A-Za-z0-9_-]{22,128}$/;
 /** What customers (guests of a support workspace) are called until they open a ticket. */
 export const CUSTOMER_NAME = 'Visitor';
@@ -63,6 +63,8 @@ export interface SocketData {
   uploadKey?: string;
   /** SHA-256 of the JoinRequest.resume this connection joined with: its page's other connections have the same. */
   resume?: string;
+  /** SHA-256 of the JoinRequest.browser this connection joined with: the same browser's other connections have the same. */
+  browser?: string;
 }
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
@@ -106,7 +108,7 @@ export interface RealtimeApi {
   onLeave(handler: (s: SocketContext, left: { officeId: string; player: PlayerState }) => void): void;
   emitToOffice<E extends ServerEvent>(officeId: string, event: E, ...args: Parameters<ServerToClientEvents[E]>): void;
   emitToUser<E extends ServerEvent>(userId: string, event: E, ...args: Parameters<ServerToClientEvents[E]>): void;
-  /** Where a signed-in person currently is (one entry per open tab that has joined an office). */
+  /** Where a signed-in person currently is (at most one per office: one presence per person). */
   playersOfUser(userId: string): { officeId: string; player: PlayerState }[];
   /** Changes a player and tells everyone in the office (player:updated). */
   updatePlayer(officeId: string, playerId: string, patch: PlayerPatch): void;
@@ -460,8 +462,20 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       // Back after a dropped connection: the old one goes first, so it isn't counted against the
       // limits below (nor in a call with this one).
       const resume = typeof req.resume === 'string' && RESUME.test(req.resume) ? sha256(req.resume) : null;
+      const browser = typeof req.browser === 'string' && RESUME.test(req.browser) ? sha256(req.browser) : null;
+      /**
+       * This person's other connections in an office: the same account, or the same browser. This
+       * page's own (the same resume) are the resume rule's alone.
+       */
+      const others = (officeId: string) =>
+        [...(rooms.get(officeId)?.players.keys() ?? [])].filter((id) => {
+          const other = contexts.get(id);
+          if (id === socket.id || !other || (!!resume && other.socket.data.resume === resume)) return false;
+          return (!!user && other.user?.id === user.id) || (!!browser && other.socket.data.browser === browser);
+        });
       if (resume) replaceEarlier(id, resume);
-      if (full(id)) return ack({ ok: false, error: 'This office is full.' });
+      // The person's newest tab gets in even when the office is full: their other one makes room.
+      if (full(id) && !others(id).length) return ack({ ok: false, error: 'This office is full.' });
       let admitted: Admission | null = null;
       let account: AccountUser | null = null;
       // Who may come in can change while this waits (a member removed, say): then it's checked again.
@@ -513,6 +527,14 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         const { denied } = refusal(req.guest, user?.id ?? null);
         return ack({ ok: false, error: deniedMessage(denied), reason: denied });
       }
+      // The page's own earlier connection goes as before; the person's others (another tab or device)
+      // step aside for this one, unless this page is coming back by itself: then it steps aside.
+      if (resume) replaceEarlier(id, resume);
+      const mine = others(id);
+      if (mine.length) {
+        if (req.rejoin === true) return ack({ ok: false, error: 'Homeoffice is open in another tab.', reason: 'elsewhere' });
+        for (const other of mine) controls.get(other)?.remove('elsewhere');
+      }
       // Checked before recording the visit too; this catches people who arrived in the meantime.
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let r = rooms.get(id);
@@ -538,6 +560,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       role = joinedAs;
       isOwner = admitted.isOwner;
       if (resume) socket.data.resume = resume;
+      if (browser) socket.data.browser = browser;
       // Coming back: where they were. Otherwise at the entrance.
       const back = req.at && typeof req.at === 'object' ? spotOn(stored.office, req.at.x, req.at.z, req.at.ry, req.at.anim) : null;
       const spot = back ?? spawnSpot(stored.office, r.players.values());

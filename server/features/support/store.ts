@@ -1,4 +1,4 @@
-import type { Ticket, TicketStatus } from '../../../shared/support';
+import type { Ticket, TicketEvent, TicketStatus } from '../../../shared/support';
 import { isUniqueViolation, type Db, type Tx } from '../../db';
 import { randomId } from '../../officeStore';
 import { nextUp } from './queue';
@@ -41,6 +41,7 @@ export function toTicket(r: TicketRow, playerId: string | null): Ticket {
     createdAt: ms(r.created_at)!,
     assignedAt: ms(r.assigned_at),
     closedAt: ms(r.closed_at),
+    helpers: [],
   };
 }
 
@@ -177,10 +178,74 @@ export class SupportStore {
     return res.rows[0] ?? null;
   }
 
-  /** An active ticket goes back to the queue (its agent left); it keeps assigned_at, which puts it first. */
-  async requeue(id: string): Promise<boolean> {
-    const res = await this.db.query("UPDATE support_tickets SET status = 'waiting', assignee_user_id = NULL, desk_item_id = NULL WHERE id = $1 AND status = 'active'", [id]);
+  /** An active ticket goes back to the queue while `userId` still has it (its agent left); it keeps assigned_at, which puts it first. */
+  async requeue(id: string, userId: string): Promise<boolean> {
+    const res = await this.db.query(
+      "UPDATE support_tickets SET status = 'waiting', assignee_user_id = NULL, desk_item_id = NULL WHERE id = $1 AND status = 'active' AND assignee_user_id = $2",
+      [id, userId],
+    );
     return res.rowCount > 0;
+  }
+
+  /**
+   * Hands an active ticket from one agent at their desk to another at theirs, with its history line,
+   * under the office's lock. Null when it isn't that agent's at that desk any more; 'busy' when the
+   * other agent or their desk has an active ticket already.
+   */
+  async transfer(
+    officeId: string,
+    id: string,
+    from: { userId: string; deskItemId: string },
+    to: { userId: string; deskItemId: string },
+  ): Promise<TicketRow | null | 'busy'> {
+    try {
+      return await this.db.transaction(async (tx) => {
+        await lock(tx, officeId);
+        // assigned_at stays: it's when the customer was called.
+        const res = await tx.query<TicketRow>(
+          `UPDATE support_tickets t SET assignee_user_id = $5, desk_item_id = $6
+           WHERE t.id = $1 AND t.office_id = $2 AND t.status = 'active' AND t.assignee_user_id = $3 AND t.desk_item_id = $4
+           RETURNING ${COLUMNS}`,
+          [id, officeId, from.userId, from.deskItemId, to.userId, to.deskItemId],
+        );
+        const row = res.rows[0];
+        if (!row) return null;
+        await tx.query("INSERT INTO support_ticket_events (ticket_id, kind, actor_user_id, other_user_id) VALUES ($1, 'transferred', $2, $3)", [id, from.userId, to.userId]);
+        return row;
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) return 'busy';
+      throw err;
+    }
+  }
+
+  /** A history line for a ticket. */
+  async addEvent(ticketId: string, kind: 'joined' | 'left', actorUserId: string, otherUserId: string | null): Promise<void> {
+    await this.db.query('INSERT INTO support_ticket_events (ticket_id, kind, actor_user_id, other_user_id) VALUES ($1, $2, $3, $4)', [ticketId, kind, actorUserId, otherUserId]);
+  }
+
+  /** The history lines of these tickets, oldest first. */
+  async events(ticketIds: string[]): Promise<Map<string, TicketEvent[]>> {
+    const out = new Map<string, TicketEvent[]>();
+    if (!ticketIds.length) return out;
+    const res = await this.db.query<{ ticket_id: string; kind: TicketEvent['kind']; at: Date; actor: string | null; other: string | null }>(
+      `SELECT e.ticket_id, e.kind, e.at, (SELECT name FROM users WHERE id = e.actor_user_id) AS actor,
+         (SELECT name FROM users WHERE id = e.other_user_id) AS other
+       FROM support_ticket_events e WHERE e.ticket_id = ANY($1::text[]) ORDER BY e.id`,
+      [ticketIds],
+    );
+    for (const r of res.rows) {
+      const at = ms(r.at)!;
+      const actor = r.actor ?? 'Someone';
+      const event: TicketEvent =
+        r.kind === 'transferred'
+          ? { kind: 'transferred', at, from: actor, to: r.other ?? 'Someone' }
+          : r.kind === 'joined'
+            ? { kind: 'joined', at, helper: actor, by: r.other ?? 'Someone' }
+            : { kind: 'left', at, helper: actor, by: r.other };
+      out.set(r.ticket_id, [...(out.get(r.ticket_id) ?? []), event]);
+    }
+    return out;
   }
 
   /** Rates the customer's last resolved ticket, once. */
