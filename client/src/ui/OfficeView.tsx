@@ -249,8 +249,14 @@ function Help() {
 
 function ConnectionBanner() {
   const connection = useStore((s) => s.connection);
+  const note = useStore((s) => s.connectionNote);
   if (connection === 'online') return null;
-  return <div className="connection-banner">Connection lost — reconnecting…</div>;
+  // Calls and everything else come back by themselves once it's back.
+  return (
+    <div className="connection-banner" role="status">
+      {note ? `Reconnecting… ${note}` : 'Connection lost — reconnecting…'}
+    </div>
+  );
 }
 
 /** Global keyboard shortcuts while inside an office. */

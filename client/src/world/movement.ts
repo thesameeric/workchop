@@ -17,6 +17,12 @@ const NO_WAY = "Can't get there from here";
 
 type SeatRef = Seat & { itemId: string };
 
+/**
+ * Tells everyone at once. Sitting down and getting up happen from clicks, keys and timers (a support
+ * customer called to a desk), and in a tab in the background no frame may come to send them.
+ */
+const sendNow = () => getSession()?.sendMove(local.x, local.z, local.ry, local.anim);
+
 export function sitOn(seat: SeatRef): void {
   local.seat = { x: seat.x, z: seat.z, ry: seat.ry, itemId: seat.itemId };
   local.x = seat.x;
@@ -25,6 +31,7 @@ export function sitOn(seat: SeatRef): void {
   local.anim = 'sit';
   local.path = null;
   local.pathSeat = null;
+  sendNow();
 }
 
 export function standUp(): void {
@@ -33,12 +40,14 @@ export function standUp(): void {
   local.seat = null;
   local.anim = 'idle';
   const office = getState().office;
-  if (!office) return;
-  const item = office.items.find((i) => i.id === seat.itemId);
-  const { colliders } = officeData(office);
-  const spot = standUpSpot(seat, !!item && !!getEntry(item.type)?.solid, colliders, office.settings);
-  local.x = spot.x;
-  local.z = spot.z;
+  if (office) {
+    const item = office.items.find((i) => i.id === seat.itemId);
+    const { colliders } = officeData(office);
+    const spot = standUpSpot(seat, !!item && !!getEntry(item.type)?.solid, colliders, office.settings);
+    local.x = spot.x;
+    local.z = spot.z;
+  }
+  sendNow();
 }
 
 /** The nearest thing to do with E where you stand: sit down, or what features offer (light switches…). */

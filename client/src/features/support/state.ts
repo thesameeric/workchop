@@ -342,14 +342,20 @@ const seatedAt = (seat: { x: number; z: number; itemId: string }) =>
 
 /** You're called: walk to the desk's customer seat and sit down (or be put there if you can't). */
 function onSummon(summon: Summon): void {
+  const seat = { ...summon.seat, itemId: summon.deskItemId };
+  clearTimeout(summonTimer);
+  // Already sitting there (called again after a reconnect): nothing to do.
+  if (seatedAt(seat)) {
+    set({ summon: null });
+    return;
+  }
   set({ summon });
   const office = getState().office;
   if (!office) return;
-  const seat = { ...summon.seat, itemId: summon.deskItemId };
   const path = findPath({ x: local.x, z: local.z }, seat, officeData(office).colliders, office.settings);
-  if (path?.length) walkTo(seat.x, seat.z, seat);
+  // A tab in the background draws no frames, so it would never walk there: sit down at once.
+  if (path?.length && document.visibilityState !== 'hidden') walkTo(seat.x, seat.z, seat);
   else sitOn(seat);
-  clearTimeout(summonTimer);
   summonTimer = setTimeout(() => {
     const { ticket } = get();
     if (ticket?.id === summon.ticketId && ticket.status === 'active' && !seatedAt(seat)) sitOn(seat);

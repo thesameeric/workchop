@@ -115,6 +115,18 @@ export class Room {
     return changes;
   }
 
+  /**
+   * Starts a pair's call over (their connection didn't come up): a new session id for the link, if
+   * it is still on `sid`. Null when they aren't linked, or the link changed meanwhile.
+   */
+  renew(a: string, b: string, sid: number): { a: string; b: string; sid: number } | null {
+    const key = pairKey(a, b);
+    if (this.links.get(key) !== sid) return null;
+    const next = this.nextSid++;
+    this.links.set(key, next);
+    return { a, b, sid: next };
+  }
+
   removePlayer(id: string): LinkChanges {
     this.players.delete(id);
     this.guests.delete(id);

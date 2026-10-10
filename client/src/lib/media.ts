@@ -237,7 +237,22 @@ export class MediaManager {
   private replaceCam(track: MediaStreamTrack | null): void {
     if (this.camTrack && this.camTrack !== track) this.camTrack.stop();
     this.camTrack = track;
-    if (track) track.onended = () => this.setCam(false);
+    if (track) track.onended = () => void this.camLost(track);
+  }
+
+  /** The camera stopped by itself (unplugged, taken by another app, the computer slept): get it back, or turn it off. */
+  private async camLost(track: MediaStreamTrack): Promise<void> {
+    if (this.camTrack !== track) return;
+    if (this.camOn && (await this.acquireCam())) {
+      this.emit();
+      return;
+    }
+    if (this.camTrack !== track) return;
+    track.onended = null;
+    this.camTrack = null;
+    this.camOn = false;
+    this.error ??= 'Your camera was disconnected.';
+    this.emit();
   }
 
   private async acquireAudio(): Promise<boolean> {

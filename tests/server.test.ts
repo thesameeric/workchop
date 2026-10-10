@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -5,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { jukeboxData, type SpotifySession } from '../shared/music';
 import type { ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
+import { PING_INTERVAL_MS, PING_TIMEOUT_MS } from '../server/realtime';
 import { createTestDb } from './helpers/db';
-import { createOffice as newOffice, disconnectAll, Jar, join as joinAs, json, member, type Client } from './helpers/http';
+import { createOffice as newOffice, disconnectAll, Jar, join as joinAs, json, member, until, type Client } from './helpers/http';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let dataDir: string;
@@ -48,6 +50,17 @@ function next<E extends keyof ServerToClientEvents>(socket: Client, event: E, ms
     }) as never);
   });
 }
+
+/** Everything a socket hears of one event, from now on. */
+function heard<E extends keyof ServerToClientEvents>(socket: Client, event: E): Parameters<ServerToClientEvents[E]>[] {
+  const got: Parameters<ServerToClientEvents[E]>[] = [];
+  socket.on(event, ((...args: Parameters<ServerToClientEvents[E]>) => got.push(args)) as never);
+  return got;
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A page's secret for its visit (JoinRequest.resume). */
+const resumeKey = () => crypto.randomBytes(24).toString('base64url');
 
 function nothing<E extends keyof ServerToClientEvents>(socket: Client, event: E, ms = 300): Promise<boolean> {
   return new Promise((resolve) => {
@@ -448,5 +461,173 @@ describe('realtime', () => {
     const left = next(a.socket, 'player:left');
     b.socket.disconnect();
     expect((await left)[0]).toBe(b.res.ok && b.res.selfId);
+  });
+});
+
+describe('moving', () => {
+  it('queues sitting down, standing up and stopping for a busy connection; only steps and repeats may be dropped', async () => {
+    const { id } = await createOffice();
+    const a = await join(id, 'Ann');
+    const b = await join(id, 'Bob');
+    const aId = a.socket.id!;
+    const moves = heard(b.socket, 'player:moved');
+    const at = () => server.realtime.players(id).find((p) => p.id === aId);
+    a.socket.emit('move', 5, 5, 0, 'walk');
+    await until(() => moves.length === 1);
+    // Nothing else on its way to Bob.
+    await wait(100);
+
+    // Bob's connection is busy for a moment (a write still going out, or long-polling between polls).
+    const transport = server.io.sockets.sockets.get(b.socket.id!)!.conn.transport as unknown as { writable: boolean; emit(event: string): void };
+    transport.writable = false;
+    a.socket.emit('move', 5.3, 5, 0, 'walk'); // a step: the next one replaces it
+    a.socket.emit('move', 5.5, 5, Math.PI, 'sit'); // sitting down happens once
+    a.socket.emit('move', 5.5, 5, Math.PI, 'sit'); // the same again (a keyframe)
+    a.socket.emit('move', 5.5, 5.8, 0, 'idle'); // standing up
+    await until(() => at()?.anim === 'idle');
+    expect(moves).toHaveLength(1);
+    transport.writable = true;
+    transport.emit('ready');
+    await until(() => moves.length === 3);
+    expect(moves.slice(1)).toEqual([[[aId, 5.5, 5, Math.PI, 'sit']], [[aId, 5.5, 5.8, 0, 'idle']]]);
+
+    // Walking on, then stopping, while Bob is busy again: he gets where Ann stopped.
+    transport.writable = false;
+    a.socket.emit('move', 6, 5.8, 0, 'walk');
+    a.socket.emit('move', 6.3, 5.8, 0, 'walk');
+    a.socket.emit('move', 6.4, 5.8, 0.5, 'idle');
+    await until(() => at()?.x === 6.4);
+    transport.writable = true;
+    transport.emit('ready');
+    await until(() => moves.length === 5);
+    expect(moves.slice(3)).toEqual([[[aId, 6, 5.8, 0, 'walk']], [[aId, 6.4, 5.8, 0.5, 'idle']]]);
+
+    // Someone coming in later sees her seated, facing the right way.
+    a.socket.emit('move', 5.5, 5, Math.PI, 'sit');
+    await until(() => at()?.anim === 'sit');
+    const c = await join(id, 'Cat');
+    expect(c.res.ok && c.res.players.find((p) => p.id === aId)).toMatchObject({ x: 5.5, z: 5, ry: Math.PI, anim: 'sit' });
+  });
+});
+
+describe('coming back', () => {
+  it('starts calls over on a new connection, with new link ids', async () => {
+    const { id } = await createOffice();
+    const b = await join(id, 'Bob');
+    const bId = b.socket.id!;
+    const links = heard(b.socket, 'peer:connect');
+    const a1 = await join(id, 'Ann');
+    const a1Id = a1.socket.id!;
+    await until(() => links.length === 1);
+    const [, sid1] = links[0];
+    const left = heard(b.socket, 'player:left');
+    const unlinked = heard(b.socket, 'peer:disconnect');
+    a1.socket.disconnect();
+    await until(() => left.length === 1 && unlinked.length === 1);
+    expect([left[0][0], unlinked[0][0]]).toEqual([a1Id, a1Id]);
+
+    const a2 = await join(id, 'Ann');
+    const a2Id = a2.socket.id!;
+    await until(() => links.length === 2);
+    const [peer, sid2] = links[1];
+    expect(peer).toBe(a2Id);
+    expect(sid2).not.toBe(sid1);
+    expect(server.realtime.rooms.get(id)!.linkSid(a2Id, bId)).toBe(sid2);
+    // Only the new link carries signals.
+    const stale = nothing(a2.socket, 'rtc:signal');
+    b.socket.emit('rtc:signal', a2Id, sid1, { candidate: { candidate: 'old' } });
+    expect(await stale).toBe(true);
+    const relayed = next(a2.socket, 'rtc:signal');
+    b.socket.emit('rtc:signal', a2Id, sid2, { candidate: { candidate: 'new' } });
+    expect(await relayed).toEqual([bId, sid2, { candidate: { candidate: 'new' } }]);
+  });
+
+  it('replaces a connection the server still has when its page is back on a new one', async () => {
+    const { id, owner } = await createOffice();
+    const resume = resumeKey();
+    const b = await join(id, 'Bob');
+    const bLinks = heard(b.socket, 'peer:connect');
+    const ghost = await joinAs(base, id, 'Ann', { request: { resume } });
+    const ghostId = ghost.socket.id!;
+    const bId = b.socket.id!;
+    await until(() => bLinks.length === 1);
+    const [, sid1] = bLinks[0];
+
+    // Ann's network went away without a word: the server still has her old connection. Back on a
+    // new one (next to Bob, sitting), it goes first.
+    const seen: string[] = [];
+    b.socket.on('peer:disconnect', (who) => seen.push(`peer:disconnect ${who}`));
+    b.socket.on('player:left', (who) => seen.push(`player:left ${who}`));
+    b.socket.on('player:joined', (p) => seen.push(`player:joined ${p.id}`));
+    b.socket.on('peer:connect', (who) => seen.push(`peer:connect ${who}`));
+    const dropped = new Promise<string>((resolve) => ghost.socket.on('disconnect', resolve));
+    const bob = server.realtime.players(id).find((p) => p.id === bId)!;
+    const spot = { x: bob.x + 1, z: bob.z, ry: 1, anim: 'sit' as const };
+    const a2 = await joinAs(base, id, 'Ann', { request: { resume, at: spot } });
+    const a2Id = a2.socket.id!;
+    expect(await dropped).toBe('io server disconnect');
+    expect(a2.res.ok && a2.res.players.map((p) => p.id).sort()).toEqual([a2Id, bId].sort());
+    expect(a2.res.ok && a2.res.players.find((p) => p.id === a2Id)).toMatchObject(spot);
+    expect(server.realtime.players(id).map((p) => p.id).sort()).toEqual([a2Id, bId].sort());
+    await until(() => seen.length === 4);
+    expect(seen).toEqual([`peer:disconnect ${ghostId}`, `player:left ${ghostId}`, `player:joined ${a2Id}`, `peer:connect ${a2Id}`]);
+    expect(server.realtime.linkedPeers(id, a2Id)).toEqual([bId]);
+    expect(server.realtime.rooms.get(id)!.linkSid(a2Id, bId)).not.toBe(sid1);
+
+    // Another secret, a malformed one, or someone else (the owner, signed in) with the same one: nobody is replaced.
+    await joinAs(base, id, 'Ann', { request: { resume: resumeKey() } });
+    await joinAs(base, id, 'Ann', { request: { resume: 'short' } });
+    await joinAs(base, id, 'Olive', { jar: owner, request: { resume } });
+    await wait(100);
+    expect(a2.socket.connected).toBe(true);
+    expect(server.realtime.players(id).some((p) => p.id === a2Id)).toBe(true);
+    // A place sent while coming back stays on the floor.
+    const far = await joinAs(base, id, 'Far', { request: { at: { x: 1e6, z: -5, ry: 0, anim: 'fly' as never } } });
+    const office = server.store.peek(id)!.office;
+    expect(far.res.ok && far.res.players.find((p) => p.id === far.socket.id)).toMatchObject({ x: office.settings.width, z: 0, anim: 'idle' });
+  });
+
+  it('starts a call over when either side asks, on the link it is on now', async () => {
+    const { id } = await createOffice();
+    const a = await join(id, 'Ann');
+    const aLinks = heard(a.socket, 'peer:connect');
+    const b = await join(id, 'Bob');
+    // Bob may hear of the first link before or after this.
+    const bLinks = heard(b.socket, 'peer:connect');
+    const [aId, bId] = [a.socket.id!, b.socket.id!];
+    await until(() => aLinks.length === 1);
+    const [, sid] = aLinks[0];
+    const renewed = (links: typeof aLinks) => links.filter(([, s]) => s !== sid);
+    a.socket.emit('rtc:relink', bId, sid);
+    await until(() => renewed(aLinks).length === 1 && renewed(bLinks).length === 1);
+    const sid2 = renewed(aLinks)[0][1];
+    expect(sid2).toBeGreaterThan(sid);
+    expect([renewed(aLinks)[0], renewed(bLinks)[0]]).toEqual([
+      [bId, sid2, aId < bId],
+      [aId, sid2, bId < aId],
+    ]);
+    // Both asked at once: the second finds it started over already.
+    b.socket.emit('rtc:relink', aId, sid);
+    expect(await nothing(a.socket, 'peer:connect')).toBe(true);
+    // The old link's signals are dropped.
+    const stale = nothing(b.socket, 'rtc:signal');
+    a.socket.emit('rtc:signal', bId, sid, { restart: true });
+    expect(await stale).toBe(true);
+    const relayed = next(b.socket, 'rtc:signal');
+    a.socket.emit('rtc:signal', bId, sid2, { restart: true });
+    expect(await relayed).toEqual([aId, sid2, { restart: true }]);
+    // Only people in a call now.
+    const unlinked = next(b.socket, 'peer:disconnect');
+    a.socket.emit('move', 1, 1, 0, 'idle');
+    b.socket.emit('move', 19, 15, 0, 'idle');
+    await unlinked;
+    const none = nothing(b.socket, 'peer:connect');
+    a.socket.emit('rtc:relink', bId, sid2);
+    expect(await none).toBe(true);
+  });
+
+  it('notices a dropped connection within about 20 seconds', () => {
+    expect(server.io.engine.opts).toMatchObject({ pingInterval: PING_INTERVAL_MS, pingTimeout: PING_TIMEOUT_MS });
+    expect(PING_INTERVAL_MS + PING_TIMEOUT_MS).toBeLessThanOrEqual(20_000);
   });
 });

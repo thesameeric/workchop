@@ -8,6 +8,7 @@ import { local, remoteTargets, rendered } from '../lib/positions';
 import { getState, useStore } from '../state/store';
 import { Avatar, BlobShadow, useMotion, type AvatarMotion } from './Avatar';
 import { stepLocal } from './movement';
+import { stepRemote, type Drawn } from './remoteMotion';
 
 const ringMaterial = new THREE.MeshBasicMaterial({ color: '#3ddc84', transparent: true, opacity: 0.9, depthWrite: false });
 const selfRingMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.55, depthWrite: false });
@@ -70,36 +71,20 @@ export function LocalPlayer() {
   );
 }
 
-function lerpAngle(a: number, b: number, t: number): number {
-  let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return a + d * t;
-}
-
 const RemotePlayer = memo(function RemotePlayer({ id }: { id: string }) {
   const info = useStore((s) => s.players[id]);
   const group = useRef<THREE.Group>(null);
   const motion = useMotion();
-  const pos = useRef<{ x: number; z: number; ry: number } | null>(null);
+  const pos = useRef<Drawn | null>(null);
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
     const t = remoteTargets.get(id);
     if (!t || !group.current) return;
-    if (!pos.current || Math.hypot(t.x - pos.current.x, t.z - pos.current.z) > 6) {
-      pos.current = { x: t.x, z: t.z, ry: t.ry };
-    }
-    const p = pos.current;
-    const k = 1 - Math.exp(-dt * 10);
-    const px = p.x;
-    const pz = p.z;
-    p.x += (t.x - p.x) * k;
-    p.z += (t.z - p.z) * k;
-    p.ry = lerpAngle(p.ry, t.ry, 1 - Math.exp(-dt * 12));
-    const speed = Math.hypot(p.x - px, p.z - pz) / Math.max(dt, 1e-3);
-    motion.current.anim = t.anim === 'sit' ? 'sit' : speed > 0.4 || t.anim === 'walk' ? 'walk' : 'idle';
-    motion.current.speed = Math.max(speed, t.anim === 'walk' ? 3 : 0);
+    const step = stepRemote(pos.current, t, dt, performance.now());
+    const p = (pos.current = step.drawn);
+    motion.current.anim = step.anim;
+    motion.current.speed = step.speed;
     group.current.position.set(p.x, 0, p.z);
     group.current.rotation.y = p.ry;
     const r = rendered.get(id);

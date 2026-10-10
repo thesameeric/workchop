@@ -134,6 +134,16 @@ export type OfficeOp =
 export interface RtcSignal {
   sdp?: { type: 'offer' | 'answer'; sdp: string };
   candidate?: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string | null };
+  /** From the side that doesn't make offers: its connection broke, please restart ICE. */
+  restart?: boolean;
+}
+
+/** Where someone is, as `move` sends it. */
+export interface Spot {
+  x: number;
+  z: number;
+  ry: number;
+  anim: AnimState;
 }
 
 export interface JoinRequest {
@@ -148,6 +158,14 @@ export interface JoinRequest {
   guest?: string;
   mic?: boolean;
   cam?: boolean;
+  /**
+   * A secret the page made for this visit (22 to 128 URL-safe characters), sent with every join of
+   * it. Joining again with it replaces this page's earlier connections that are still in the office:
+   * after a dropped connection the server may not have noticed yet, and they'd be left as ghosts.
+   */
+  resume?: string;
+  /** Coming back after a dropped connection: where you are (instead of the entrance). */
+  at?: Spot;
 }
 
 export type JoinResponse =
@@ -199,6 +217,11 @@ export interface ClientToServerEvents {
   emote: (emoji: string) => void;
   'office:op': (op: OfficeOp) => void;
   'rtc:signal': (to: string, sid: number, data: RtcSignal) => void;
+  /**
+   * The call with this person (on link `sid`) doesn't connect: start it over. Both get a new
+   * peer:connect, with a new link id; a link that changed meanwhile is left alone.
+   */
+  'rtc:relink': (peerId: string, sid: number) => void;
   /** Change a jukebox (radio station, shared links). Allowed for everyone in the office. */
   music: (op: MusicOp) => void;
   /** Start (start=true), update or stop (null) a Spotify listen-along session on a jukebox. */

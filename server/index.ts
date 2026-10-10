@@ -19,7 +19,7 @@ import { dormantFeatures, serverFeatures } from './features/index';
 import { addressKey, windowLimiter } from './limits';
 import { mailerFromEnv, type Mailer } from './mail';
 import { OfficeStore } from './officeStore';
-import { attachRealtime, sessionRoom, userRoom, type IO } from './realtime';
+import { attachRealtime, PING_INTERVAL_MS, PING_TIMEOUT_MS, sessionRoom, userRoom, type IO } from './realtime';
 import { SqlOfficeRepo } from './repos';
 import { cloudflareTurnFromEnv, mintCloudflareIceServers, type CloudflareTurn, type RTCIceServerLike } from './turn';
 import { createUploads, S3_MISSING, uploadOptionsFromEnv, type UploadOptions } from './uploads';
@@ -131,6 +131,9 @@ export async function startServer(opts: ServerOptions = {}) {
   const httpServer = createServer(app);
   const io: IO = new Server(httpServer, {
     maxHttpBufferSize: 256 * 1024,
+    // Shorter than Socket.IO's 25 s + 20 s, so dropped connections are noticed (and people back) sooner.
+    pingInterval: PING_INTERVAL_MS,
+    pingTimeout: PING_TIMEOUT_MS,
     // Browsers send Origin on WebSocket handshakes from other sites, and not on same-origin polling.
     allowRequest: (req, callback) => {
       const origin = req.headers.origin;

@@ -6,9 +6,25 @@ export interface RemoteTarget {
   z: number;
   ry: number;
   anim: AnimState;
+  /** When they last moved or changed what they're doing (performance.now()): a repeat doesn't count. */
+  at: number;
 }
 
 export const remoteTargets = new Map<string, RemoteTarget>();
+
+/** Records where someone is now (from a join, player:joined or player:moved). */
+export function setRemoteTarget(id: string, x: number, z: number, ry: number, anim: AnimState, now = performance.now()): void {
+  const t = remoteTargets.get(id);
+  if (!t) {
+    remoteTargets.set(id, { x, z, ry, anim, at: now });
+    return;
+  }
+  if (t.x !== x || t.z !== z || t.ry !== ry || t.anim !== anim) t.at = now;
+  t.x = x;
+  t.z = z;
+  t.ry = ry;
+  t.anim = anim;
+}
 
 export interface LocalState {
   x: number;
