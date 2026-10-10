@@ -16,6 +16,7 @@ import type {
   PlayerPatch,
   PlayerState,
   ServerToClientEvents,
+  Spot,
 } from '../shared/types';
 import { isCustomer, may, type GuestAccess, type MemberRole, type RemovedReason, type Role } from '../shared/workspace';
 import type { Accounts } from './accounts';
@@ -31,6 +32,15 @@ export const MAX_PLAYERS_PER_ROOM = 100;
  */
 export const MAX_GUESTS_PER_ROOM = 90;
 const ANIMS: AnimState[] = ['idle', 'walk', 'sit'];
+/**
+ * How often the server checks that each connection is alive, and how long it waits for the answer.
+ * A connection that went quiet (a laptop closed, a network gone) is noticed by both sides within
+ * about 20 s: its player leaves, and the page connects again by itself.
+ */
+export const PING_INTERVAL_MS = 10_000;
+export const PING_TIMEOUT_MS = 10_000;
+/** JoinRequest.resume: a page's secret for its visit. */
+const RESUME = /^[A-Za-z0-9_-]{22,128}$/;
 /** What customers (guests of a support workspace) are called until they open a ticket. */
 export const CUSTOMER_NAME = 'Visitor';
 
@@ -51,6 +61,8 @@ export interface SocketData {
    * Socket ids can't serve for that: everyone in the office sees them.
    */
   uploadKey?: string;
+  /** SHA-256 of the JoinRequest.resume this connection joined with: its page's other connections have the same. */
+  resume?: string;
 }
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents, DefaultEventsMap, SocketData>;
@@ -182,6 +194,19 @@ export function spawnSpot(office: Office, others: Iterable<PlayerState>): { x: n
   }
   return findFreeSpot(spawn.x, spawn.z, colliders, office.settings);
 }
+
+/** A position someone sends (a move, or where they are when they come back), kept on the floor; null if it isn't one. */
+function spotOn(office: Office, x: unknown, z: unknown, ry: unknown, anim: unknown): Spot | null {
+  if (![x, z, ry].every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+  return {
+    x: Math.max(0, Math.min(office.settings.width, x as number)),
+    z: Math.max(0, Math.min(office.settings.depth, z as number)),
+    ry: ry as number,
+    anim: ANIMS.includes(anim as AnimState) ? (anim as AnimState) : 'idle',
+  };
+}
+
+const sha256 = (text: string) => crypto.createHash('sha256').update(text).digest('base64url');
 
 /** Runs feature callbacks (async ones too) so that one failing doesn't break the others or the core. */
 function each<A extends unknown[]>(handlers: ((...args: A) => void)[], ...args: A) {
@@ -344,6 +369,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
     const canMove = limiter(40, 80);
     const canMusic = limiter(4, 12);
     const canSpotify = limiter(6, 20);
+    const canRelink = limiter(1, 10);
 
     const endSpotify = (r: Room, itemId: string) => {
       if (r.spotify.delete(itemId)) io.to(roomName(r.officeId)).emit('spotify:session', itemId, null);
@@ -389,6 +415,21 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       },
     });
 
+    /**
+     * Takes this page's earlier connections out of the office: the ones that joined with the same
+     * resume secret, as the same person. One whose network dropped would stay until its heartbeat
+     * times out (PING_INTERVAL_MS + PING_TIMEOUT_MS): the page, back on a new connection, says it's gone.
+     */
+    const replaceEarlier = (officeId: string, resume: string) => {
+      for (const id of [...(rooms.get(officeId)?.players.keys() ?? [])]) {
+        const other = contexts.get(id);
+        if (id === socket.id || !other || other.socket.data.resume !== resume) continue;
+        if ((other.user?.id ?? null) !== (user?.id ?? null)) continue;
+        // Its player leaves at once (player:left, peer:disconnect), and features see it go.
+        other.socket.disconnect(true);
+      }
+    };
+
     // Joins run one at a time per connection, and only the newest counts: two sent at once would
     // otherwise both get in (into two offices) while the connection only remembers one.
     let joining = Promise.resolve();
@@ -416,6 +457,10 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       let stored = loaded.stored;
       if (!stored) return ack({ ok: false, error: 'This office does not exist.' });
       const id = stored.office.id;
+      // Back after a dropped connection: the old one goes first, so it isn't counted against the
+      // limits below (nor in a call with this one).
+      const resume = typeof req.resume === 'string' && RESUME.test(req.resume) ? sha256(req.resume) : null;
+      if (resume) replaceEarlier(id, resume);
       if (full(id)) return ack({ ok: false, error: 'This office is full.' });
       let admitted: Admission | null = null;
       let account: AccountUser | null = null;
@@ -492,7 +537,10 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
 
       role = joinedAs;
       isOwner = admitted.isOwner;
-      const spot = spawnSpot(stored.office, r.players.values());
+      if (resume) socket.data.resume = resume;
+      // Coming back: where they were. Otherwise at the entrance.
+      const back = req.at && typeof req.at === 'object' ? spotOn(stored.office, req.at.x, req.at.z, req.at.ry, req.at.anim) : null;
+      const spot = back ?? spawnSpot(stored.office, r.players.values());
       // Customers stay anonymous to the others (the support feature numbers them once they have a
       // ticket): no account, its name or its character.
       const asCustomer = isCustomer(joinedAs, stored.kind);
@@ -503,8 +551,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         status: sanitizeStatus(req.status),
         x: spot.x,
         z: spot.z,
-        ry: 0,
-        anim: 'idle',
+        ry: back?.ry ?? 0,
+        anim: back?.anim ?? 'idle',
         mic: req.mic === true,
         cam: req.cam === true,
         screen: false,
@@ -547,12 +595,17 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       const p = me();
       const o = office();
       if (!p || !o || !room || !canMove()) return;
-      if (![x, z, ry].every((v) => typeof v === 'number' && Number.isFinite(v))) return;
-      p.x = Math.max(0, Math.min(o.settings.width, x));
-      p.z = Math.max(0, Math.min(o.settings.depth, z));
-      p.ry = ry;
-      p.anim = ANIMS.includes(anim) ? anim : 'idle';
-      socket.volatile.to(roomName(room.officeId)).emit('player:moved', [p.id, p.x, p.z, p.ry, p.anim]);
+      const spot = spotOn(o, x, z, ry, anim);
+      if (!spot) return;
+      const was: Spot = { x: p.x, z: p.z, ry: p.ry, anim: p.anim };
+      Object.assign(p, spot);
+      // A step while walking may be dropped for someone whose connection is busy (the next one
+      // replaces it), as may a repeat of where they already are. Anything else (stopping, sitting
+      // down, standing up, a jump) happens once: it's queued for everyone, in order.
+      const repeat = was.x === p.x && was.z === p.z && was.ry === p.ry && was.anim === p.anim;
+      const step = was.anim === 'walk' && p.anim === 'walk';
+      const to = repeat || step ? socket.volatile.to(roomName(room.officeId)) : socket.to(roomName(room.officeId));
+      to.emit('player:moved', [p.id, p.x, p.z, p.ry, p.anim]);
       emitLinks(room.recompute(o.zones, [p.id]));
     });
 
@@ -626,6 +679,13 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       if (room.linkSid(socket.id, to) !== sid) return;
       if (JSON.stringify(data).length > 100_000) return;
       io.to(to).emit('rtc:signal', socket.id, sid, data);
+    });
+
+    socket.on('rtc:relink', (to, sid) => {
+      if (!room || typeof to !== 'string' || typeof sid !== 'number' || !canRelink()) return;
+      // Only a current link, on the id it has now: when both ask, the second finds it renewed.
+      const renewed = room.renew(socket.id, to, sid);
+      if (renewed) emitLinks({ added: [renewed], removed: [] });
     });
 
     socket.on('music', (op) => {

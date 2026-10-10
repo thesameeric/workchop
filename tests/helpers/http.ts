@@ -1,6 +1,6 @@
 import { io as connect, type Socket } from 'socket.io-client';
 import { DEFAULT_AVATAR } from '../../shared/avatar';
-import type { ClientToServerEvents, JoinResponse, ServerToClientEvents } from '../../shared/types';
+import type { ClientToServerEvents, JoinRequest, JoinResponse, ServerToClientEvents } from '../../shared/types';
 import type { MemberRole } from '../../shared/workspace';
 import type { Db } from '../../server/db';
 
@@ -96,13 +96,13 @@ const sockets: Client[] = [];
 
 /**
  * Connects (with the jar's cookies, if any) and joins an office, with its guest link when
- * createOffice made it (`guest` gives another token; '' none).
+ * createOffice made it (`guest` gives another token; '' none). `request` adds to the join request.
  */
 export async function join(
   base: string,
   officeId: string,
   name: string,
-  opts: { jar?: Jar; ownerKey?: string; guest?: string; headers?: Record<string, string> } = {},
+  opts: { jar?: Jar; ownerKey?: string; guest?: string; headers?: Record<string, string>; request?: Partial<JoinRequest> } = {},
 ) {
   const cookie = opts.jar?.header();
   const socket: Client = connect(base, { transports: ['websocket'], forceNew: true, extraHeaders: { ...opts.headers, ...(cookie ? { cookie } : {}) } });
@@ -110,7 +110,7 @@ export async function join(
   const guest = opts.guest ?? guestLinks.get(officeId);
   const res = await new Promise<JoinResponse>((resolve, reject) => {
     socket.on('connect_error', reject);
-    socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey: opts.ownerKey, guest }, resolve));
+    socket.on('connect', () => socket.emit('join', { officeId, name, avatar: DEFAULT_AVATAR, ownerKey: opts.ownerKey, guest, ...opts.request }, resolve));
   });
   if (!res.ok) throw new Error(res.error);
   return { socket, res };

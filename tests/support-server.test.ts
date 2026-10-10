@@ -8,7 +8,7 @@ import { DEFAULT_AVATAR } from '../shared/avatar';
 import { seatsOf } from '../shared/catalog';
 import type { UploadedFile } from '../shared/uploads';
 import { CUSTOMER_SEAT, deskLabels, MAX_CUSTOMERS_PER_ADDRESS, ticketConv, type EnterRequest, type MyTicket } from '../shared/support';
-import type { JoinResponse, ServerToClientEvents } from '../shared/types';
+import type { JoinRequest, JoinResponse, ServerToClientEvents } from '../shared/types';
 import type { MembersAnswer } from '../shared/workspace';
 import { isLightOn } from '../shared/world';
 import { feature as audio } from '../server/features/audio';
@@ -114,8 +114,8 @@ let addresses = 0;
 const nextIp = () => `10.${(++addresses >> 8) & 255}.${addresses & 255}.7`;
 
 /** Someone with the customer link, from `ip` (a new address unless given). */
-const customer = ({ base }: Running, office: SupportOffice, opts: { ip?: string; jar?: Jar } = {}) =>
-  join(base, office.id, 'Whoever', { guest: office.guest, jar: opts.jar, headers: { 'x-test-ip': opts.ip ?? nextIp() } });
+const customer = ({ base }: Running, office: SupportOffice, opts: { ip?: string; jar?: Jar; request?: Partial<JoinRequest> } = {}) =>
+  join(base, office.id, 'Whoever', { guest: office.guest, jar: opts.jar, headers: { 'x-test-ip': opts.ip ?? nextIp() }, request: opts.request });
 
 /** A new member of the workspace (staff), in it. */
 async function staff(run: Running, office: SupportOffice, name: string) {
@@ -649,6 +649,77 @@ describe('coming back', () => {
     expect([queue.mine?.id, queue.desks]).toEqual([ticket.id, [expect.objectContaining({ itemId: office.desks[1], playerId: mia2.socket.id, ticketId: ticket.id })]]);
     ok(await mia2.socket.emitWithAck('support:resolve'));
     await stop(second);
+  });
+});
+
+describe('back on a new connection before the old one is gone', () => {
+  // A dropped network: the server keeps the old connection until its heartbeat times out. The page,
+  // back on a new one, says which was its own (JoinRequest.resume).
+  const linked = (officeId: string, p: Joined, q: Joined) => main.server.realtime.linkedPeers(officeId, p.socket.id!).includes(q.socket.id!);
+
+  it('a customer is served (and heard) on the new one at once, and isn’t counted twice against their network', { timeout: 30_000 }, async () => {
+    const office = await supportOffice(main);
+    const mia = await staff(main, office, 'Mia');
+    const ip = nextIp();
+    const resume = newKey();
+    const key = newKey();
+    const a1 = await customer(main, office, { ip, request: { resume } });
+    const ticket = ok(await enter(a1, { key })).ticket;
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[0]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    await until(() => linked(office.id, mia, a1));
+    // Two more from the same network fill its places.
+    for (let i = 1; i < MAX_CUSTOMERS_PER_ADDRESS; i++) await customer(main, office, { ip });
+    await expect(customer(main, office, { ip })).rejects.toThrow('There are a few visitors from your network here already. Please try again later.');
+
+    const a2 = await customer(main, office, { ip, request: { resume } });
+    await until(() => a1.socket.disconnected);
+    expect(ok(await a2.socket.emitWithAck('support:enter', { key, name: '', message: '' })).ticket).toMatchObject({ id: ticket.id, status: 'active' });
+    expect((await asStaff(mia)).queue.mine).toMatchObject({ id: ticket.id, playerId: a2.socket.id });
+    await until(() => linked(office.id, mia, a2));
+    expect(main.server.realtime.linkedPeers(office.id, mia.socket.id!)).toEqual([a2.socket.id]);
+    ok(await mia.socket.emitWithAck('support:resolve'));
+  });
+
+  it('an agent gets their desk and customer back at once', async () => {
+    const office = await supportOffice(main);
+    const resume = newKey();
+    const jar = await member(main.base, main.server.db, office.id, 'Mia');
+    const mia1 = await join(main.base, office.id, 'Mia', { jar, guest: '', request: { resume } });
+    const a = await customer(main, office);
+    const { ticket } = ok(await enter(a));
+    ok(await mia1.socket.emitWithAck('support:desk', office.desks[2]));
+    ok(await mia1.socket.emitWithAck('support:next'));
+    await until(() => linked(office.id, mia1, a));
+
+    const mia2 = await join(main.base, office.id, 'Mia', { jar, guest: '', request: { resume } });
+    await until(() => mia1.socket.disconnected);
+    // Without asking for the desk again (support:desk): it moved to the new connection as it came in.
+    await until(() => linked(office.id, mia2, a));
+    const { queue } = await asStaff(mia2);
+    expect(queue.mine?.id).toBe(ticket.id);
+    expect(queue.desks).toEqual([expect.objectContaining({ itemId: office.desks[2], playerId: mia2.socket.id, ticketId: ticket.id })]);
+    expect((await asCustomer(a)).ticket?.agent?.playerId).toBe(mia2.socket.id);
+    ok(await mia2.socket.emitWithAck('support:resolve'));
+  });
+
+  it('with two connections on one ticket, the newest is the one the agent hears', async () => {
+    const office = await supportOffice(main);
+    const mia = await staff(main, office, 'Mia');
+    const key = newKey();
+    const a1 = await customer(main, office);
+    const { ticket } = ok(await enter(a1, { key }));
+    ok(await mia.socket.emitWithAck('support:desk', office.desks[1]));
+    ok(await mia.socket.emitWithAck('support:next'));
+    // Another connection with the same browser key (the page back, the old connection not gone yet).
+    const a2 = await customer(main, office);
+    ok(await a2.socket.emitWithAck('support:enter', { key, name: '', message: '' }));
+    await until(async () => (await asStaff(mia)).queue.mine?.playerId === a2.socket.id);
+    expect((await asStaff(mia)).queue.mine?.id).toBe(ticket.id);
+    a1.socket.disconnect();
+    await until(async () => !main.server.realtime.players(office.id).some((p) => p.id === a1.socket.id));
+    expect((await asStaff(mia)).queue.mine?.playerId).toBe(a2.socket.id);
+    ok(await mia.socket.emitWithAck('support:resolve'));
   });
 });
 

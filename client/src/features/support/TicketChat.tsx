@@ -29,11 +29,11 @@ export function TicketChat({ ticketId, placeholder, closed, intro }: { ticketId:
   return (
     <div className="chat-panel ticket-chat">
       <section className="chat-main" aria-label="Messages">
-        <MessageList key={conv} conv={conv} list={list} intro={intro ?? null} onOlder={() => void loadOlder(conv)} onRetry={() => void loadConv(conv)} />
+        <MessageList key={`${conv}:list`} conv={conv} list={list} intro={intro ?? null} onOlder={() => void loadOlder(conv)} onRetry={() => void loadConv(conv)} />
         {closed ? (
           <div className="chat-footer-note">{closed}</div>
         ) : (
-          <Composer key={conv} conv={conv} placeholder={placeholder} label={placeholder} onEditLast={() => editLast(list.messages)} />
+          <Composer key={`${conv}:composer`} conv={conv} placeholder={placeholder} label={placeholder} onEditLast={() => editLast(list.messages)} />
         )}
       </section>
     </div>

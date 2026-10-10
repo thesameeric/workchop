@@ -41,7 +41,7 @@ then north to south), `ticketConv(id)` = `t:<id>`, and the socket events:
 | `support:resolve` | the agent serving | closes the ticket as resolved |
 | `support:history` | staff | resolved and abandoned tickets, newest first, by name/email/number, 30 a page |
 | `support:remove` | staff | takes a customer out (`office:removed` 'removed'): their open ticket is abandoned, their key can't open tickets for 4 h, their address can't come in for 1 h (in memory) |
-| `support:queue` → staff | | waiting tickets (in queue order, with `present`), desks in use, your ticket |
+| `support:queue` → staff | | waiting tickets (in queue order, with `present`, and `playerId`: the customer's newest connection), desks in use, your ticket |
 | `support:ticket` → customers | | your ticket (place in the queue, agent and desk, status, rating); only to connections that sent `support:enter` |
 | `support:summon` → customers | | the customer seat of the desk to walk to |
 | `support:board` → everyone | | Now serving (number and desk) and how many wait |
@@ -88,6 +88,6 @@ Events are sent only when they change; `support:state` gives the current picture
 ## Client (client/src/features/support/)
 Plug-ins it uses: `registerLobby`, `registerConvView('t:', …)`, `session.setFullVolume`, a panel
 (order 5) for staff and the `chat` panel for customers. Customer lobby (name, email, "How can we help?", device check), the queue overlay with "While you
-wait" sights, the summon walk (teleport and sit after `SUMMON_TIMEOUT_MS`), the ticket chat, rating;
+wait" sights, the summon walk (teleport and sit after `SUMMON_TIMEOUT_MS`, or at once in a background tab; nothing when already seated there, as after a reconnect), the ticket chat, rating;
 the staff panel (desks, Next, the active ticket, the queue, history); the queue screen's picture and
 desk interactions. Catalog: `support-desk`, `queue-board`, `aquarium`, `info-board`.

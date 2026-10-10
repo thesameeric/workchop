@@ -99,6 +99,14 @@ where the hooks below allow it, to keep merges easy.
   owner and admins is taken out with `office:removed` 'locked', then the admins who came in last
   until `staffCap` people are left; never the owner or the owner key's holder). The workspace routes
   call these; features rarely need to.
+- Reconnects: a page back after a dropped connection is a new socket and a new player (new id). Its
+  join carries `resume` (the page's secret for its visit) and `at` (where the person is); the
+  server takes that page's old connection out first if it still has it (same secret, same person),
+  before the limits and join checks: `onLeave` runs for the old one, then `onJoin` for the new one.
+  So a feature keyed by socket id picks people up again in `onJoin` (and the client in
+  `session.onJoined(rejoin)`). Dropped connections are noticed within PING_INTERVAL_MS +
+  PING_TIMEOUT_MS (20 s, server/realtime.ts). `move` relays walking steps and repeats as volatile,
+  everything else (stops, sitting, standing, jumps) reliably.
 - SocketContext (s): `socket`, `user` (null for guests), `room()`, `me()`, `office()`, `role()` (the
   person's role in the office: 'owner' | 'admin' | 'member' | 'guest', null before joining),
   `isOwner()` (the owner, or the owner-key holder of an office nobody has claimed), `mayEdit()`
@@ -178,7 +186,8 @@ where the hooks below allow it, to keep merges easy.
   when an office session is created (before connect) or at once if already in one; cleanup on leave /
   re-registration — undo everything (socket.off, unsubscribe). session.socket (typed with augmented
   events), session.officeId, session.selfId(), session.onJoined((rejoin) => …) (returns unsubscribe;
-  runs at once if already joined), session.onLeave(fn), session.upload(file, {name?, onProgress?,
+  runs at once if already joined; the session rejoins by itself after a dropped connection, retrying
+  while the server turns it away for a passing reason, so resend there what the server should know), session.onLeave(fn), session.upload(file, {name?, onProgress?,
   signal?}) → {id, url, name, contentType, size}, session.setFullVolume(playerId | null) (hear that
   person at full volume wherever they are: a support agent and their customer).
 - Account: getState().account (AccountUser | null); saveAccountSettings({key: value}) merges into

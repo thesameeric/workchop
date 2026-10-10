@@ -106,7 +106,7 @@ interface Snapshot {
   active: TicketRow[];
   ahead: Map<string, number>;
   labels: Map<string, string>;
-  /** Open tickets whose customers are here, with one of their connections. */
+  /** Open tickets whose customers are here, with their newest connection. */
   present: Map<string, string>;
   board: SupportBoard;
 }
@@ -284,8 +284,9 @@ function registerSupport(
     const serving = active
       .sort((a, b) => byDesk(labels, a.desk_item_id) - byDesk(labels, b.desk_item_id))
       .map((r) => ({ number: r.number, desk: labels.get(r.desk_item_id ?? '') ?? 'Desk' }));
+    // The newest of a ticket's connections (the customer back on a new one, before the old one's gone).
     const present = new Map<string, string>();
-    for (const [socketId, c] of st.customers) if (!c.closed && !present.has(c.ticketId)) present.set(c.ticketId, socketId);
+    for (const [socketId, c] of st.customers) if (!c.closed) present.set(c.ticketId, socketId);
     return { waiting, active, ahead, labels, present, board: { serving, waiting: waiting.length } };
   };
 

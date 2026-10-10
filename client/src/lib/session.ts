@@ -5,6 +5,7 @@ import { wellFormed } from '../../../shared/text';
 import type {
   AnimState,
   ClientToServerEvents,
+  JoinRequest,
   JoinResponse,
   OfficeOp,
   PlayerState,
@@ -23,7 +24,7 @@ import { SpotifyListenAlong } from './spotify';
 import { SpeakingDetector } from './levels';
 import { media } from './media';
 import { PeerManager } from './peers';
-import { local, remoteTargets } from './positions';
+import { local, remoteTargets, setRemoteTarget } from './positions';
 import { goHome } from './router';
 import { forgetGuestToken, getGuestToken, getOwnerKey } from './storage';
 import { postFile, type UploadOptions } from './upload';
@@ -48,6 +49,23 @@ export class JoinRefused extends Error {
 
 const ROLE_NAMES: Record<Role, string> = { owner: 'the owner', admin: 'an admin', member: 'a member', guest: 'a guest' };
 
+/** How long a join may go unanswered before it counts as failed. */
+const JOIN_TIMEOUT_MS = 15_000;
+/** The longest wait between tries to get back in after a rejoin failed. */
+const MAX_REJOIN_DELAY_MS = 15_000;
+/** Unanswered first joins before giving up (the server may still be starting: up to a minute on Cloudflare). */
+const FIRST_JOIN_TRIES = 4;
+/** Where you are is sent again this long after the last time (when nothing changed), for anyone who missed it. */
+export const KEYFRAME_MS = 5_000;
+
+/** A random secret, URL-safe (JoinRequest.resume). */
+function newSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+type Refusal = Extract<JoinResponse, { ok: false }>;
+
 /** Everything that happens while you're inside an office: socket, calls, audio. */
 export class OfficeSession {
   /** Created before connecting; add `socket.on(…)` handlers from an onSession hook. */
@@ -65,6 +83,17 @@ export class OfficeSession {
   private hasJoined = false;
   /** The current connection's id and upload key, while joined. */
   private joined: { selfId: string; uploadKey: string } | null = null;
+  /** Sent with every join of this visit: a rejoin replaces our earlier connection if the server still has it. */
+  private readonly resume = newSecret();
+  /** Counts joins sent (and connections dropped): an answer to an older join is ignored. */
+  private joinTry = 0;
+  private firstJoinTimeouts = 0;
+  /** Rejoins refused or unanswered in a row. */
+  private joinFailures = 0;
+  private joinRetry: ReturnType<typeof setTimeout> | undefined;
+  private onFirstJoin: ((res: JoinResponse) => void) | null = null;
+  /** Our own player ids on earlier connections: never anyone to see or call. */
+  private pastIds = new Set<string>();
   private joinedHandlers = new Set<(rejoin: boolean) => void>();
   private leaveHandlers = new Set<() => void>();
   /** Heard at full volume wherever they are (a support agent and their customer). */
@@ -78,7 +107,8 @@ export class OfficeSession {
   private spotifyClientId: string | null = null;
 
   constructor(readonly officeId: string) {
-    this.socket = io({ autoConnect: false });
+    // Socket.IO tries again by itself after a dropped connection; at most 3 s apart.
+    this.socket = io({ autoConnect: false, reconnectionDelayMax: 3000 });
     // The app's own handlers come first, so features' handlers for the same event see its effect.
     this.wireSocket();
     this.audioRoot = document.createElement('div');
@@ -93,6 +123,7 @@ export class OfficeSession {
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
+      relink: (id, sid) => this.socket.emit('rtc:relink', id, sid),
     });
     if (turn) this.scheduleIceRefresh(iceTtl);
     // On Cloudflare Containers the server stops some minutes after its last ordinary request, and
@@ -101,13 +132,15 @@ export class OfficeSession {
     this.unsubs.push(media.subscribe(() => this.onMediaChange()));
     this.onMediaChange();
     this.timers.push(setInterval(() => this.updateVolumes(), 120));
+    this.timers.push(setInterval(() => this.keyframe(), 1000));
+    window.addEventListener('online', this.onOnline);
 
     await new Promise<void>((resolve, reject) => {
-      const onFirst = (res: JoinResponse) => {
+      this.onFirstJoin = (res: JoinResponse) => {
         if (res.ok) resolve();
         else reject(new JoinRefused(res.error, res.reason ?? null));
       };
-      this.socket.on('connect', () => this.sendJoin(onFirst));
+      this.socket.on('connect', () => this.sendJoin());
       this.socket.on('connect_error', () => {
         if (!this.hasJoined) reject(new Error('Could not reach the server.'));
       });
@@ -115,75 +148,114 @@ export class OfficeSession {
     });
   }
 
-  private sendJoin(onFirst: (res: JoinResponse) => void): void {
+  /** Joins (again, after a reconnect) on the current connection. */
+  private sendJoin(): void {
+    clearTimeout(this.joinRetry);
+    if (this.closed || !this.socket.connected) return;
+    const attempt = ++this.joinTry;
     const { me } = getState();
-    this.socket.emit(
-      'join',
-      {
-        officeId: this.officeId,
-        name: me.name,
-        avatar: me.avatar,
-        status: me.status,
-        ownerKey: getOwnerKey(this.officeId),
-        guest: getGuestToken(this.officeId),
-        mic: media.micOn,
-        cam: media.camOn || media.screenOn,
-      },
-      (res) => {
-        if (!res.ok) {
-          if (res.reason === 'link') forgetGuestToken(this.officeId);
-          if (!this.hasJoined) onFirst(res);
-          else toast(res.error, 'error');
-          // Let in no longer (say, removed or the guest link reset while away): the lobby says why.
-          if (this.hasJoined && res.reason) backToLobby();
-          return;
-        }
-        const rejoin = this.hasJoined;
-        this.hasJoined = true;
-        this.joined = { selfId: res.selfId, uploadKey: res.uploadKey };
-        remoteTargets.clear();
-        const players: Record<string, RemotePlayer> = {};
-        for (const p of res.players) {
-          if (p.id === res.selfId) continue;
-          players[p.id] = toRemote(p);
-          remoteTargets.set(p.id, { x: p.x, z: p.z, ry: p.ry, anim: p.anim });
-        }
-        const self = res.players.find((p) => p.id === res.selfId)!;
-        if (!rejoin) {
-          local.x = self.x;
-          local.z = self.z;
-          local.ry = 0;
-          local.anim = 'idle';
-          local.seat = local.path = local.pathSeat = null;
-        }
-        setState({
-          phase: 'office',
-          connection: 'online',
-          selfId: res.selfId,
-          isOwner: res.isOwner,
-          role: res.role,
-          kind: res.kind,
-          guests: res.guests,
-          office: res.office,
-          players,
-          linked: {},
-          streams: {},
-          spotifySessions: Object.fromEntries(res.spotify.map((s) => [s.itemId, s])),
-        });
-        const synced = syncClock(() => this.socket.timeout(5000).emitWithAck('time'));
-        if (rejoin) {
-          this.lastSent.at = 0;
-          this.sendMove(local.x, local.z, local.ry, local.anim, true);
-          this.socket.emit('profile', { screen: media.screenOn });
-          this.spotify.rejoined();
-        } else {
-          // Music waits for the clock, so it starts in step with everyone else.
-          void synced.then(() => !this.closed && this.startMusic());
-          onFirst(res);
-        }
-        for (const handler of this.joinedHandlers) guard(() => handler(rejoin));
-      },
-    );
+    const req: JoinRequest = {
+      officeId: this.officeId,
+      name: me.name,
+      avatar: me.avatar,
+      status: me.status,
+      ownerKey: getOwnerKey(this.officeId),
+      guest: getGuestToken(this.officeId),
+      mic: media.micOn,
+      cam: media.camOn || media.screenOn,
+      resume: this.resume,
+    };
+    // Back after a dropped connection: where you are, not at the entrance.
+    if (this.hasJoined) req.at = { x: local.x, z: local.z, ry: local.ry, anim: local.anim };
+    this.socket.timeout(JOIN_TIMEOUT_MS).emit('join', req, (err, res) => {
+      // Answers to an older join (or on a connection that has since dropped) don't count.
+      if (attempt !== this.joinTry || this.closed) return;
+      if (err) this.joinFailed({ ok: false, error: 'The server didn’t answer.' }, true);
+      else if (!res.ok) this.joinFailed(res, false);
+      else this.joinedOk(res);
+    });
+  }
+
+  /** A join was refused, or went unanswered. */
+  private joinFailed(res: Refusal, timedOut: boolean): void {
+    if (res.reason === 'link') forgetGuestToken(this.officeId);
+    if (!this.hasJoined) {
+      if (timedOut && ++this.firstJoinTimeouts < FIRST_JOIN_TRIES) {
+        this.sendJoin();
+        return;
+      }
+      this.onFirstJoin?.(res);
+      return;
+    }
+    // Let in no longer (say, removed or the guest link reset while away): the lobby says why.
+    if (res.reason) {
+      toast(res.error, 'error');
+      backToLobby();
+      return;
+    }
+    // Anything else passes (the office full for now, the server busy or just restarted): try again in
+    // a moment, with the reason on the connection banner meanwhile.
+    this.joinFailures++;
+    setState({ connection: 'reconnecting', connectionNote: res.error });
+    if (timedOut && this.joinFailures % 3 === 0) {
+      // A connection that answers nothing: start a new one (which joins when it's up).
+      this.socket.disconnect();
+      this.socket.connect();
+      return;
+    }
+    const delay = Math.min(MAX_REJOIN_DELAY_MS, 1000 * 2 ** (this.joinFailures - 1)) * (0.75 + Math.random() * 0.5);
+    this.joinRetry = setTimeout(() => {
+      if (!this.joined) this.sendJoin();
+    }, delay);
+  }
+
+  private joinedOk(res: Extract<JoinResponse, { ok: true }>): void {
+    const rejoin = this.hasJoined;
+    this.hasJoined = true;
+    this.joinFailures = 0;
+    this.joined = { selfId: res.selfId, uploadKey: res.uploadKey };
+    remoteTargets.clear();
+    const players: Record<string, RemotePlayer> = {};
+    for (const p of res.players) {
+      if (p.id === res.selfId || this.pastIds.has(p.id)) continue;
+      players[p.id] = toRemote(p);
+      setRemoteTarget(p.id, p.x, p.z, p.ry, p.anim);
+    }
+    const self = res.players.find((p) => p.id === res.selfId)!;
+    if (!rejoin) {
+      local.x = self.x;
+      local.z = self.z;
+      local.ry = 0;
+      local.anim = 'idle';
+      local.seat = local.path = local.pathSeat = null;
+    }
+    setState({
+      phase: 'office',
+      connection: 'online',
+      connectionNote: null,
+      selfId: res.selfId,
+      isOwner: res.isOwner,
+      role: res.role,
+      kind: res.kind,
+      guests: res.guests,
+      office: res.office,
+      players,
+      linked: {},
+      streams: {},
+      spotifySessions: Object.fromEntries(res.spotify.map((s) => [s.itemId, s])),
+    });
+    const synced = syncClock(() => this.socket.timeout(5000).emitWithAck('time'));
+    if (rejoin) {
+      this.lastSent.at = 0;
+      this.sendMove(local.x, local.z, local.ry, local.anim, true);
+      this.socket.emit('profile', { screen: media.screenOn });
+      this.spotify.rejoined();
+    } else {
+      // Music waits for the clock, so it starts in step with everyone else.
+      void synced.then(() => !this.closed && this.startMusic());
+      this.onFirstJoin?.(res);
+    }
+    for (const handler of this.joinedHandlers) guard(() => handler(rejoin));
   }
 
   /**
@@ -274,6 +346,25 @@ export class OfficeSession {
     this.socket.io.engine?.close();
   }
 
+  /** The calls and their WebRTC state, for debugging. */
+  peerStats() {
+    return this.peers?.stats() ?? [];
+  }
+
+  /**
+   * Back online (the network changed): connect again at once rather than after Socket.IO's wait, and
+   * have every call look for its new way through.
+   */
+  private onOnline = (): void => {
+    if (this.closed) return;
+    if (this.socket.connected) {
+      this.peers?.restartAll();
+    } else {
+      this.socket.disconnect();
+      this.socket.connect();
+    }
+  };
+
   /** For tests and debugging. */
   debugMusic() {
     return { serverNow: serverNow(), at: { x: local.x, z: local.z }, radio: this.radio.debug(), spotify: getState().spotify };
@@ -283,8 +374,13 @@ export class OfficeSession {
     const s = this.socket;
     s.on('disconnect', (reason) => {
       if (this.closed) return;
+      // Answers to joins sent on that connection no longer count: the next connection joins anew.
+      this.joinTry++;
+      clearTimeout(this.joinRetry);
+      if (this.joined) this.pastIds.add(this.joined.selfId);
       this.joined = null;
       setState({ connection: 'reconnecting' });
+      // Every call comes back on the new connection, with new links (our player id changes).
       this.dropAllPeers();
       // The server ends a session's connections when it signs out (in another tab): stay, as a guest.
       if (reason === 'io server disconnect') {
@@ -293,7 +389,8 @@ export class OfficeSession {
       }
     });
     s.on('player:joined', (p) => {
-      remoteTargets.set(p.id, { x: p.x, z: p.z, ry: p.ry, anim: p.anim });
+      if (this.pastIds.has(p.id)) return;
+      setRemoteTarget(p.id, p.x, p.z, p.ry, p.anim);
       setState((st) => ({ players: { ...st.players, [p.id]: toRemote(p) } }));
       if (announceVisits()) toast(`${p.name} joined`);
     });
@@ -310,16 +407,14 @@ export class OfficeSession {
       });
       if (name && announceVisits()) toast(`${name} left`);
     });
-    s.on('player:moved', ([id, x, z, ry, anim]) => {
-      const t = remoteTargets.get(id);
-      if (t) Object.assign(t, { x, z, ry, anim });
-      else remoteTargets.set(id, { x, z, ry, anim });
-    });
+    s.on('player:moved', ([id, x, z, ry, anim]) => setRemoteTarget(id, x, z, ry, anim));
     s.on('player:updated', (id, patch) => {
       if (id === getState().selfId) return;
       setState((st) => (st.players[id] ? { players: { ...st.players, [id]: { ...st.players[id], ...patch } } } : {}));
     });
     s.on('peer:connect', (id, sid, initiator) => {
+      // Our own earlier connection, still in the office for a moment: nobody to call.
+      if (this.pastIds.has(id)) return;
       setState((st) => ({ linked: { ...st.linked, [id]: true } }));
       this.peers?.connect(id, sid, initiator);
     });
@@ -433,9 +528,21 @@ export class OfficeSession {
     const l = this.lastSent;
     const changed = Math.abs(l.x - x) > 0.01 || Math.abs(l.z - z) > 0.01 || Math.abs(l.ry - ry) > 0.05 || l.anim !== anim;
     if (!force && (!changed || (now - l.at < 66 && l.anim === anim))) return;
-    if (!this.socket.connected) return;
+    if (!this.socket.connected || !this.joined) return;
     Object.assign(l, { x, z, ry, anim, at: now });
     this.socket.emit('move', x, z, ry, anim);
+  }
+
+  /**
+   * Sends where you are again when nothing was sent for KEYFRAME_MS, so anyone who missed a move
+   * (sitting down, stopping) catches up. Runs on a timer, so it also works in a tab in the background.
+   */
+  private keyframe(): void {
+    const l = this.lastSent;
+    if (performance.now() - l.at < KEYFRAME_MS) return;
+    // Still "walking" without having moved since (a tab in the background stops mid-step) is standing.
+    const still = Math.abs(l.x - local.x) <= 0.01 && Math.abs(l.z - local.z) <= 0.01;
+    this.sendMove(local.x, local.z, local.ry, local.anim === 'walk' && still ? 'idle' : local.anim, true);
   }
 
   emote(emoji: string): void {
@@ -551,7 +658,7 @@ export class OfficeSession {
   }
 
   private dropAllPeers(): void {
-    for (const id of Object.keys(getState().linked)) this.peers?.disconnect(id);
+    this.peers?.dropAll();
     setState({ linked: {}, streams: {}, spotlight: null });
   }
 
@@ -589,6 +696,8 @@ export class OfficeSession {
 
   leave(): void {
     this.closed = true;
+    clearTimeout(this.joinRetry);
+    window.removeEventListener('online', this.onOnline);
     window.removeEventListener('pointerdown', this.unblockAudio, true);
     window.removeEventListener('keydown', this.unblockAudio, true);
     const leaving = [...this.leaveHandlers];
