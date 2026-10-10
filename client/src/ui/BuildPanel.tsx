@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CLOTHING_COLORS } from '../../../shared/avatar';
 import { CATALOG_LIST, CATEGORIES, getEntry, type Category } from '../../../shared/catalog';
 import { FLOOR_STYLES, MAX_SIZE, MIN_SIZE, ZONE_COLORS } from '../../../shared/office';
@@ -171,6 +171,11 @@ function OfficeTab() {
   useEffect(() => setSize({ width: settings.width, depth: settings.depth }), [settings.width, settings.depth]);
 
   const save = (patch: Partial<OfficeSettings>) => getSession()?.edit({ t: 'settings', settings: patch });
+  // The name is saved when you leave the field, press Enter, or close the panel.
+  const saveName = (next = name.trim(), current = settings.name) => next && next !== current && save({ name: next });
+  const unsaved = useRef({ name, current: settings.name });
+  unsaved.current = { name: name.trim(), current: settings.name };
+  useEffect(() => () => void saveName(unsaved.current.name, unsaved.current.current), []);
   const sizeChanged = size.width !== settings.width || size.depth !== settings.depth;
   const shrinking = size.width < settings.width || size.depth < settings.depth;
 
@@ -178,7 +183,18 @@ function OfficeTab() {
     <div className="office-settings">
       <label className="field">
         <span>Office name</span>
-        <input value={name} maxLength={48} onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== settings.name && save({ name })} />
+        <input
+          value={name}
+          maxLength={48}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => saveName()}
+          onKeyDown={(e) => {
+            // Saved in place: the office's own Enter (open chat) only waits while you're typing in a field.
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            saveName();
+          }}
+        />
       </label>
       <div className="field">
         <span>Floor size</span>

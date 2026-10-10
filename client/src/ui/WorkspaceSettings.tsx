@@ -20,7 +20,7 @@ import {
 import { getSession, leaveOffice } from '../lib/session';
 import { ago } from '../lib/time';
 import { finePointer } from '../lib/touch';
-import { getState, setState, toast, useStore } from '../state/store';
+import { canBuild, getState, setState, toast, useStore } from '../state/store';
 import { UserAvatar } from './Account';
 import { AlertIcon, CloseIcon, CopyIcon, LeaveIcon, MailIcon, OwnerIcon, RefreshIcon, RemoveUserIcon, ResendIcon, WorkspaceIcon } from './icons';
 import { registerSettingsSection } from './settings';
@@ -356,6 +356,35 @@ function OpenOffice({ officeId, onChange }: { officeId: string; onChange: (acces
   );
 }
 
+/** The workspace's name, for whoever may change the office (owners and admins; members where everyone builds). */
+function WorkspaceName() {
+  const current = useStore((s) => s.office?.settings.name ?? '');
+  const editable = useStore((s) => canBuild(s));
+  const [name, setName] = useState(current);
+  const id = useId();
+  useEffect(() => setName(current), [current]);
+  if (!editable) return null;
+  const next = name.trim();
+  const changed = !!next && next !== current;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (changed && getSession()?.edit({ t: 'settings', settings: { name: next } })) toast(`Renamed to “${next}”.`);
+  };
+  return (
+    <form className="ws-section" onSubmit={submit}>
+      <h4>
+        <label htmlFor={id}>Workspace name</label>
+      </h4>
+      <div className="ws-add-row">
+        <input id={id} value={name} maxLength={48} autoComplete="off" onChange={(e) => setName(e.target.value)} />
+        <button className="btn primary" disabled={!changed}>
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function WorkspaceSection() {
   const officeId = useStore((s) => s.officeId);
   const role = useStore((s) => s.role);
@@ -397,6 +426,7 @@ function WorkspaceSection() {
   const link = access && access.guests !== 'open' && <GuestLinkSettings officeId={officeId} access={access} onChange={setAccess} />;
   return (
     <div className="ws">
+      <WorkspaceName />
       {access?.guests === 'open' && <OpenOffice officeId={officeId} onChange={setAccess} />}
       {/* A support workspace's customer link is what it's for: first. */}
       {kind === 'support' && link}
