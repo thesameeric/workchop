@@ -405,6 +405,12 @@ export function DeviceCheck({
           </button>
         </div>
       </div>
+      <p className="muted small" role="status" aria-live="polite">
+        {m.capture.microphone === 'requesting' ? 'Starting microphone…' : m.mic ? 'Microphone ready' :
+          m.capture.microphone === 'denied' ? 'Microphone permission is blocked. You can still join and listen.' :
+          m.capture.microphone === 'unavailable' ? 'No microphone found. You can still join and listen.' :
+          m.capture.microphone === 'error' ? 'Microphone could not start. You can still join and listen.' : 'Microphone is muted'}
+      </p>
       {m.error && <p className="form-error">{m.error}</p>}
       <p className="muted small">{note}</p>
       <button className="btn primary wide big" disabled={!canJoin || joining}>

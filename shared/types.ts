@@ -148,6 +148,8 @@ export interface Spot {
 
 export interface JoinRequest {
   officeId: string;
+  /** This client gates tracks/playback on peer:media. Both peers must opt in to silent preparation. */
+  prepareAudio?: boolean;
   /** A guest's name and character. Signed-in people get their account's (an account without a character yet keeps this one). */
   name: string;
   avatar: AvatarConfig;
@@ -209,7 +211,10 @@ export interface ServerToClientEvents {
   /** Your requested sitting spot was occupied or reassigned; the accepted pose is authoritative. */
   'seat:resolved': (requested: Pick<Spot, 'x' | 'z'>, spot: Spot, itemId: string | null, requestId?: number) => void;
   'player:updated': (id: string, patch: PlayerPatch) => void;
-  'peer:connect': (peerId: string, sid: number, initiator: boolean) => void;
+  /** False prepares a transport only: no local tracks or remote playback until peer:media allows it. */
+  'peer:connect': (peerId: string, sid: number, initiator: boolean, mediaAllowed?: boolean) => void;
+  /** Changes conversation permission on an existing transport; stale session ids are ignored. */
+  'peer:media': (peerId: string, sid: number, mediaAllowed: boolean) => void;
   'peer:disconnect': (peerId: string) => void;
   'rtc:signal': (from: string, sid: number, data: RtcSignal) => void;
   emote: (id: string, emoji: string) => void;
@@ -234,8 +239,8 @@ export interface ClientToServerEvents {
   'office:op': (op: OfficeOp) => void;
   'rtc:signal': (to: string, sid: number, data: RtcSignal) => void;
   /**
-   * The call with this person (on link `sid`) doesn't connect: start it over. Both get a new
-   * peer:connect, with a new link id; a link that changed meanwhile is left alone.
+   * This current transport doesn't connect: start it over with the same media permission. Both
+   * get peer:connect with a new session id; stale or expired sessions are left alone.
    */
   'rtc:relink': (peerId: string, sid: number) => void;
   /** Change a jukebox (radio station, shared links). Allowed for everyone in the office. */

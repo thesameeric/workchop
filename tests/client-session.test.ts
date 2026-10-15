@@ -84,6 +84,9 @@ const fake = vi.hoisted(() => {
     connectPeer: vi.fn(),
     dropAll: vi.fn(),
     restartAll: vi.fn(),
+    setMediaAllowed: vi.fn(),
+    refreshMediaPermissions: vi.fn(),
+    peerEvents: null as null | { canSendMedia(id: string): boolean; stream(id: string, stream: MediaStream | null): void },
     media: { micOn: false, camOn: false, start: vi.fn(async () => {}), stopAll: vi.fn() },
     /** What the account check does after the server ended this connection (see followAccount). */
     followAccount: vi.fn(async () => false),
@@ -106,13 +109,17 @@ vi.mock('../client/src/lib/spotify', () => ({
 }));
 vi.mock('../client/src/lib/levels', () => ({ SpeakingDetector: class { watch() {} unwatch() {} close() {} } }));
 vi.mock('../client/src/lib/media', () => ({
-  media: Object.assign(fake.media, { screenOn: false, version: 0, error: null, audioTrack: null, videoTrack: null, subscribe: () => () => {} }),
+  media: Object.assign(fake.media, { captureStatus: { microphone: 'idle', camera: 'idle' }, screenOn: false, version: 0, error: null, audioTrack: null, videoTrack: null, subscribe: () => () => {} }),
 }));
 vi.mock('../client/src/lib/peers', () => ({
   PeerManager: class {
+    constructor(_media: unknown, _ice: unknown, events: NonNullable<typeof fake.peerEvents>) { fake.peerEvents = events; }
     connect = fake.connectPeer;
     dropAll = fake.dropAll;
     restartAll = fake.restartAll;
+    setMediaAllowed = fake.setMediaAllowed;
+    refreshMediaPermissions = fake.refreshMediaPermissions;
+    async diagnostics() { return []; }
     disconnect() {}
     signal() {}
     close() {}
@@ -126,9 +133,16 @@ vi.mock('../client/src/lib/clock', () => ({ serverNow: () => 0, syncClock: async
 vi.mock('../client/src/lib/router', () => ({ goHome: () => {} }));
 vi.mock('../client/src/lib/upload', () => ({ postFile: async () => ({}) }));
 
-const element = () => ({ hidden: false, remove() {}, appendChild() {}, style: {} });
+const audioElements: ReturnType<typeof element>[] = [];
+const element = () => ({ hidden: false, remove() {}, appendChild() {}, style: {}, autoplay: false, muted: false, volume: 1,
+  src: '', pause: vi.fn(), removeAttribute() {},
+  srcObject: null as MediaStream | null, onplaying: null as null | (() => void), play: vi.fn(async () => {}) });
 vi.stubGlobal('window', Object.assign(new EventTarget(), { matchMedia: () => ({ matches: false }) }));
-vi.stubGlobal('document', { createElement: element, body: { appendChild() {} } });
+vi.stubGlobal('document', { createElement: (tag: string) => { const el = element(); if (tag === 'audio') audioElements.push(el); return el; }, body: { appendChild() {} } });
+vi.stubGlobal('MediaStream', class {
+  constructor(private tracks: { kind: string }[] = []) {}
+  getAudioTracks() { return this.tracks.filter((t) => t.kind === 'audio'); }
+});
 vi.stubGlobal('fetch', async () => ({}));
 
 const { backToLobby, enterOffice, getSession, KEYFRAME_MS } = await import('../client/src/lib/session');
@@ -182,16 +196,160 @@ beforeEach(() => {
   fake.connectPeer.mockClear();
   fake.dropAll.mockClear();
   fake.restartAll.mockClear();
+  fake.setMediaAllowed.mockClear();
+  fake.refreshMediaPermissions.mockClear();
+  audioElements.length = 0;
   fake.media.start.mockClear();
   fake.media.stopAll.mockClear();
   Object.assign(fake.media, { micOn: false, camOn: false });
   fake.followAccount.mockImplementation(async () => false);
-  setState({ toasts: [], officeId: 'o1', phase: 'lobby', connection: 'online', connectionNote: null, elsewhere: false });
+  setState({ toasts: [], officeId: 'o1', phase: 'lobby', connection: 'online', connectionNote: null, elsewhere: false, audioBlocked: false,
+    me: { ...getState().me, status: 'available' }, focus: false });
 });
 
 afterEach(() => {
   getSession()?.leave();
   vi.useRealTimers();
+});
+
+describe('prepared conversations and playback', () => {
+  const addPeer = (x = 7) => socket().fire('player:joined', player('p2', x));
+  const track = { kind: 'audio' } as MediaStreamTrack;
+
+  it('prepares a bounded set of silent players during Join and reuses them for voices', async () => {
+    const originalNavigator = navigator;
+    vi.stubGlobal('navigator', { userActivation: { isActive: true } });
+    try {
+      await enter();
+      expect(audioElements).toHaveLength(4);
+      expect(audioElements.every((el) => el.src.startsWith('data:audio/wav;base64,') && el.play.mock.calls.length === 1)).toBe(true);
+      addPeer(); socket().fire('peer:connect', 'p2', 1, true);
+      fake.peerEvents!.stream('p2', new MediaStream([track]));
+      expect(audioElements).toHaveLength(4);
+      expect(audioElements.filter((el) => el.srcObject)).toHaveLength(1);
+      getSession()!.unblockAudio();
+      expect(audioElements).toHaveLength(4);
+      getSession()!.leave();
+      expect(audioElements.every((el) => el.pause.mock.calls.length > 0 && el.srcObject === null)).toBe(true);
+    } finally {
+      vi.stubGlobal('navigator', originalNavigator);
+    }
+  });
+
+  it('opts in to silent preparation without showing a call until it is authorized', async () => {
+    await enter();
+    expect(lastJoin().req.prepareAudio).toBe(true);
+    addPeer(10.5);
+    socket().fire('peer:connect', 'p2', 10, true, false);
+    expect(fake.connectPeer).toHaveBeenLastCalledWith('p2', 10, true, false);
+    expect(getState().linked.p2).toBeUndefined();
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+    socket().fire('player:moved', ['p2', 7, 5, 0, 'walk']);
+    socket().fire('peer:media', 'p2', 10, true);
+    expect(getState().linked.p2).toBe(true);
+    expect(fake.setMediaAllowed).toHaveBeenLastCalledWith('p2', 10, true);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(true);
+    // A stale permission update from an older transport cannot activate this call.
+    socket().fire('peer:media', 'p2', 9, false);
+    expect(getState().linked.p2).toBe(true);
+    socket().fire('peer:media', 'p2', 10, false);
+    expect(getState().linked.p2).toBeUndefined();
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+  });
+
+  it('revokes local media immediately on distance or Busy changes, including throttled movement', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(true);
+    getSession()!.sendMove(local.x, local.z, 0, 'idle', true);
+    fake.refreshMediaPermissions.mockClear();
+    local.x = 20;
+    getSession()!.sendMove(local.x, local.z, 0, 'idle');
+    expect(fake.refreshMediaPermissions).toHaveBeenCalledOnce();
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+    local.x = 5;
+    getSession()!.updateProfile({ status: 'busy' });
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+  });
+
+  it('gates private-area boundaries locally while preserving conversations inside the same room', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true);
+    setState({ office: { ...office, zones: [{ id: 'room', name: 'Private', x: 4, z: 4, w: 2, d: 2, color: '#fff' }] } });
+    getSession()!.sendMove(local.x, local.z, 0, 'idle');
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+    socket().fire('player:moved', ['p2', 5.5, 5, 0, 'idle']);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(true);
+    getSession()!.updateProfile({ status: 'busy' });
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(true);
+    socket().fire('player:moved', ['p2', 7, 5, 0, 'idle']);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+  });
+
+  it('preserves authorized support calls at a distance without granting media to warm links', async () => {
+    await enter(); addPeer(20);
+    getSession()!.setFullVolume(['p2']);
+    socket().fire('peer:connect', 'p2', 1, true, false);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+    socket().fire('peer:media', 'p2', 1, true);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(true);
+    getSession()!.setFullVolume([]);
+    expect(fake.peerEvents!.canSendMedia('p2')).toBe(false);
+  });
+
+  it('sets permission and volume before playback, and silences retained transports immediately', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true);
+    fake.peerEvents!.stream('p2', new MediaStream([track]));
+    const el = audioElements[0];
+    expect(el.muted).toBe(false);
+    expect(el.volume).toBeGreaterThan(0.9);
+    expect(el.play).toHaveBeenCalledOnce();
+    socket().fire('peer:media', 'p2', 1, false);
+    expect(el).toMatchObject({ volume: 0, muted: true });
+    // Even an old callback cannot play a warm connection at default volume.
+    fake.peerEvents!.stream('p2', new MediaStream([track]));
+    expect(el).toMatchObject({ volume: 0, muted: true });
+  });
+
+  it('reuses accepted audio players across repeated proximity exits instead of exhausting preparation', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true);
+    for (let i = 0; i < 10; i++) {
+      fake.peerEvents!.stream('p2', new MediaStream([track]));
+      expect(audioElements).toHaveLength(1);
+      expect(audioElements[0].srcObject).not.toBeNull();
+      fake.peerEvents!.stream('p2', null);
+      expect(audioElements[0]).toMatchObject({ srcObject: null, muted: true, volume: 0 });
+    }
+  });
+
+  it('keeps the audio warning visible until a gesture retry actually succeeds', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true);
+    fake.peerEvents!.stream('p2', new MediaStream([track]));
+    const el = audioElements[0];
+    const blocked = Object.assign(new Error('blocked'), { name: 'NotAllowedError' });
+    el.play.mockRejectedValueOnce(blocked);
+    getSession()!.unblockAudio();
+    await flush();
+    expect(getState().audioBlocked).toBe(true);
+    let finish!: () => void;
+    el.play.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    window.dispatchEvent(new Event('pointerdown'));
+    expect(getState().audioBlocked).toBe(true);
+    finish(); await flush();
+    expect(getState().audioBlocked).toBe(false);
+  });
+
+  it('offers bounded local diagnostics without requesting media or uploading telemetry', async () => {
+    await enter(); addPeer();
+    socket().fire('peer:connect', 'p2', 1, true, false);
+    const diagnostics = await getSession()!.audioDiagnostics();
+    expect(diagnostics.capture.microphone).toBe('idle');
+    expect(diagnostics.events).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'transport_prepared', peer: 'peer-1' })]));
+    expect(fake.media.start).not.toHaveBeenCalled();
+  });
 });
 
 describe('after a dropped connection', () => {
@@ -270,7 +428,7 @@ describe('after a dropped connection', () => {
     expect(Object.keys(getState().players)).toEqual(['p9']);
     socket().fire('peer:connect', 's1', 5, true);
     socket().fire('peer:connect', 'p9', 6, false);
-    expect(fake.connectPeer.mock.calls).toEqual([['p9', 6, false]]);
+    expect(fake.connectPeer.mock.calls).toEqual([['p9', 6, false, true]]);
   });
 
   it('stops trying once you leave', async () => {

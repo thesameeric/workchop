@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_AVATAR } from '../shared/avatar';
 import { jukeboxData, type SpotifySession } from '../shared/music';
 import type { ServerToClientEvents } from '../shared/types';
 import { startServer } from '../server/index';
@@ -144,6 +145,119 @@ describe('the built client', () => {
 });
 
 describe('realtime', () => {
+  it('reliably sends walking boundary positions before transport and audio permission events', async () => {
+    const { id, owner } = await createOffice();
+    const a = await joinAs(base, id, 'Owner', { jar: owner, request: { prepareAudio: true, at: { x: 2, z: 2, ry: 0, anim: 'idle' } } });
+    const b = await joinAs(base, id, 'Guest', { request: { prepareAudio: true, at: { x: 12, z: 2, ry: 0, anim: 'walk' } } });
+    const bId = b.socket.id!;
+    const aId = a.socket.id!;
+    const broadcast = vi.spyOn(server.io.sockets.adapter, 'broadcast');
+    try {
+      const walk = async (x: number, boundaryEvent?: 'peer:connect' | 'peer:media' | 'peer:disconnect', allowed?: boolean) => {
+        broadcast.mockClear();
+        b.socket.emit('move', x, 2, 0, 'walk');
+        await until(() => broadcast.mock.calls.some(([packet]) => packet.data?.[0] === 'player:moved' && packet.data[1][0] === bId && packet.data[1][1] === x));
+        const packets = broadcast.mock.calls
+          .map(([packet, options]) => ({ event: packet.data?.[0], args: packet.data?.slice(1), volatile: options.flags?.volatile === true }))
+          .filter(({ event, args }) => event === 'player:moved' ? args[0][0] === bId : event?.startsWith('peer:') && (args[0] === aId || args[0] === bId));
+        const position = packets.findIndex(({ event }) => event === 'player:moved');
+        expect(position).toBeGreaterThanOrEqual(0);
+        expect(packets[position].volatile).toBe(!boundaryEvent);
+        const changes = packets.filter(({ event }) => event !== 'player:moved');
+        if (!boundaryEvent) {
+          expect(changes).toEqual([]);
+          return;
+        }
+        expect(changes).toHaveLength(2);
+        expect(changes.every(({ event, volatile }) => event === boundaryEvent && !volatile)).toBe(true);
+        expect(packets.findIndex(({ event }) => event === boundaryEvent)).toBeGreaterThan(position);
+        if (boundaryEvent === 'peer:connect') expect(changes.every(({ args }) => args[3] === allowed)).toBe(true);
+        if (boundaryEvent === 'peer:media') expect(changes.every(({ args }) => args[2] === allowed)).toBe(true);
+      };
+      await walk(11); // Ordinary walking stays droppable.
+      await walk(7.9, 'peer:connect', false); // Prepare while outside conversation range.
+      await walk(6.5);
+      await walk(5.5, 'peer:media', true);
+      await walk(6.5); // Existing conversation remains authorized inside hysteresis range.
+      await walk(7.1, 'peer:media', false);
+      await walk(5.5, 'peer:media', true); // Retained transport re-entry.
+      await walk(10, 'peer:media', false);
+      const changed = next(b.socket, 'office:op');
+      a.socket.emit('office:op', { t: 'zone:add', zone: { id: 'private', name: 'Private', x: 13, z: 1, w: 3, d: 3, color: '#fff' } });
+      await changed;
+      await walk(14, 'peer:disconnect'); // Privacy boundaries close rather than retaining.
+    } finally {
+      broadcast.mockRestore();
+    }
+  });
+
+  it('prepares a silent guest/member transport, activates it on approach, and revokes media on exit', async () => {
+    const { id, owner } = await createOffice();
+    const a = await joinAs(base, id, 'Owner', { jar: owner, request: { prepareAudio: true, at: { x: 2, z: 2, ry: 0, anim: 'idle' } } });
+    const connects = heard(a.socket, 'peer:connect');
+    const permissions = heard(a.socket, 'peer:media');
+    const closes = heard(a.socket, 'peer:disconnect');
+    const b = await joinAs(base, id, 'Guest', { request: { prepareAudio: true, at: { x: 7, z: 2, ry: 0, anim: 'idle' } } });
+    await until(() => connects.length === 1);
+    const [peer, sid, initiator, allowed] = connects[0];
+    const aId = a.socket.id!;
+    const bId = b.socket.id!;
+    expect([peer, initiator, allowed]).toEqual([bId, aId < bId, false]);
+    expect(server.realtime.linkedPeers(id, aId)).toEqual([]);
+    // Signaling is allowed while warming, but nearby chat cannot leak onto idle transports.
+    const signal = next(b.socket, 'rtc:signal');
+    a.socket.emit('rtc:signal', bId, sid, { candidate: { candidate: 'warm' } });
+    expect(await signal).toEqual([aId, sid, { candidate: { candidate: 'warm' } }]);
+    const quiet = nothing(b.socket, 'chat:message');
+    a.socket.emit('chat:send', { conv: 'nearby', text: 'not a conversation yet' }, () => {});
+    expect(await quiet).toBe(true);
+    b.socket.emit('move', 5, 2, 0, 'idle');
+    await until(() => permissions.length === 1);
+    expect(permissions[0]).toEqual([bId, sid, true]);
+    expect(server.realtime.linkedPeers(id, aId)).toEqual([bId]);
+    b.socket.emit('move', 9, 2, 0, 'idle');
+    await until(() => permissions.length === 2);
+    expect(permissions[1]).toEqual([bId, sid, false]);
+    expect(server.realtime.linkedPeers(id, aId)).toEqual([]);
+    expect(closes).toEqual([]);
+    // Re-entry uses the already negotiated session rather than creating another call.
+    b.socket.emit('move', 5, 2, 0, 'idle');
+    await until(() => permissions.length === 3);
+    expect(permissions[2]).toEqual([bId, sid, true]);
+    expect(connects).toHaveLength(1);
+    b.socket.emit('profile', { status: 'busy' });
+    await until(() => closes.length === 1);
+    expect(closes[0]).toEqual([bId]);
+    const blocked = nothing(a.socket, 'rtc:signal');
+    b.socket.emit('rtc:signal', aId, sid, { restart: true });
+    expect(await blocked).toBe(true);
+  });
+
+  it('cleans prepared transports when a guest changes offices or disconnects', async () => {
+    const { id } = await createOffice();
+    const { id: other, guest } = await createOffice('blank', 'Other Owner');
+    const a = await joinAs(base, id, 'Ann', { request: { prepareAudio: true, at: { x: 2, z: 2, ry: 0, anim: 'idle' } } });
+    const connects = heard(a.socket, 'peer:connect');
+    const closes = heard(a.socket, 'peer:disconnect');
+    const b = await joinAs(base, id, 'Bob', { request: { prepareAudio: true, at: { x: 7, z: 2, ry: 0, anim: 'idle' } } });
+    await until(() => connects.length === 1);
+    const [, sid] = connects[0];
+    const before = server.realtime.rooms.get(id)!;
+    const result = await b.socket.timeout(2000).emitWithAck('join', { officeId: other, name: 'Bob', avatar: DEFAULT_AVATAR, guest, prepareAudio: true });
+    expect(result.ok).toBe(true);
+    await until(() => closes.length === 1);
+    expect(before.transportSid(a.socket.id!, b.socket.id!)).toBeUndefined();
+    const blocked = nothing(b.socket, 'rtc:signal');
+    a.socket.emit('rtc:signal', b.socket.id!, sid, { restart: true });
+    expect(await blocked).toBe(true);
+    const c = await joinAs(base, id, 'Cat', { request: { prepareAudio: true, at: { x: 7, z: 2, ry: 0, anim: 'idle' } } });
+    await until(() => connects.length === 2);
+    const cId = c.socket.id!;
+    c.socket.disconnect();
+    await until(() => closes.length === 2);
+    expect(before.transportSid(a.socket.id!, cId)).toBeUndefined();
+  });
+
   it('rejects unknown offices', async () => {
     await expect(join('nope-nope', 'Ann')).rejects.toThrow(/does not exist/);
   });

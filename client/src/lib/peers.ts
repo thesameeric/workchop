@@ -1,16 +1,24 @@
 import type { RtcSignal } from '../../../shared/types';
 import type { MediaManager } from './media';
 
-/** How long a new (or restarted) connection gets to come up before it's tried again. */
-export const CONNECT_TIMEOUT_MS = 15_000;
-/** 'disconnected' often heals by itself (a moment of packet loss): it gets this long first. */
-export const DISCONNECTED_GRACE_MS = 4_000;
-/** ICE restarts tried before the call is started over on a new connection (rtc:relink). */
-export const RESTARTS_BEFORE_RELINK = 2;
-/** Restarts closer together than this are one (both sides noticing, or the network coming back). */
+/** A stalled handshake gets one ICE restart before requesting a fresh link. */
+export const CONNECT_TIMEOUT_MS = 6_000;
+/** Genuine ICE/signalling progress can extend a handshake once, up to this ceiling. */
+export const CONNECT_PROGRESS_TIMEOUT_MS = 12_000;
+/** Short interruptions often heal without a new handshake. */
+export const DISCONNECTED_GRACE_MS = 1_500;
+export const RESTARTS_BEFORE_RELINK = 1;
 export const RESTART_GAP_MS = 2_000;
-/** The longest wait before trying again a call with someone that keeps failing. */
 const MAX_BACKOFF_MS = 120_000;
+
+interface Outgoing {
+  sender: RTCRtpSender;
+  kind: string;
+  desired: MediaStreamTrack | null | undefined;
+  revision: number;
+  clone: MediaStreamTrack | null;
+  queue: Promise<void>;
+}
 
 interface Peer {
   id: string;
@@ -18,37 +26,53 @@ interface Peer {
   initiator: boolean;
   pc: RTCPeerConnection;
   stream: MediaStream;
+  published: MediaStream | null;
+  mediaAllowed: boolean;
+  localMediaAllowed: boolean;
+  outgoing: Map<RTCRtpSender, Outgoing>;
+  clones: Map<MediaStreamTrack, { source: MediaStreamTrack; outgoing: Outgoing; revision: number }>;
   pendingCandidates: RTCIceCandidateInit[];
-  /** Signals are processed strictly in order per peer. */
   queue: Promise<void>;
-  /** The next look at the connection (whether it came up, or healed), and when it's due. */
   timer?: ReturnType<typeof setTimeout>;
   due: number;
-  /** ICE restarts tried (or asked for) since it was last connected. */
   restarts: number;
   lastRestart: number;
+  failureHandled: boolean;
+  awaitingRelink: boolean;
+  progress: number;
+  setupProgress: number;
+  setupStarted: number;
+  setupDelay: number;
+  extended: boolean;
+  lastIce: RTCIceConnectionState;
+  lastGathering: RTCIceGatheringState;
+  createdAt: number;
+  connectedAt: number | null;
+  firstRemoteTrackAt: number | null;
+  /** First on-demand diagnostics sample with inbound bytes; not a measured audible start time. */
+  firstObservedInboundAudioAt: number | null;
+  stage: string;
+  timings: { stage: string; elapsedMs: number }[];
+  sendTrackErrors: number;
 }
 
 export interface PeerEvents {
   send(to: string, sid: number, data: RtcSignal): void;
   stream(id: string, stream: MediaStream | null): void;
   state?(id: string, state: RTCPeerConnectionState): void;
-  /** Asks the server to start the call with `id` (on link `sid`) over: a new peer:connect follows. */
   relink?(id: string, sid: number): void;
+  /** Local eligibility is checked as well as the server's permission, including before async sends. */
+  canSendMedia?(id: string): boolean;
 }
 
 /**
- * One RTCPeerConnection per nearby person (a mesh). The server decides who is
- * linked and which side makes the offer; each side always has one audio and one
- * video transceiver so turning the camera on/off is just a replaceTrack().
- *
- * A call that doesn't come up, or breaks while the office connection stays (the network changed,
- * a relay went away), is repaired: the side making offers restarts ICE (the other side asks it to),
- * and after RESTARTS_BEFORE_RELINK tries either side asks the server to start the call over.
+ * A limited nearby mesh may negotiate before people enter conversation range. Warm transports
+ * carry no local tracks and publish no remote stream. Server permission AND local eligibility
+ * are required. Each sender owns a clone so revocation disables it synchronously, even while a
+ * browser's replaceTrack promise is pending; the shared microphone itself is never altered here.
  */
 export class PeerManager {
   private peers = new Map<string, Peer>();
-  /** Calls started over without coming up, by person (across connections): they're tried less often. */
   private failures = new Map<string, number>();
   private unsubscribe: () => void;
 
@@ -57,73 +81,65 @@ export class PeerManager {
     private iceServers: RTCIceServer[],
     private readonly events: PeerEvents,
   ) {
-    this.unsubscribe = media.subscribe(() => this.syncTracks());
+    this.unsubscribe = media.subscribe(() => this.refreshMediaPermissions());
   }
 
-  has(id: string): boolean {
-    return this.peers.has(id);
-  }
+  has(id: string): boolean { return this.peers.has(id); }
 
-  /** New (e.g. refreshed TURN) servers: used for new connections and the next ICE restart of current ones. */
   setIceServers(servers: RTCIceServer[]): void {
     this.iceServers = servers;
     for (const peer of this.peers.values()) {
-      try {
-        peer.pc.setConfiguration({ ...peer.pc.getConfiguration(), iceServers: servers });
-      } catch {
-        // A closed connection; it'll be replaced anyway.
-      }
+      try { peer.pc.setConfiguration({ ...peer.pc.getConfiguration(), iceServers: servers }); } catch { /* Closed. */ }
     }
   }
 
-  /** Starts the call with `id` on link `sid` (replacing one on an older link). */
-  connect(id: string, sid: number, initiator: boolean): void {
+  connect(id: string, sid: number, initiator: boolean, mediaAllowed = true): void {
     this.drop(id);
-    const peer = this.create(id, sid, initiator);
-    this.watch(peer, this.backoff(id), true);
-    if (initiator) {
-      this.enqueue(peer, async () => {
-        const audio = peer.pc.addTransceiver('audio', { direction: 'sendrecv' });
-        const video = peer.pc.addTransceiver('video', { direction: 'sendrecv' });
-        await audio.sender.replaceTrack(this.media.audioTrack);
-        await video.sender.replaceTrack(this.media.videoTrack);
-        await this.offer(peer);
-      });
-    }
+    const peer = this.create(id, sid, initiator, mediaAllowed);
+    this.watchSetup(peer, this.backoff(id));
+    if (initiator) this.enqueue(peer, async () => {
+      peer.pc.addTransceiver('audio', { direction: 'sendrecv' });
+      peer.pc.addTransceiver('video', { direction: 'sendrecv' });
+      await this.syncPeerTracks(peer);
+      if (this.live(peer)) await this.offer(peer);
+    });
   }
 
-  /** The call with `id` is over (they walked away, or left). */
-  disconnect(id: string): void {
-    this.failures.delete(id);
-    this.drop(id);
+  setMediaAllowed(id: string, sid: number, allowed: boolean): void {
+    const peer = this.peers.get(id);
+    if (!peer || peer.sid !== sid) return;
+    peer.mediaAllowed = allowed;
+    void this.syncPeerTracks(peer);
   }
 
-  /** Ends every call: the office connection dropped, and they come back with the new links (afresh). */
+  /** Also called immediately after movement/status changes, before the next server round trip. */
+  refreshMediaPermissions(): void {
+    for (const peer of this.peers.values()) void this.syncPeerTracks(peer);
+  }
+
+  disconnect(id: string): void { this.failures.delete(id); this.drop(id); }
+
   dropAll(): void {
     for (const id of [...this.peers.keys()]) this.drop(id);
     this.failures.clear();
   }
 
-  /** The network changed (back online): every call looks for the new way through. */
-  restartAll(): void {
-    for (const peer of this.peers.values()) this.restart(peer);
-  }
+  restartAll(): void { for (const peer of this.peers.values()) this.restart(peer); }
 
   signal(from: string, sid: number, data: RtcSignal): void {
     const peer = this.peers.get(from);
-    // Ignore anything from an older connection with the same person.
     if (!peer || peer.sid !== sid) return;
-    if (data.restart) {
-      // Their side broke: only the side making offers can restart.
-      if (peer.initiator) this.restart(peer);
-      return;
-    }
+    if (data.restart) { if (peer.initiator) this.restart(peer); return; }
     this.enqueue(peer, () => this.handle(peer, data));
   }
 
-  close(): void {
-    this.unsubscribe();
-    this.dropAll();
+  close(): void { this.unsubscribe(); this.dropAll(); }
+
+  private live(peer: Peer): boolean { return this.peers.get(peer.id) === peer; }
+
+  private allowed(peer: Peer): boolean {
+    if (!this.live(peer) || !peer.mediaAllowed) return false;
+    try { return this.events.canSendMedia?.(peer.id) ?? true; } catch { return false; }
   }
 
   private drop(id: string): void {
@@ -131,165 +147,331 @@ export class PeerManager {
     if (!peer) return;
     this.peers.delete(id);
     clearTimeout(peer.timer);
+    for (const track of peer.clones.keys()) { track.enabled = false; track.stop(); }
+    peer.clones.clear();
     peer.pc.onicecandidate = null;
     peer.pc.ontrack = null;
     peer.pc.onconnectionstatechange = null;
     peer.pc.oniceconnectionstatechange = null;
+    peer.pc.onicegatheringstatechange = null;
     peer.pc.close();
     this.events.stream(id, null);
   }
 
-  private create(id: string, sid: number, initiator: boolean): Peer {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const peer: Peer = { id, sid, initiator, pc, stream: new MediaStream(), pendingCandidates: [], queue: Promise.resolve(), due: 0, restarts: 0, lastRestart: 0 };
+  private create(id: string, sid: number, initiator: boolean, mediaAllowed: boolean): Peer {
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, iceCandidatePoolSize: 1 });
+    const now = Date.now();
+    const peer: Peer = {
+      id, sid, initiator, pc, stream: new MediaStream(), published: null, mediaAllowed,
+      localMediaAllowed: false, outgoing: new Map(), clones: new Map(), pendingCandidates: [],
+      queue: Promise.resolve(), due: 0, restarts: 0, lastRestart: -Infinity,
+      failureHandled: false, awaitingRelink: false, progress: 0, setupProgress: 0,
+      setupStarted: now, setupDelay: CONNECT_TIMEOUT_MS, extended: false,
+      lastIce: pc.iceConnectionState, lastGathering: pc.iceGatheringState,
+      createdAt: now, connectedAt: null, firstRemoteTrackAt: null, firstObservedInboundAudioAt: null,
+      stage: 'created', timings: [{ stage: 'created', elapsedMs: 0 }], sendTrackErrors: 0,
+    };
     this.peers.set(id, peer);
-
+    peer.localMediaAllowed = this.allowed(peer);
     pc.onicecandidate = (e) => {
-      if (e.candidate) this.events.send(id, sid, { candidate: e.candidate.toJSON() as RtcSignal['candidate'] });
+      if (!this.live(peer) || !e.candidate) return;
+      peer.progress++;
+      this.events.send(id, sid, { candidate: e.candidate.toJSON() as RtcSignal['candidate'] });
     };
     pc.ontrack = (e) => {
+      if (!this.live(peer)) return;
+      peer.firstRemoteTrackAt ??= Date.now();
       if (!peer.stream.getTracks().includes(e.track)) peer.stream.addTrack(e.track);
-      // A fresh MediaStream object makes React notice the change.
       peer.stream = new MediaStream(peer.stream.getTracks());
-      this.events.stream(id, peer.stream);
+      this.publish(peer);
     };
     pc.onconnectionstatechange = () => {
+      if (!this.live(peer)) return;
       this.events.state?.(id, pc.connectionState);
       this.check(peer);
     };
-    // Some browsers say more (or only) here.
     pc.oniceconnectionstatechange = () => this.check(peer);
+    pc.onicegatheringstatechange = () => {
+      if (this.live(peer) && pc.iceGatheringState !== peer.lastGathering) {
+        peer.lastGathering = pc.iceGatheringState;
+        peer.progress++;
+      }
+    };
     return peer;
   }
 
-  /** Media flows. */
+  private stage(peer: Peer, stage: string): void {
+    peer.stage = stage;
+    peer.timings.push({ stage, elapsedMs: Date.now() - peer.createdAt });
+    if (peer.timings.length > 12) peer.timings.splice(0, peer.timings.length - 12);
+  }
+
+  private publish(peer: Peer): void {
+    if (!this.live(peer)) return;
+    const stream = this.allowed(peer) && peer.stream.getTracks().length ? peer.stream : null;
+    if (peer.published === stream) return;
+    peer.published = stream;
+    this.events.stream(peer.id, stream);
+  }
+
   private up(pc: RTCPeerConnection): boolean {
-    // Browsers without connectionState (older Firefox) have ICE's.
-    if (pc.connectionState) return pc.connectionState === 'connected';
-    return pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
+    return pc.connectionState ? pc.connectionState === 'connected'
+      : pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
   }
 
   private check(peer: Peer): void {
-    if (this.peers.get(peer.id) !== peer) return;
+    if (!this.live(peer)) return;
     const { connectionState, iceConnectionState } = peer.pc;
+    if (peer.lastIce !== iceConnectionState) { peer.lastIce = iceConnectionState; peer.progress++; }
+    const failed = connectionState === 'failed' || iceConnectionState === 'failed';
+    if (!failed) peer.failureHandled = false;
     if (this.up(peer.pc)) {
       clearTimeout(peer.timer);
       peer.timer = undefined;
       peer.restarts = 0;
+      peer.awaitingRelink = false;
+      peer.connectedAt ??= Date.now();
+      if (peer.stage !== 'connected') this.stage(peer, 'connected');
       this.failures.delete(peer.id);
-    } else if (connectionState === 'failed' || iceConnectionState === 'failed') {
+    } else if (failed && !peer.failureHandled) {
+      peer.failureHandled = true;
       this.recover(peer);
     } else if (connectionState === 'disconnected' || iceConnectionState === 'disconnected') {
-      this.watch(peer, DISCONNECTED_GRACE_MS);
+      this.arm(peer, DISCONNECTED_GRACE_MS, () => this.recover(peer));
     }
   }
 
-  /** Looks at the call again in `ms` (or sooner, if a look is due sooner; `exactly` moves it either way). */
-  private watch(peer: Peer, ms: number, exactly = false): void {
+  private arm(peer: Peer, ms: number, task: () => void, exactly = false): void {
+    if (!this.live(peer)) return;
     const due = Date.now() + ms;
     if (peer.timer !== undefined && !exactly && peer.due <= due) return;
     clearTimeout(peer.timer);
     peer.due = due;
     peer.timer = setTimeout(() => {
       peer.timer = undefined;
-      if (this.peers.get(peer.id) === peer && !this.up(peer.pc)) this.recover(peer);
+      if (this.live(peer) && !this.up(peer.pc)) task();
     }, ms);
   }
 
-  /** The call is down, or never came up: restart ICE a few times, then start it over. */
-  private recover(peer: Peer): void {
-    if (peer.restarts < RESTARTS_BEFORE_RELINK || !this.events.relink) {
-      this.restart(peer);
-      return;
-    }
-    this.failures.set(peer.id, (this.failures.get(peer.id) ?? 0) + 1);
-    this.events.relink(peer.id, peer.sid);
-    // Asked again later if nothing comes of it (the server takes only so many at once).
-    this.watch(peer, this.backoff(peer.id), true);
+  private watchSetup(peer: Peer, delay: number): void {
+    peer.setupStarted = Date.now();
+    peer.setupProgress = peer.progress;
+    peer.setupDelay = delay;
+    peer.extended = false;
+    this.arm(peer, delay, () => this.setupExpired(peer), true);
   }
 
-  /** An ICE restart: made by the side making offers, asked for by the other. */
-  private restart(peer: Peer): void {
-    const wait = peer.lastRestart + RESTART_GAP_MS - Date.now();
-    if (wait > 0) {
-      this.watch(peer, wait);
-      return;
+  private setupExpired(peer: Peer): void {
+    if (!peer.extended && peer.setupDelay === CONNECT_TIMEOUT_MS && peer.progress > peer.setupProgress) {
+      const remaining = CONNECT_PROGRESS_TIMEOUT_MS - (Date.now() - peer.setupStarted);
+      if (remaining > 0) {
+        peer.extended = true;
+        this.stage(peer, 'setup-progress');
+        this.arm(peer, remaining, () => this.recover(peer), true);
+        return;
+      }
     }
+    this.recover(peer);
+  }
+
+  private recover(peer: Peer): void {
+    if (!this.live(peer) || peer.awaitingRelink) return;
+    if (peer.restarts < RESTARTS_BEFORE_RELINK || !this.events.relink) { this.restart(peer); return; }
+    peer.awaitingRelink = true;
+    this.failures.set(peer.id, (this.failures.get(peer.id) ?? 0) + 1);
+    this.stage(peer, 'relink-requested');
+    this.events.relink(peer.id, peer.sid);
+    this.arm(peer, this.backoff(peer.id), () => {
+      peer.awaitingRelink = false;
+      this.recover(peer);
+    }, true);
+  }
+
+  private restart(peer: Peer): void {
+    if (!this.live(peer) || peer.awaitingRelink || Date.now() - peer.lastRestart < RESTART_GAP_MS) return;
     peer.lastRestart = Date.now();
     peer.restarts++;
+    this.stage(peer, 'ice-restart');
     if (peer.initiator) this.enqueue(peer, () => this.offer(peer, true));
     else this.events.send(peer.id, peer.sid, { restart: true });
-    this.watch(peer, CONNECT_TIMEOUT_MS, true);
+    this.watchSetup(peer, CONNECT_TIMEOUT_MS);
   }
 
-  /** How long a new call with `id` gets: longer each time it was started over without coming up. */
   private backoff(id: string): number {
-    return Math.min(MAX_BACKOFF_MS, CONNECT_TIMEOUT_MS * 2 ** (this.failures.get(id) ?? 0));
+    return Math.min(MAX_BACKOFF_MS, CONNECT_TIMEOUT_MS * 2 ** Math.min(8, this.failures.get(id) ?? 0));
   }
 
   private enqueue(peer: Peer, task: () => Promise<void>): void {
-    peer.queue = peer.queue.then(task).catch((err) => {
-      if (this.peers.get(peer.id) === peer) console.warn(`[rtc] ${peer.id}:`, err);
+    peer.queue = peer.queue.then(() => this.live(peer) ? task() : undefined).catch(() => {
+      // Full SDP and browser errors can contain connection details: diagnostics expose only counters.
+      if (this.live(peer)) this.stage(peer, 'signalling-error');
     });
   }
 
   private async offer(peer: Peer, iceRestart = false): Promise<void> {
+    if (!this.live(peer)) return;
     const offer = await peer.pc.createOffer({ iceRestart });
+    if (!this.live(peer)) return;
     await peer.pc.setLocalDescription(offer);
-    const desc = peer.pc.localDescription!;
-    this.events.send(peer.id, peer.sid, { sdp: { type: 'offer', sdp: desc.sdp } });
+    if (!this.live(peer)) return;
+    const desc = peer.pc.localDescription;
+    if (desc) {
+      this.stage(peer, 'offer-sent');
+      this.events.send(peer.id, peer.sid, { sdp: { type: 'offer', sdp: desc.sdp } });
+    }
   }
 
   private async handle(peer: Peer, data: RtcSignal): Promise<void> {
+    if (!this.live(peer)) return;
     const { pc } = peer;
     if (data.sdp) {
       if (data.sdp.type === 'offer') {
-        if (peer.initiator) return; // Only the designated side offers.
+        if (peer.initiator) return;
+        this.stage(peer, 'offer-received');
         await pc.setRemoteDescription(data.sdp);
-        for (const t of pc.getTransceivers()) {
-          t.direction = 'sendrecv';
-          await t.sender.replaceTrack(t.receiver.track.kind === 'audio' ? this.media.audioTrack : this.media.videoTrack);
-        }
+        if (!this.live(peer)) return;
+        peer.progress++;
+        for (const t of pc.getTransceivers()) t.direction = 'sendrecv';
+        await this.syncPeerTracks(peer);
+        if (!this.live(peer)) return;
         await this.flushCandidates(peer);
+        if (!this.live(peer)) return;
         const answer = await pc.createAnswer();
+        if (!this.live(peer)) return;
         await pc.setLocalDescription(answer);
-        this.events.send(peer.id, peer.sid, { sdp: { type: 'answer', sdp: pc.localDescription!.sdp } });
+        if (!this.live(peer)) return;
+        if (pc.localDescription) {
+          this.stage(peer, 'answer-sent');
+          this.events.send(peer.id, peer.sid, { sdp: { type: 'answer', sdp: pc.localDescription.sdp } });
+        }
       } else if (pc.signalingState === 'have-local-offer') {
         await pc.setRemoteDescription(data.sdp);
+        if (!this.live(peer)) return;
+        this.stage(peer, 'answer-received');
+        peer.progress++;
         await this.flushCandidates(peer);
       }
     } else if (data.candidate) {
+      peer.progress++;
       if (pc.remoteDescription) await pc.addIceCandidate(data.candidate).catch(() => {});
-      else peer.pendingCandidates.push(data.candidate);
+      else if (peer.pendingCandidates.length < 128) peer.pendingCandidates.push(data.candidate);
     }
   }
 
   private async flushCandidates(peer: Peer): Promise<void> {
-    const list = peer.pendingCandidates.splice(0);
-    for (const c of list) await peer.pc.addIceCandidate(c).catch(() => {});
+    for (const candidate of peer.pendingCandidates.splice(0)) {
+      if (!this.live(peer)) return;
+      await peer.pc.addIceCandidate(candidate).catch(() => {});
+    }
   }
 
-  /** Push the current mic/camera/screen tracks to every connection. */
-  private syncTracks(): void {
-    for (const peer of this.peers.values()) {
-      for (const t of peer.pc.getTransceivers()) {
-        if (!t.receiver.track || t.currentDirection === 'stopped') continue;
-        const track = t.receiver.track.kind === 'audio' ? this.media.audioTrack : this.media.videoTrack;
-        if (t.sender.track !== track) t.sender.replaceTrack(track).catch(() => {});
+  /** Synchronous disabling precedes queued browser operations, including during permission races. */
+  private syncPeerTracks(peer: Peer): Promise<void> {
+    if (!this.live(peer)) return Promise.resolve();
+    const allowed = this.allowed(peer);
+    peer.localMediaAllowed = allowed;
+    for (const t of peer.pc.getTransceivers()) {
+      if (!t.receiver.track || t.currentDirection === 'stopped') continue;
+      let outgoing = peer.outgoing.get(t.sender);
+      if (!outgoing) {
+        outgoing = { sender: t.sender, kind: t.receiver.track.kind, desired: undefined, revision: 0, clone: null, queue: Promise.resolve() };
+        peer.outgoing.set(t.sender, outgoing);
+      }
+      const source = outgoing.kind === 'audio' ? this.media.audioTrack : this.media.videoTrack;
+      const desired = allowed && source?.readyState !== 'ended' ? source : null;
+      if (outgoing.desired !== desired) {
+        outgoing.desired = desired;
+        outgoing.revision++;
+        const revision = outgoing.revision;
+        const current = outgoing;
+        current.queue = current.queue.then(() => this.replace(peer, current, desired, revision));
+      }
+    }
+    for (const [clone, data] of peer.clones) {
+      clone.enabled = allowed && data.source.enabled && data.outgoing.desired === data.source && data.outgoing.revision === data.revision;
+    }
+    this.publish(peer);
+    return Promise.all([...peer.outgoing.values()].map((s) => s.queue)).then(() => {});
+  }
+
+  private async replace(peer: Peer, outgoing: Outgoing, desired: MediaStreamTrack | null, revision: number): Promise<void> {
+    if (!this.live(peer) || outgoing.revision !== revision) return;
+    let clone: MediaStreamTrack | null = null;
+    try {
+      // Local movement may have invalidated eligibility since this task was queued, before its
+      // next refresh. Leave a retry marker so returning to range still attaches the same source.
+      if (desired && !this.allowed(peer)) {
+        outgoing.desired = undefined;
+        for (const track of peer.clones.keys()) track.enabled = false;
+      }
+      if (desired && this.allowed(peer)) {
+        clone = desired.clone();
+        clone.enabled = desired.enabled;
+        peer.clones.set(clone, { source: desired, outgoing, revision });
+      }
+      const previous = outgoing.clone;
+      await outgoing.sender.replaceTrack(clone);
+      // Revocation can occur while replaceTrack is pending: these clones were disabled already.
+      if (previous && previous !== clone) { previous.enabled = false; previous.stop(); peer.clones.delete(previous); }
+      const valid = this.live(peer) && outgoing.revision === revision && (!clone || this.allowed(peer));
+      if (!valid && clone) { clone.enabled = false; clone.stop(); peer.clones.delete(clone); }
+      outgoing.clone = valid ? clone : null;
+      if (!valid && this.live(peer) && outgoing.revision === revision) outgoing.desired = undefined;
+      if (valid && clone && desired) clone.enabled = desired.enabled;
+    } catch {
+      if (clone) { clone.enabled = false; clone.stop(); peer.clones.delete(clone); }
+      if (this.live(peer)) {
+        peer.sendTrackErrors++;
+        // A later refresh retries without an unhandled rejection or a tight retry loop here.
+        if (outgoing.revision === revision) outgoing.desired = undefined;
       }
     }
   }
 
-  /** For debugging (window.__workchop.session().peerStats()). */
-  stats(): { id: string; sid: number; initiator: boolean; state: RTCPeerConnectionState; ice: RTCIceConnectionState; signaling: RTCSignalingState; restarts: number }[] {
+  /** Small, bounded timings, with no SDP, addresses, credentials or voice samples. */
+  stats() {
     return [...this.peers.values()].map((p) => ({
-      id: p.id,
-      sid: p.sid,
-      initiator: p.initiator,
-      state: p.pc.connectionState,
-      ice: p.pc.iceConnectionState,
-      signaling: p.pc.signalingState,
-      restarts: p.restarts,
+      id: p.id, sid: p.sid, initiator: p.initiator, state: p.pc.connectionState,
+      ice: p.pc.iceConnectionState, signaling: p.pc.signalingState, restarts: p.restarts,
+      mediaAllowed: p.mediaAllowed, localMediaAllowed: p.localMediaAllowed,
+      elapsedMs: Date.now() - p.createdAt, connectedMs: p.connectedAt === null ? null : p.connectedAt - p.createdAt,
+      firstRemoteTrackMs: p.firstRemoteTrackAt === null ? null : p.firstRemoteTrackAt - p.createdAt,
+      firstObservedInboundAudioMs: p.firstObservedInboundAudioAt === null ? null : p.firstObservedInboundAudioAt - p.createdAt,
+      stage: p.stage, timings: p.timings.map((t) => ({ ...t })), sendTrackErrors: p.sendTrackErrors,
     }));
+  }
+
+  /** Browser network measurements are collected on demand, never containing candidate addresses. */
+  async diagnostics() {
+    return Promise.all([...this.peers.values()].map(async (peer) => {
+      const safe: { localCandidateType?: string; remoteCandidateType?: string; protocol?: string; roundTripTimeMs?: number; inboundAudioBytes?: number; inboundAudioPackets?: number; jitterMs?: number } = {};
+      try {
+        const report = await peer.pc.getStats();
+        if (!this.live(peer)) return null;
+        const entries: Record<string, unknown>[] = [];
+        report.forEach((s) => entries.push(s as Record<string, unknown>));
+        const transport = entries.find((s) => s.type === 'transport' && s.selectedCandidatePairId);
+        const pair = entries.find((s) => s.type === 'candidate-pair' && (s.id === transport?.selectedCandidatePairId || (s.nominated && s.state === 'succeeded')));
+        const local = entries.find((s) => s.id === pair?.localCandidateId);
+        const remote = entries.find((s) => s.id === pair?.remoteCandidateId);
+        const candidateTypes = ['host', 'srflx', 'prflx', 'relay'];
+        if (candidateTypes.includes(String(local?.candidateType))) safe.localCandidateType = String(local?.candidateType);
+        if (candidateTypes.includes(String(remote?.candidateType))) safe.remoteCandidateType = String(remote?.candidateType);
+        if (['udp', 'tcp'].includes(String(local?.protocol))) safe.protocol = String(local?.protocol);
+        const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+        if (finite(pair?.currentRoundTripTime)) safe.roundTripTimeMs = pair.currentRoundTripTime * 1_000;
+        const audio = entries.filter((s) => s.type === 'inbound-rtp' && (s.kind === 'audio' || s.mediaType === 'audio'));
+        if (audio.length) {
+          safe.inboundAudioBytes = audio.reduce((sum, s) => sum + (finite(s.bytesReceived) ? s.bytesReceived : 0), 0);
+          safe.inboundAudioPackets = audio.reduce((sum, s) => sum + (finite(s.packetsReceived) ? s.packetsReceived : 0), 0);
+          const jitter = audio.find((s) => finite(s.jitter))?.jitter;
+          if (finite(jitter)) safe.jitterMs = jitter * 1_000;
+          if (safe.inboundAudioBytes > 0) peer.firstObservedInboundAudioAt ??= Date.now();
+        }
+      } catch { /* Older browsers or closing transports may not expose stats. */ }
+      if (!this.live(peer)) return null;
+      const summary = this.stats().find((p) => p.id === peer.id && p.sid === peer.sid);
+      return summary ? { ...summary, ...safe } : null;
+    })).then((all) => all.filter((entry) => entry !== null));
   }
 }

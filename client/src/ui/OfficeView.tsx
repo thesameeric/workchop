@@ -20,6 +20,7 @@ import { Dock, inviteAction } from './Dock';
 import { LoadBoundary } from './LoadBoundary';
 import { AddIcon, CheckIcon, ChevronDownIcon, CloseIcon, HelpIcon, HomeIcon, VolumeOffIcon } from './icons';
 import { Modals } from './Modals';
+import { useMediaState } from './media';
 import { NowPlayingPill } from './MusicPanel';
 import { Overlays } from './overlays';
 import { usePanels } from './panels';
@@ -149,9 +150,15 @@ function AudioBlocked() {
   return (
     <button className="audio-blocked" onClick={() => getSession()?.unblockAudio()}>
       <VolumeOffIcon size={16} />
-      Audio blocked — click to hear people
+        Click to enable conversation audio
     </button>
   );
+}
+
+function MicrophoneReadiness() {
+  const m = useMediaState();
+  if (m.capture.microphone !== 'requesting' || m.mic) return null;
+  return <span className="muted small" role="status">Starting microphone…</span>;
 }
 
 function TopBar() {
@@ -160,6 +167,7 @@ function TopBar() {
     <div className="topbar">
       <OfficeChip />
       <AudioBlocked />
+        <MicrophoneReadiness />
       <ZoneIndicator />
       <NowPlayingPill />
       {items.map((item) => (

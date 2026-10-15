@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import { seatsOf } from '../../../shared/catalog';
-import { buildColliders, findFreeSpot, isBlocked, proximityVolume } from '../../../shared/geometry';
+import { buildColliders, findFreeSpot, isBlocked, proximityVolume, shouldLink } from '../../../shared/geometry';
 import { applyOp } from '../../../shared/office';
 import { racingItems } from '../../../shared/racing';
 import { SEAT_TOLERANCE } from '../../../shared/seating';
@@ -22,6 +22,7 @@ import { canBuild, getState, initialBuild, personalMusicVolume, setState, toast,
 import { audibleJukebox, musicVolumeAt, type MusicLink, type MusicOp } from '../../../shared/music';
 import { accountUpdated, followAccount, saveCharacter } from './account';
 import { fetchConfig } from './api';
+import { AudioDiagnostics } from './audioDiagnostics';
 import { serverNow, syncClock } from './clock';
 import { LoungeRadio } from './radio';
 import { SpotifyListenAlong } from './spotify';
@@ -73,6 +74,11 @@ export class OfficeSession {
     setState((s) => ({ speaking: { ...s.speaking, [id]: on } })),
   );
   private audio = new Map<string, HTMLAudioElement>();
+  private preparedAudio: HTMLAudioElement[] = [];
+  private transports = new Map<string, number>();
+  private readonly audioLog = new AudioDiagnostics();
+  private captureState = '';
+  private playbackAttempt = 0;
   private audioRoot: HTMLDivElement;
   private timers: ReturnType<typeof setInterval>[] = [];
   private iceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -126,16 +132,20 @@ export class OfficeSession {
     this.audioRoot = document.createElement('div');
     this.audioRoot.hidden = true;
     document.body.appendChild(this.audioRoot);
+    this.preparePlayback();
   }
 
   async join(): Promise<void> {
+    this.audioLog.record('config_requested');
     const { iceServers, iceTtl, turn, spotifyClientId, uploadMaxBytes } = await fetchConfig();
+    this.audioLog.record('config_ready');
     this.spotifyClientId = spotifyClientId;
     this.uploadMaxBytes = uploadMaxBytes;
     this.peers = new PeerManager(media, iceServers, {
       send: (to, sid, data) => this.socket.emit('rtc:signal', to, sid, data),
       stream: (id, stream) => this.onStream(id, stream),
       relink: (id, sid) => this.socket.emit('rtc:relink', id, sid),
+      canSendMedia: (id) => this.mediaAllowed(id),
     });
     if (turn) this.scheduleIceRefresh(iceTtl);
     // On Cloudflare Containers the server stops some minutes after its last ordinary request, and
@@ -177,6 +187,7 @@ export class OfficeSession {
       cam: media.camOn || media.screenOn,
       resume: this.resume,
       browser: browserId(),
+      prepareAudio: true,
     };
     // Back after a dropped connection: where you are, not at the entrance.
     if (this.hasJoined) req.at = { x: local.x, z: local.z, ry: local.ry, anim: local.anim };
@@ -236,6 +247,7 @@ export class OfficeSession {
     this.takeover = false;
     this.joinFailures = 0;
     this.joined = { selfId: res.selfId, uploadKey: res.uploadKey };
+    this.audioLog.record('session_joined', undefined, rejoin);
     remoteTargets.clear();
     const players: Record<string, RemotePlayer> = {};
     for (const p of res.players) {
@@ -349,6 +361,7 @@ export class OfficeSession {
     if (!this.parked || this.closed) return;
     this.parked = false;
     this.takeover = true;
+    this.preparePlayback();
     const { mic, cam } = this.parkedMedia;
     if (mic || cam) await media.start(mic, cam);
     if (this.closed) return;
@@ -441,6 +454,16 @@ export class OfficeSession {
     return this.peers?.stats() ?? [];
   }
 
+  /** Inspect locally when investigating startup; no telemetry is uploaded automatically. */
+  async audioDiagnostics() {
+    return {
+      capture: media.captureStatus,
+      playbackBlocked: getState().audioBlocked,
+      events: this.audioLog.snapshot(),
+      peers: await this.peers?.diagnostics() ?? [],
+    };
+  }
+
   /**
    * Back online (the network changed): connect again at once rather than after Socket.IO's wait, and
    * have every call look for its new way through.
@@ -479,6 +502,7 @@ export class OfficeSession {
       clearTimeout(this.joinRetry);
       if (this.joined) this.pastIds.add(this.joined.selfId);
       this.joined = null;
+      this.audioLog.record('session_disconnected');
       setState({ connection: 'reconnecting' });
       // Every call comes back on the new connection, with new links (our player id changes).
       this.dropAllPeers();
@@ -500,6 +524,7 @@ export class OfficeSession {
     s.on('player:left', (id) => {
       const name = getState().players[id]?.name;
       remoteTargets.delete(id);
+      this.transports.delete(id);
       this.peers?.disconnect(id);
       setState((st) => {
         const players = { ...st.players };
@@ -510,25 +535,43 @@ export class OfficeSession {
       });
       if (name && announceVisits()) toast(`${name} left`);
     });
-    s.on('player:moved', ([id, x, z, ry, anim]) => setRemoteTarget(id, x, z, ry, anim));
+    s.on('player:moved', ([id, x, z, ry, anim]) => {
+      setRemoteTarget(id, x, z, ry, anim);
+      this.refreshMediaPermissions();
+    });
     s.on('seat:resolved', (requested, spot, itemId, requestId) => {
       // Ignore a late answer after standing up or choosing another seat.
       if (!this.joined || this.closed || (requestId !== undefined && requestId !== this.moveSequence) || local.anim !== 'sit' ||
         Math.hypot(local.x - requested.x, local.z - requested.z) >= SEAT_TOLERANCE) return;
       this.applySeatSpot(spot, itemId);
+      this.refreshMediaPermissions();
       if (spot.anim !== 'sit' && !getState().toasts.some((t) => t.text === 'That seat is occupied.')) toast('That seat is occupied.');
     });
     s.on('player:updated', (id, patch) => {
       if (id === getState().selfId) return;
       setState((st) => (st.players[id] ? { players: { ...st.players, [id]: { ...st.players[id], ...patch } } } : {}));
+      this.refreshMediaPermissions();
     });
-    s.on('peer:connect', (id, sid, initiator) => {
+    s.on('peer:connect', (id, sid, initiator, mediaAllowed = true) => {
       // Our own earlier connection, still in the office for a moment: nobody to call.
       if (this.pastIds.has(id)) return;
-      setState((st) => ({ linked: { ...st.linked, [id]: true } }));
-      this.peers?.connect(id, sid, initiator);
+      this.transports.set(id, sid);
+      this.setLinked(id, mediaAllowed);
+      this.audioLog.record(mediaAllowed ? 'conversation_enabled' : 'transport_prepared', id);
+      this.peers?.connect(id, sid, initiator, mediaAllowed);
+      this.updateVolumes();
+    });
+    s.on('peer:media', (id, sid, allowed) => {
+      if (this.transports.get(id) !== sid) return;
+      this.setLinked(id, allowed);
+      this.audioLog.record(allowed ? 'conversation_enabled' : 'conversation_paused', id);
+      // Mute playback before changing tracks; warmed links are never visible calls.
+      this.updateVolumes();
+      this.peers?.setMediaAllowed(id, sid, allowed);
     });
     s.on('peer:disconnect', (id) => {
+      this.transports.delete(id);
+      this.audioLog.record('transport_closed', id);
       this.peers?.disconnect(id);
       setState((st) => {
         const linked = { ...st.linked };
@@ -622,6 +665,7 @@ export class OfficeSession {
       local.z = spot.z;
       local.path = null;
     }
+    this.refreshMediaPermissions();
   }
 
   /** Apply an edit locally right away and send it to the server. */
@@ -639,6 +683,8 @@ export class OfficeSession {
   }
 
   sendMove(x: number, z: number, ry: number, anim: AnimState, force = false): void {
+    // Privacy follows the live position, even when the movement packet is throttled.
+    this.refreshMediaPermissions();
     const now = performance.now();
     const l = this.lastSent;
     const changed = Math.abs(l.x - x) > 0.01 || Math.abs(l.z - z) > 0.01 || Math.abs(l.ry - ry) > 0.05 || l.anim !== anim;
@@ -674,11 +720,19 @@ export class OfficeSession {
     if (patch.avatar) me.avatar = patch.avatar;
     if (patch.status) me.status = patch.status;
     setState({ me });
+    this.refreshMediaPermissions();
     if (patch.name !== undefined || patch.avatar || patch.status) void saveCharacter({ name: patch.name, avatar: patch.avatar, status: patch.status });
     this.socket.emit('profile', patch);
   }
 
   private onMediaChange(): void {
+    const capture = media.captureStatus;
+    const captureKey = `${capture.microphone}/${capture.camera}`;
+    if (captureKey !== this.captureState) {
+      this.captureState = captureKey;
+      this.audioLog.record('microphone', undefined, capture.microphone);
+      this.audioLog.record('camera', undefined, capture.camera);
+    }
     setState({
       media: { mic: media.micOn, cam: media.camOn, screen: media.screenOn, version: media.version, error: media.error },
     });
@@ -700,26 +754,39 @@ export class OfficeSession {
     let el = this.audio.get(id);
     if (!stream) {
       if (el) {
+        el.pause();
+        el.muted = true;
+        el.volume = 0;
         el.srcObject = null;
-        el.remove();
+        el.onplaying = null;
         this.audio.delete(id);
+        // Keep browser-approved players across repeated proximity exits as well as transports.
+        if (!this.closed && this.preparedAudio.length < 4) this.preparedAudio.push(el);
+        else el.remove();
       }
       this.speaking.unwatch(id);
       return;
     }
     if (!el) {
-      el = document.createElement('audio');
+      el = this.preparedAudio.pop() ?? document.createElement('audio');
+      el.pause();
+      el.removeAttribute('src');
       el.autoplay = true;
-      el.muted = getState().focus;
+      // Establish permission and distance before attaching a track (default volume is 1).
+      el.muted = true;
+      el.volume = 0;
+      el.onplaying = () => this.audioLog.record('playback_started', id);
       this.audioRoot.appendChild(el);
       this.audio.set(id, el);
       this.applySink(el);
     }
+    this.updateVolumes();
     const audioTrack = stream.getAudioTracks()[0] ?? null;
     const current = (el.srcObject as MediaStream | null)?.getAudioTracks()[0] ?? null;
     if (current !== audioTrack) {
+      this.audioLog.record('remote_track', id, !!audioTrack);
       el.srcObject = audioTrack ? new MediaStream([audioTrack]) : null;
-      void el.play().catch(this.playFailed);
+      if (audioTrack) void el.play().catch(this.playFailed);
     }
     this.speaking.watch(id, audioTrack);
   }
@@ -727,6 +794,7 @@ export class OfficeSession {
   /** The browser wants a click before playing sound (you came straight in, without the lobby's). */
   private playFailed = (err: unknown) => {
     if ((err as { name?: string })?.name !== 'NotAllowedError' || this.closed) return;
+    this.audioLog.record('playback_blocked');
     setState({ audioBlocked: true });
     // Any click or key press lets it play.
     window.addEventListener('pointerdown', this.unblockAudio, true);
@@ -735,11 +803,47 @@ export class OfficeSession {
 
   /** Plays people's voices again after the browser blocked them; call it from a click. */
   readonly unblockAudio = (): void => {
+    const attempt = ++this.playbackAttempt;
     window.removeEventListener('pointerdown', this.unblockAudio, true);
     window.removeEventListener('keydown', this.unblockAudio, true);
-    setState({ audioBlocked: false });
-    for (const el of this.audio.values()) if (el.srcObject) void el.play().catch(this.playFailed);
+    this.audioLog.record('playback_retry');
+    this.preparePlayback();
+    // Call play synchronously within the browser's user gesture. Only clear the warning after
+    // playback accepts the retry, rather than hiding it while the promise can still reject.
+    const attempts = [...this.audio.values()].filter((el) => el.srcObject).map((el) => el.play());
+    void Promise.all(attempts).then(() => {
+      if (!this.closed && attempt === this.playbackAttempt) setState({ audioBlocked: false });
+    }).catch(this.playFailed);
   };
+
+  /** Best-effort preparation in Join/Use here/Enable audio's gesture; browsers may still ask later. */
+  private preparePlayback(): void {
+    if (!navigator.userActivation?.isActive || this.closed) return;
+    // Ten milliseconds of zero-valued PCM. No devices, network resource or audible sound.
+    const bytes = new Uint8Array(204);
+    const header = new DataView(bytes.buffer);
+    for (const [at, word] of [[0, 'RIFF'], [8, 'WAVE'], [12, 'fmt '], [36, 'data']] as const) {
+      for (let i = 0; i < word.length; i++) bytes[at + i] = word.charCodeAt(i);
+    }
+    header.setUint32(4, 196, true); header.setUint32(16, 16, true);
+    header.setUint16(20, 1, true); header.setUint16(22, 1, true);
+    header.setUint32(24, 8000, true); header.setUint32(28, 16000, true);
+    header.setUint16(32, 2, true); header.setUint16(34, 16, true); header.setUint32(40, 160, true);
+    const silence = `data:audio/wav;base64,${btoa(String.fromCharCode(...bytes))}`;
+    while (this.preparedAudio.length + this.audio.size < 4) {
+      const el = document.createElement('audio');
+      this.audioRoot.appendChild(el);
+      this.preparedAudio.push(el);
+    }
+    for (const el of this.preparedAudio) {
+      el.muted = false;
+      el.volume = 1;
+      el.src = silence;
+      void el.play().then(() => {
+        if (!this.closed) this.audioLog.record('playback_prepared');
+      }).catch(() => {});
+    }
+  }
 
   private applySink(el: HTMLAudioElement): void {
     const sink = media.audioOutputId;
@@ -757,6 +861,33 @@ export class OfficeSession {
    */
   setFullVolume(playerIds: string[]): void {
     this.fullVolume = new Set(playerIds);
+    this.refreshMediaPermissions();
+  }
+
+  private setLinked(id: string, allowed: boolean): void {
+    setState((st) => {
+      const linked = { ...st.linked };
+      if (allowed) linked[id] = true;
+      else delete linked[id];
+      return { linked, spotlight: !allowed && st.spotlight === id ? null : st.spotlight };
+    });
+  }
+
+  /** Server authorization AND current local eligibility: preparing ICE never grants media. */
+  private mediaAllowed(id: string): boolean {
+    const st = getState();
+    if (!this.joined || this.closed || this.parked || !st.linked[id]) return false;
+    if (this.fullVolume.has(id)) return true;
+    const target = remoteTargets.get(id);
+    const other = st.players[id];
+    return !!st.office && !!target && !!other && shouldLink(
+      { ...local, status: st.me.status }, { ...target, status: other.status }, st.office.zones, true,
+    );
+  }
+
+  private refreshMediaPermissions(): void {
+    this.updateVolumes();
+    this.peers?.refreshMediaPermissions();
   }
 
   /**
@@ -768,13 +899,16 @@ export class OfficeSession {
     const zones = st.office?.zones ?? [];
     for (const [id, el] of this.audio) {
       const t = remoteTargets.get(id);
-      const v = this.fullVolume.has(id) ? 1 : t ? proximityVolume(local, t, zones) : 0;
+      const allowed = this.mediaAllowed(id);
+      const v = !allowed ? 0 : this.fullVolume.has(id) ? 1 : t ? proximityVolume(local, t, zones) : 0;
       if (Math.abs(el.volume - v) > 0.01) el.volume = v;
-      if (el.muted !== st.focus) el.muted = st.focus;
+      const muted = st.focus || !allowed;
+      if (el.muted !== muted) el.muted = muted;
     }
   }
 
   private dropAllPeers(): void {
+    this.transports.clear();
     this.peers?.dropAll();
     setState({ linked: {}, streams: {}, spotlight: null });
   }
@@ -827,7 +961,12 @@ export class OfficeSession {
     for (const u of this.unsubs) u();
     this.peers?.close();
     this.speaking.close();
-    for (const el of this.audio.values()) el.srcObject = null;
+    for (const el of [...this.audio.values(), ...this.preparedAudio]) {
+      el.pause();
+      el.srcObject = null;
+      el.removeAttribute('src');
+    }
+    this.preparedAudio = [];
     this.audio.clear();
     this.audioRoot.remove();
     this.socket.removeAllListeners();
@@ -900,6 +1039,7 @@ export function onSession(id: string, hook: SessionHook): () => void {
   /** Simulate a dropped connection (it reconnects by itself), for testing. */
   dropConnection: () => current?.debugDropConnection(),
   session: () => current,
+  audio: () => current?.audioDiagnostics() ?? Promise.resolve(null),
 };
 
 export async function enterOffice(officeId: string): Promise<void> {

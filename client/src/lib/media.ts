@@ -3,6 +3,24 @@ import { loadDevices, saveDevices } from './storage';
 
 type Listener = () => void;
 
+export type CaptureState = 'idle' | 'requesting' | 'ready' | 'denied' | 'unavailable' | 'error';
+export interface CaptureStatus {
+  microphone: CaptureState;
+  camera: CaptureState;
+}
+
+interface CaptureRequest {
+  promise: Promise<boolean>;
+  cancel(): void;
+}
+
+function captureFailure(err: unknown): CaptureState {
+  const name = (err as { name?: string })?.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'denied';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'unavailable';
+  return 'error';
+}
+
 const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { ideal: 640 },
   height: { ideal: 360 },
@@ -25,11 +43,11 @@ export interface NoiseState {
 }
 
 function describe(err: unknown, what: string): string {
+  if (!navigator.mediaDevices?.getUserMedia) return 'Camera and microphone need a secure (https) connection.';
   const name = (err as { name?: string })?.name;
   if (name === 'NotAllowedError' || name === 'SecurityError') return `${what} permission was denied.`;
   if (name === 'NotFoundError' || name === 'OverconstrainedError') return `No ${what.toLowerCase()} found.`;
   if (name === 'NotReadableError') return `Your ${what.toLowerCase()} is in use by another app.`;
-  if (!navigator.mediaDevices) return 'Camera and microphone need a secure (https) connection.';
   return `Could not start ${what.toLowerCase()}.`;
 }
 
@@ -55,6 +73,19 @@ export class MediaManager {
   /** RNNoise, once Enhanced was chosen; kept until stopAll() (its worklet can't be freed any other way). */
   private pipeline: MicPipeline | null = null;
   private loading: Promise<MicPipeline> | null = null;
+  private desiredMic = false;
+  private desiredCam = false;
+  private audioGeneration = 0;
+  private cameraGeneration = 0;
+  private screenGeneration = 0;
+  private audioRequest: CaptureRequest | null = null;
+  private cameraRequest: CaptureRequest | null = null;
+  private capture: CaptureStatus = { microphone: 'idle', camera: 'idle' };
+
+  /** Acquisition state only, without exposing tracks, device ids or permission details. */
+  get captureStatus(): Readonly<CaptureStatus> {
+    return { ...this.capture };
+  }
 
   get screenOn(): boolean {
     return this.screenTrack !== null;
@@ -83,33 +114,24 @@ export class MediaManager {
     for (const fn of this.listeners) fn();
   }
 
-  /** Ask for mic and camera together, so the browser shows a single permission prompt. */
+  /**
+   * Start the microphone and camera independently: a slow camera or its permission prompt must
+   * never hold a ready microphone disabled. Only microphone acquisition delays joining; video
+   * publishes through the usual subscription when it becomes ready.
+   */
   async start(wantMic = this.prefs.micOn ?? true, wantCam = this.prefs.camOn ?? true): Promise<void> {
-    if (wantMic) this.startPipeline();
-    if (!this.supported) {
-      this.error = describe(null, 'Camera');
-      this.emit();
-      return;
-    }
     this.error = null;
-    if (wantMic || wantCam) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: wantMic ? { ...AUDIO_CONSTRAINTS, deviceId: this.prefs.audioIn ? { ideal: this.prefs.audioIn } : undefined } : false,
-          video: wantCam ? { ...VIDEO_CONSTRAINTS, deviceId: this.prefs.videoIn ? { ideal: this.prefs.videoIn } : undefined } : false,
-        });
-        this.replaceAudio(stream.getAudioTracks()[0] ?? null);
-        this.replaceCam(stream.getVideoTracks()[0] ?? null);
-      } catch {
-        // One of the two may be missing or blocked; try them separately.
-        if (wantMic) await this.acquireAudio();
-        if (wantCam) await this.acquireCam();
-      }
-    }
-    this.micOn = wantMic && !!this.micTrack;
+    this.desiredMic = wantMic;
+    this.desiredCam = wantCam;
+    this.micOn = wantMic && this.micTrack?.readyState === 'live';
+    if (wantMic) this.startPipeline();
+    if (!wantCam) this.releaseCamera();
     this.route();
-    this.camOn = wantCam && !!this.camTrack;
+    const microphone = wantMic && !this.micTrack ? this.acquireAudio() : Promise.resolve(true);
+    if (wantCam && !this.camTrack) void this.acquireCam();
+    else this.camOn = wantCam && this.camTrack?.readyState === 'live';
     this.emit();
+    await microphone;
   }
 
   private replaceAudio(track: MediaStreamTrack | null): void {
@@ -126,13 +148,11 @@ export class MediaManager {
   /** The mic was unplugged or taken by another app: get it (or another one) back. */
   private async micLost(track: MediaStreamTrack): Promise<void> {
     if (this.micTrack !== track) return;
-    if (!(await this.acquireAudio()) && this.micTrack === track) {
-      this.replaceAudio(null);
-      this.micOn = false;
-      this.error = 'Your microphone was disconnected.';
-    }
-    this.route();
+    this.replaceAudio(null);
+    this.micOn = false;
+    this.capture.microphone = 'idle';
     this.emit();
+    if (this.desiredMic) await this.acquireAudio();
   }
 
   /** Standard (the browser's) or Enhanced (RNNoise on top) noise suppression. Call it from a click. */
@@ -235,7 +255,10 @@ export class MediaManager {
   }
 
   private replaceCam(track: MediaStreamTrack | null): void {
-    if (this.camTrack && this.camTrack !== track) this.camTrack.stop();
+    if (this.camTrack && this.camTrack !== track) {
+      this.camTrack.onended = null;
+      this.camTrack.stop();
+    }
     this.camTrack = track;
     if (track) track.onended = () => void this.camLost(track);
   }
@@ -243,70 +266,114 @@ export class MediaManager {
   /** The camera stopped by itself (unplugged, taken by another app, the computer slept): get it back, or turn it off. */
   private async camLost(track: MediaStreamTrack): Promise<void> {
     if (this.camTrack !== track) return;
-    if (this.camOn && (await this.acquireCam())) {
-      this.emit();
-      return;
-    }
-    if (this.camTrack !== track) return;
-    track.onended = null;
-    this.camTrack = null;
+    this.replaceCam(null);
     this.camOn = false;
-    this.error ??= 'Your camera was disconnected.';
+    this.capture.camera = 'idle';
     this.emit();
+    if (this.desiredCam) await this.acquireCam();
   }
 
-  private async acquireAudio(): Promise<boolean> {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { ...AUDIO_CONSTRAINTS, deviceId: this.prefs.audioIn ? { ideal: this.prefs.audioIn } : undefined },
-      });
-      this.replaceAudio(stream.getAudioTracks()[0] ?? null);
-      return !!this.micTrack;
-    } catch (err) {
-      this.error = describe(err, 'Microphone');
-      return false;
-    }
+  private acquireAudio(): Promise<boolean> {
+    return this.acquire('microphone');
   }
 
-  private async acquireCam(): Promise<boolean> {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { ...VIDEO_CONSTRAINTS, deviceId: this.prefs.videoIn ? { ideal: this.prefs.videoIn } : undefined },
-      });
-      this.replaceCam(stream.getVideoTracks()[0] ?? null);
-      return !!this.camTrack;
-    } catch (err) {
-      this.error = describe(err, 'Camera');
-      return false;
-    }
+  private acquireCam(): Promise<boolean> {
+    return this.acquire('camera');
+  }
+
+  private acquire(kind: keyof CaptureStatus): Promise<boolean> {
+    const audio = kind === 'microphone';
+    const pending = audio ? this.audioRequest : this.cameraRequest;
+    if (pending) return pending.promise;
+    const generation = audio ? this.audioGeneration : this.cameraGeneration;
+    const current = () => generation === (audio ? this.audioGeneration : this.cameraGeneration);
+    this.capture[kind] = 'requesting';
+    const deviceId = audio ? this.prefs.audioIn : this.prefs.videoIn;
+    const constraints = { ...(audio ? AUDIO_CONSTRAINTS : VIDEO_CONSTRAINTS), deviceId: deviceId ? { ideal: deviceId } : undefined };
+    // Defer the request by a microtask so its guard exists even if a browser/mock throws synchronously.
+    const capture = Promise.resolve().then(async () => {
+      if (!current()) return false;
+      try {
+        if (!this.supported) throw new DOMException('Media capture is unavailable.', 'NotFoundError');
+        const stream = await navigator.mediaDevices.getUserMedia(audio ? { audio: constraints } : { video: constraints });
+        if (!current()) {
+          stream.getTracks().forEach((track) => track.stop());
+          return false;
+        }
+        const track = (audio ? stream.getAudioTracks() : stream.getVideoTracks())[0];
+        stream.getTracks().forEach((extra) => { if (extra !== track) extra.stop(); });
+        if (!track) throw new DOMException('The device returned no track.', 'NotFoundError');
+        this.capture[kind] = 'ready';
+        if (audio) {
+          this.micOn = this.desiredMic;
+          this.replaceAudio(track);
+        } else {
+          this.camOn = this.desiredCam;
+          this.replaceCam(track);
+        }
+        this.emit();
+        return true;
+      } catch (err) {
+        if (!current()) return false;
+        const track = audio ? this.micTrack : this.camTrack;
+        this.capture[kind] = track?.readyState === 'live' ? 'ready' : captureFailure(err);
+        this.error = describe(err, audio ? 'Microphone' : 'Camera');
+        this.emit();
+        return false;
+      } finally {
+        if (current()) {
+          if (audio) this.audioRequest = null;
+          else this.cameraRequest = null;
+        }
+      }
+    });
+    // getUserMedia cannot be cancelled, but callers leaving the office must not stay blocked on
+    // its permission dialog. Its eventual stream is still stopped by the generation guard above.
+    let cancel!: () => void;
+    const cancelled = new Promise<boolean>((resolve) => { cancel = () => resolve(false); });
+    const promise = Promise.race([capture, cancelled]);
+    const request = { promise, cancel };
+    if (audio) this.audioRequest = request;
+    else this.cameraRequest = request;
+    this.emit();
+    return promise;
+  }
+
+  private releaseCamera(): void {
+    this.cameraGeneration++;
+    this.cameraRequest?.cancel();
+    this.cameraRequest = null;
+    this.replaceCam(null);
+    this.camOn = false;
+    this.capture.camera = 'idle';
   }
 
   async setMic(on: boolean): Promise<void> {
     this.error = null;
-    if (on) this.startPipeline();
-    if (on && !this.micTrack && !(await this.acquireAudio())) on = false;
-    this.micOn = on;
-    this.route();
+    this.desiredMic = on;
+    this.prefs = { ...this.prefs, micOn: on };
     saveDevices({ micOn: on });
+    if (on) this.startPipeline();
+    this.micOn = on && this.micTrack?.readyState === 'live';
+    this.route();
     this.emit();
+    if (on && !this.micTrack) await this.acquireAudio();
   }
 
   async setCam(on: boolean): Promise<void> {
     this.error = null;
-    if (on) {
-      if (!this.camTrack && !(await this.acquireCam())) on = false;
-    } else if (this.camTrack) {
-      // Release the camera entirely so its light turns off.
-      this.camTrack.onended = null;
-      this.camTrack.stop();
-      this.camTrack = null;
-    }
-    this.camOn = on;
+    this.desiredCam = on;
+    this.prefs = { ...this.prefs, camOn: on };
     saveDevices({ camOn: on });
+    if (on) {
+      this.camOn = this.camTrack?.readyState === 'live';
+      if (!this.camTrack) await this.acquireCam();
+    } else this.releaseCamera();
     this.emit();
   }
 
   async startScreen(): Promise<void> {
+    const generation = ++this.screenGeneration;
     if (!navigator.mediaDevices?.getDisplayMedia) {
       this.error = 'Screen sharing is not supported in this browser.';
       this.emit();
@@ -314,6 +381,10 @@ export class MediaManager {
     }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
+      if (generation !== this.screenGeneration) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const track = stream.getVideoTracks()[0];
       if (!track) return;
       this.stopScreen(false);
@@ -322,12 +393,14 @@ export class MediaManager {
       this.screenTrack = track;
       this.emit();
     } catch (err) {
+      if (generation !== this.screenGeneration) return;
       if ((err as { name?: string })?.name !== 'NotAllowedError') this.error = 'Could not share your screen.';
       this.emit();
     }
   }
 
   stopScreen(notify = true): void {
+    this.screenGeneration++;
     if (!this.screenTrack) return;
     this.screenTrack.onended = null;
     this.screenTrack.stop();
@@ -352,19 +425,31 @@ export class MediaManager {
   async setDevice(kind: 'audioIn' | 'videoIn' | 'audioOut', deviceId: string): Promise<void> {
     this.prefs = { ...this.prefs, [kind]: deviceId };
     saveDevices({ [kind]: deviceId });
-    if (kind === 'audioIn' && this.micTrack) {
-      const was = this.micOn;
+    if (kind === 'audioIn' && (this.micTrack || this.audioRequest)) {
+      this.audioGeneration++;
+      this.audioRequest?.cancel();
+      this.audioRequest = null;
       await this.acquireAudio();
-      this.micOn = was && !!this.micTrack;
-      this.route();
-    } else if (kind === 'videoIn' && this.camTrack) {
+    } else if (kind === 'videoIn' && (this.camTrack || this.cameraRequest)) {
+      this.cameraGeneration++;
+      this.cameraRequest?.cancel();
+      this.cameraRequest = null;
       await this.acquireCam();
     }
     this.emit();
   }
 
   stopAll(): void {
+    this.audioGeneration++;
+    this.cameraGeneration++;
+    this.screenGeneration++;
+    this.audioRequest?.cancel();
+    this.cameraRequest?.cancel();
+    this.audioRequest = this.cameraRequest = null;
+    this.desiredMic = this.desiredCam = false;
     if (this.micTrack) this.micTrack.onended = null;
+    if (this.camTrack) this.camTrack.onended = null;
+    if (this.screenTrack) this.screenTrack.onended = null;
     this.micTrack?.stop();
     this.camTrack?.stop();
     this.screenTrack?.stop();
@@ -373,6 +458,7 @@ export class MediaManager {
     this.pipeline = null;
     this.audioTrack = this.micTrack = this.camTrack = this.screenTrack = null;
     this.micOn = this.camOn = false;
+    this.capture = { microphone: 'idle', camera: 'idle' };
     this.noise = { mode: this.noise.mode, status: 'off', error: null };
     this.emit();
   }

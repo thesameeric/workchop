@@ -263,9 +263,19 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
   };
 
   const emitLinks = (changes: LinkChanges) => {
-    for (const { a, b, sid } of changes.added) {
-      io.to(a).emit('peer:connect', b, sid, a < b);
-      io.to(b).emit('peer:connect', a, sid, b < a);
+    for (const { a, b, sid, mediaAllowed } of changes.added) {
+      // Keep the legacy active-event shape: only prepared transports need the extra false flag.
+      if (mediaAllowed === false) {
+        io.to(a).emit('peer:connect', b, sid, a < b, false);
+        io.to(b).emit('peer:connect', a, sid, b < a, false);
+      } else {
+        io.to(a).emit('peer:connect', b, sid, a < b);
+        io.to(b).emit('peer:connect', a, sid, b < a);
+      }
+    }
+    for (const { a, b, sid, mediaAllowed } of changes.media ?? []) {
+      io.to(a).emit('peer:media', b, sid, mediaAllowed);
+      io.to(b).emit('peer:media', a, sid, mediaAllowed);
     }
     for (const { a, b } of changes.removed) {
       io.to(a).emit('peer:disconnect', b);
@@ -570,7 +580,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
         if (why) return ack({ ok: false, error: why });
       }
       if (!r) {
-        r = new Room(id, linkRules);
+        r = new Room(id, linkRules, emitLinks);
         rooms.set(id, r);
       }
 
@@ -602,6 +612,7 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
       else if (user) player.userId = user.id;
       room = r;
       r.players.set(socket.id, player);
+      if (req.prepareAudio === true) r.preparable.add(socket.id);
       if (joinedAs === 'guest') r.guests.add(socket.id);
       socket.join(roomName(id));
       ack({
@@ -650,14 +661,16 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
           socket.emit('seat:resolved', { x, z }, next, itemId);
         }
       }
-      // A step while walking may be dropped for someone whose connection is busy (the next one
-      // replaces it), as may a repeat of where they already are. Anything else (stopping, sitting
-      // down, standing up, a jump) happens once: it's queued for everyone, in order.
+      const links = room.recompute(o.zones, [p.id]);
+      const boundary = links.added.length > 0 || links.removed.length > 0 || (links.media?.length ?? 0) > 0;
+      // Ordinary walking repeats may be dropped. A conversation/transport boundary must be
+      // queued reliably before its permission event, so the receiver's local privacy check sees
+      // the new position even when this is the last step before a user stops sending movements.
       const repeat = was.x === p.x && was.z === p.z && was.ry === p.ry && was.anim === p.anim;
       const step = was.anim === 'walk' && p.anim === 'walk';
-      const to = repeat || step ? socket.volatile.to(roomName(room.officeId)) : socket.to(roomName(room.officeId));
+      const to = !boundary && (repeat || step) ? socket.volatile.to(roomName(room.officeId)) : socket.to(roomName(room.officeId));
       to.emit('player:moved', [p.id, p.x, p.z, p.ry, p.anim]);
-      emitLinks(room.recompute(o.zones, [p.id]));
+      emitLinks(links);
     });
 
     socket.on('profile', (patch) => {
@@ -726,8 +739,8 @@ export function attachRealtime(io: IO, store: OfficeStore, opts: { accounts: Acc
 
     socket.on('rtc:signal', (to, sid, data) => {
       if (!room || typeof to !== 'string' || typeof sid !== 'number' || !data || typeof data !== 'object') return;
-      // Only relay between people who are currently linked, on their current connection.
-      if (room.linkSid(socket.id, to) !== sid) return;
+      // Idle transports can negotiate, but are absent from linkedPeers and cannot carry media.
+      if (room.transportSid(socket.id, to) !== sid) return;
       if (JSON.stringify(data).length > 100_000) return;
       io.to(to).emit('rtc:signal', socket.id, sid, data);
     });
